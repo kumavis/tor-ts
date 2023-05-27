@@ -94,8 +94,13 @@ export type CellVersions = {
 	versions: number[]
 };
 
+export type Certificate = {
+	type: number,
+	body: Buffer,
+}
+
 export type CellCerts = {
-	certs: any[]
+	certs: Certificate[]
 };
 
 export type CellAuthenticate = {
@@ -142,8 +147,8 @@ const cellParsers = {
 		for (let i = 0; i < numCerts; i++) {
 			const type = reader.readUIntBE(1)
 			const certLength = reader.readUIntBE(2)
-			const cert = reader.readBytes(certLength)
-			certs.push({ type, cert })
+			const body = reader.readBytes(certLength)
+			certs.push({ type, body })
 		}
 		return { certs }
 	},
@@ -217,11 +222,11 @@ const cellSerializers = {
 		// 	 Certificate                        [CLEN octets]
 		const payloadBytes = Buffer.concat([
 			Buffer.from([certs.length]),
-			...certs.map(({ type, cert }) => {
+			...certs.map(({ type, body }) => {
 				return Buffer.concat([
 					bufferFromUint(1, type),
-					bufferFromUint(2, cert.length),
-					cert,
+					bufferFromUint(2, body.length),
+					body,
 				])
 			}),
 		])
@@ -362,30 +367,6 @@ const readNetInfoAddress = (reader: BytesReader): NetInfoAddress | undefined => 
 	return undefined;
 }
 
-const authTypeDescriptions: Record<number, string> = {
-	1: 'RSA-SHA256-TLSSecret',
-	// 2: '<reserved auth type>',
-	3: 'Ed25519-SHA256-RFC5705',
-}
-
-const getAuthTypeDescription = (type: number): string => {
-	return authTypeDescriptions[type] || `Unknown auth type ${type}`
-}
-
-const certDescriptions: Record<number, string> = {
-	1: 'Link key certificate certified by RSA1024 identity',
-	2: 'RSA1024 Identity certificate, self-signed.',
-	3: 'RSA1024 AUTHENTICATE cell link certificate, signed with RSA1024 key.',
-	4: 'Ed25519 signing key, signed with identity key.',
-	5: 'TLS link certificate, signed with ed25519 signing key.',
-	6: 'Ed25519 AUTHENTICATE cell key, signed with ed25519 signing key.',
-	7: 'Ed25519 identity, signed with RSA identity.',
-};
-
-function getCertDescription (certType: number): string {
-	return certDescriptions[certType] || 'Unknown'
-}
-
 class BytesReader {
 	data: Buffer;
 	offset: number;
@@ -502,12 +483,8 @@ function buildAuthenticateCell ({
 }
 
 export {
-	// primary
 	messageCells,
 	messageCellNames,
   readCellsFromData,
   serializeCell as serializeCommand,
-	// helpers
-  getCertDescription,
-  getAuthTypeDescription,
 };

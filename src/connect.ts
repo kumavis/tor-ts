@@ -1,19 +1,22 @@
 import { EventEmitter } from 'events';
 import * as tls from 'tls';
-import type { KeyInfo } from './profiles.ts';
-import { client_tls_options_fromKeyInfo } from './tls.ts';
+import type { KeyInfo } from './profiles.js';
+import {
+	clientTlsOptionsFromKeyInfo,
+	validateCertsForEd25519Identity,
+	getCertDescription,
+	getAuthTypeDescription,
+} from './tls.ts';
 
 import {
 	messageCells,
-	messageCellNames,
 	serializeCommand,
 	readCellsFromData,
-	getCertDescription,
-	getAuthTypeDescription
 } from './messaging.ts';
 import type {
 	MessageCell,
 	CellNetInfo,
+	Certificate,
 } from './messaging.ts';
 
 class Connection {
@@ -65,12 +68,13 @@ class Connection {
 		throw new Error("Method not implemented.");
 	}
 	promiseForHandshake (): Promise<any> {
+		// TODO: should fail if any of these are repeated
 		const handshakePromise = receiveEvents(['VERSIONS', 'CERTS', 'AUTH_CHALLENGE'], this.incommingCommands)
 		return handshakePromise;
 	}
 }
 
-export async function debug ({ keyInfo }: { keyInfo: KeyInfo }) {
+export async function testHandshake ({ keyInfo }: { keyInfo: KeyInfo }) {
 	const connection = new Connection({ isInitiator: true })
 	
 	connection.incommingCommands.once('NETINFO', (cell: MessageCell) => {
@@ -99,13 +103,13 @@ async function testHandshakeFixture ({ connection, keyInfo }: { connection: Conn
 async function testConnectToKnownNode ({ connection, keyInfo }: { connection: Connection, keyInfo: KeyInfo }) {
 	const server = {
 		ip: '93.180.157.154',
-		fing: 'B198C0B4B8C551F174FBB841A172616E3DB3124D',
+		// fing: 'B198C0B4B8C551F174FBB841A172616E3DB3124D',
 		port: 9001,
-		band: '10702338',
-		o_modulus: 'd394335f7605853b76f8bd636100fcb4c68499fc98ca05240a0f11dda7f1102bacb4197f4f8206e38235938834a21032bc1fac7f31c6fd6401ae73833457f76b78fcfde98480e890e1aee9a6fa077c2a632d298dcdcfc659c3614bb42dfa53dd81ff22e7c05056fe2e4ceb506908b4123cd7b4e352b45061a4f88d9da48583ab'
+		// band: '10702338',
+		// o_modulus: 'd394335f7605853b76f8bd636100fcb4c68499fc98ca05240a0f11dda7f1102bacb4197f4f8206e38235938834a21032bc1fac7f31c6fd6401ae73833457f76b78fcfde98480e890e1aee9a6fa077c2a632d298dcdcfc659c3614bb42dfa53dd81ff22e7c05056fe2e4ceb506908b4123cd7b4e352b45061a4f88d9da48583ab'
 	}
 
-	const options = client_tls_options_fromKeyInfo(keyInfo);
+	const options = clientTlsOptionsFromKeyInfo(keyInfo);
 	const socket = tls.connect(server.port, server.ip, options, function() {
 		console.log('connect')
 		performHandshake({ connection, keyInfo })
@@ -120,6 +124,7 @@ async function testConnectToKnownNode ({ connection, keyInfo }: { connection: Co
 }
 
 async function performHandshake ({ connection, keyInfo }: { connection: Connection, keyInfo: KeyInfo }) {
+	// TODO: use NETINFO timestamp to determine clock skew
 	const linkProtocolSupportedVersions = [3];
 	const handshakePromise = connection.promiseForHandshake();
 	// send our handshake intro
@@ -138,26 +143,26 @@ async function performHandshake ({ connection, keyInfo }: { connection: Connecti
 	// get certs
 	console.log('CERTS: got certs');
 	for (const { type, cert } of certsCell.message.certs) {
-		console.log(`  ${getCertDescription(type)}`)
+		console.log(`  #${type} ${getCertDescription(type)}`)
 	}
-	// SECURITY TODO: authenticate responder
-	// Initiators MUST NOT send an AUTHENTICATE cell before they have
-	// verified the certificates presented in the responder's CERTS
-	// cell, and authenticated the responder.
+	validateCertsForEd25519Identity(certsCell.message)
+
 	console.log('AUTH_CHALLENGE: accepted challenge methods');
 	for (const type of authChallengeCell.message.methods) {
 		console.log(`  ${getAuthTypeDescription(type)}`)
 	}
-
+	// If it does not want to authenticate, it MUST
+	// send a NETINFO cell.  
+	// If it does want to authenticate, it MUST send a
+  //  CERTS cell, an AUTHENTICATE cell (4.4), and a NETINFO.
 	const certs = certsFromKeyInfo({ keyInfo });
 	connection.sendMessage(messageCells.CERTS, { certs });
-
 }
 
 
 
 function certsFromKeyInfo({ keyInfo }: { keyInfo: KeyInfo }) {
-	const certs = [];
+	const certs: Certificate[] = [];
 
 	// To authenticate the initiator as having an RSA identity key only,
 	// the responder MUST check the following:
@@ -176,11 +181,11 @@ function certsFromKeyInfo({ keyInfo }: { keyInfo: KeyInfo }) {
 
 	certs.push({
 		type: 3,
-		cert: keyInfo.pubkey,
+		body: keyInfo.pubkey,
 	})
 	certs.push({
 		type: 2,
-		cert: keyInfo.pubid,
+		body: keyInfo.pubid,
 	})
 	return certs
 }
