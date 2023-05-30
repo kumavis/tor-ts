@@ -33,5 +33,5 @@ export class BytesReader {
 }
 
 export const sha256 = (data: Buffer): Buffer => {
-	return crypto.createHmac('sha256', data).digest();
+	return crypto.createHash('sha256').update(data).digest();
 }

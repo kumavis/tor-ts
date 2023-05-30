@@ -22,7 +22,7 @@ const v5HandshakeFixture = {
   peerCert: b('30820245308201aea003020102020867d58b28a5f739f1300d06092a864886f70d01010b0500301f311d301b06035504030c147777772e7967666e7861336f796c78742e636f6d301e170d3233303430343030303030305a170d3234303232393030303030305a30273125302306035504030c1c7777772e36686c7a656f68337863787169626464367667712e6e657430820122300d06092a864886f70d01010105000382010f003082010a0282010100d04f21827f70d382e2fedc96520b099d5fbdc35e55010acd75476dbfaacc0f1c63d157d245049016606ab3b0d4b6809780d1bad189e1a1b5b0766bfb52963662b6e66ff6d4a09db709242d97de2ca0043ca459151a2b3f5b3a7cdaa560baca98f1940da21351c3aaf6d08090d3477b2f73fd5f6aae8d1cd875c7f8c307126f76c888a4df8c975124aab5ad1f144f50ad849c5debe167667571a300c6ebd7cc6ccd82c3b8923fd483e33a77b15cd3920e33fb1e509e37f1b68daa66bcfcfd6506e01ea6ebfe698b5c35265c64bab04d7ae153de17471cc28699c82276e38625fe1508e5094bb7e007f5428266c972a9910e03bc5de6de979b63e9e7d267cd71ad0203010001300d06092a864886f70d01010b05000381810058cc4584c5c9311f4687b8d2eb9e8f828e0ba06e1a859d921a219e91c590fe67e378f206e2b10498ffbcb28d4f4544a947c05b4793dc5569ce23b47e6e8f7d77cca047745b5458792e116792ca56a5d1f4bc832ea53a0103d372b5675f454cbcc03937a1b13d4b31137fb06f893a44be085dee97276b9fd498acf071696dc2d4'),
 }
 
-test.failing('v3 handshake', async t => {
+test('v3 handshake', async t => {
   const connection = new Connection({ isInitiator: true })
   const outboundTraffic: Buffer[] = []
   connection.sendData = (data) => outboundTraffic.push(data)
@@ -30,13 +30,15 @@ test.failing('v3 handshake', async t => {
   const handshakeCompleteP = performHandshake(connection, fixtureKeyInfo, v3HandshakeFixture.peerCert, supportedVersions)
   connection.onData(v3HandshakeFixture.serverHello)
   await handshakeCompleteP
+  t.pass();
 })
 
-test.failing('v5 handshake', async t => {
+test('v5 handshake', async t => {
   const connection = new Connection({ isInitiator: true })
   const outboundTraffic: Buffer[] = []
   connection.sendData = (data) => outboundTraffic.push(data)
   const handshakeCompleteP = performHandshake(connection, fixtureKeyInfo, v5HandshakeFixture.peerCert)
   connection.onData(v5HandshakeFixture.serverHello)
   await handshakeCompleteP
+  t.pass();
 })

@@ -246,7 +246,16 @@ export const validateCertsForEd25519Identity = (certsCell: CellCerts, peerCertSh
 	//    peer.ed_identity().
 
 	const idSkCertContainer = certs.find(({ type }) => type === CertTypes.IDENTITY_V_SIGNING)
+  if (!idSkCertContainer) {
+    throw new Error(`Missing identity->signing cert`)
+  }
+  const idSk = parseEd25519Certificate(idSkCertContainer.body);
+
 	const skTlsCertContainer = certs.find(({ type }) => type === CertTypes.SIGNING_V_TLS_CERT)
+  if (!skTlsCertContainer) {
+    throw new Error(`Missing signing->TLS cert`)
+  }
+  const skTls = parseEd25519Certificate(skTlsCertContainer.body);
 
 	const sigs: Signature[] = [];
 
@@ -257,8 +266,6 @@ export const validateCertsForEd25519Identity = (certsCell: CellCerts, peerCertSh
 	// might be caused by clock skew from failures that are definitely not
 	// clock skew.)
 
-  const idSk = parseEd25519Certificate(idSkCertContainer.body);
-  const skTls = parseEd25519Certificate(skTlsCertContainer.body);
 
   const idSkSig = {
     key: idSk.signedWith,
@@ -342,4 +349,29 @@ function verifyTimeliness(expirationHours: number, now: number, clockSkewMs: num
 
 function keysMatch (keyA: Buffer, keyB: Buffer): boolean {
   return keyA === keyB || Buffer.prototype.equals.call(keyA, keyB)
+}
+
+function logCerts (certsCell) {
+  const { certs } = certsCell;
+  console.log('CERTS: got certs');
+  for (const { type, body } of certs) {
+    console.log(`  #${type} ${getCertDescription(type)}`)
+    if ([CertTypes.IDENTITY_V_SIGNING, CertTypes.SIGNING_V_TLS_CERT].includes(type)) {
+      const cert = parseEd25519Certificate(body)
+      console.log('    version:', cert.version)
+      console.log('    type:', cert.type)
+      console.log('    expirationHours:', cert.expirationHours)
+      console.log('    keyType:', cert.keyType)
+      console.log('    key:', cert.key.toString('hex'))
+      console.log(`    extensions: (${cert.extensions.length})`)
+      for (const { type, flags, data } of cert.extensions) {
+        console.log(`      type=${type}`)
+        console.log(`      flags=${flags}`)
+        console.log(`      data=${data.toString('hex')}`)
+      }
+      console.log('    signature:', cert.signature.toString('hex'))
+      console.log('    signedWith:', cert.signedWith?.toString('hex'))
+      console.log('    text:', cert.text.toString('hex'))
+    }
+  }
 }

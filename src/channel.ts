@@ -1,9 +1,9 @@
 import { EventEmitter } from 'events';
-import * as tls from 'tls';
+import tls from 'node:tls';
 import type { KeyInfo } from './profiles';
 import {
-  clientTlsOptionsFromKeyInfo,
   getAuthTypeDescription,
+	makeRandomServerName,
 } from './tls';
 import {
   validateCertsForEd25519Identity,
@@ -69,7 +69,7 @@ export class Connection {
     
     this.sendData(serializedCell);
   }
-  sendData(serializedCell: any) {
+  sendData(_serializedCell: any) {
     throw new Error("Method not implemented.");
   }
   promiseForHandshake (): Promise<any> {
@@ -105,12 +105,13 @@ async function testConnectToKnownNode ({ connection, keyInfo }: { connection: Co
     ip: '93.180.157.154',
     port: 9001,
   }
-
-  const options = clientTlsOptionsFromKeyInfo(keyInfo);
+	const options = {
+		servername: makeRandomServerName(),
+		rejectUnauthorized: false,
+	}
   const socket = tls.connect(server.port, server.ip, options, function() {
-    console.log('connect')
     const peerCert = socket.getPeerCertificate();
-		console.log('peerCertRaw', peerCert.raw.toString('hex'))
+		// console.log('peerCertRaw', peerCert.raw.toString('ascii'))
 		const linkProtocolSupportedVersions = [3, 4, 5];
     performHandshake(connection, keyInfo, peerCert.raw, linkProtocolSupportedVersions)
   });
@@ -155,12 +156,6 @@ export async function performHandshake (connection: Connection, keyInfo: KeyInfo
   
   // receive their handshake intro
   const [_versionsCell, certsCell, authChallengeCell] = await handshakePromise;
-
-  // get certs
-  console.log('CERTS: got certs');
-  for (const { type, cert } of certsCell.message.certs) {
-    console.log(`  #${type} ${getCertDescription(type)}`)
-  }
 
 	// sha256 hash of (DER-encoded) peer certificate for this connection
   const peerCertSha256 = sha256(peerCert);
