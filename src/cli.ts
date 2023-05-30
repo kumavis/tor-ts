@@ -1,7 +1,7 @@
 import { Command } from 'commander';
 import { version } from '../package.json';
-import { createProfile, loadProfile, loadKeyInfo } from './profiles.ts';
-import { testHandshake } from './connect.ts';
+import { createProfile, loadProfile, loadKeyInfo } from './profiles';
+import { testHandshake } from './channel';
 
 
 const program = new Command();
