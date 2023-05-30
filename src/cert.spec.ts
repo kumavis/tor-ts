@@ -1,6 +1,6 @@
 import test from 'ava';
 import type { CellCerts } from './messaging';
-import { CertTypes, validateCertsForEd25519Identity } from './cert';
+import { CertTypes, validateCertsCellForIdentities } from './cert';
 
 const b = (s: string) => Buffer.from(s, 'hex')
 
@@ -26,6 +26,6 @@ const fixtureCertCell = {
 
 test('validateCertsForEd25519Identity', t => {
   t.notThrows(() => {
-    validateCertsForEd25519Identity(fixtureCertCell, fixturePeerCertDigest, 0, 0);
+    validateCertsCellForIdentities(fixtureCertCell, fixturePeerCertDigest, 0, 0);
   });
 });

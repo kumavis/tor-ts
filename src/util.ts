@@ -32,6 +32,10 @@ export class BytesReader {
   }
 }
 
-export const sha256 = (data: Buffer): Buffer => {
-	return crypto.createHash('sha256').update(data).digest();
+export const sha256 = (...data: Buffer[]): Buffer => {
+	const hash = crypto.createHash('sha256')
+  for (const d of data) {
+    hash.update(d)
+  }
+  return hash.digest()
 }

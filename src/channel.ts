@@ -6,7 +6,7 @@ import {
 	makeRandomServerName,
 } from './tls';
 import {
-  validateCertsForEd25519Identity,
+  validateCertsCellForIdentities,
   getCertDescription,
 } from './cert';
 import {
@@ -160,7 +160,10 @@ export async function performHandshake (connection: Connection, keyInfo: KeyInfo
 	// sha256 hash of (DER-encoded) peer certificate for this connection
   const peerCertSha256 = sha256(peerCert);
   // console.log('peerCertSha256', peerCertSha256.toString('hex'))
-  validateCertsForEd25519Identity(certsCell.message, peerCertSha256, now, clockSkew);
+  const {
+    rsaId,
+    ed25519Id,
+  } = validateCertsCellForIdentities(certsCell.message, peerCertSha256, now, clockSkew);
 
   console.log('AUTH_CHALLENGE: accepted challenge methods');
   for (const type of authChallengeCell.message.methods) {

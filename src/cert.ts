@@ -2,9 +2,10 @@ import crypto from 'node:crypto';
 import assert from 'node:assert';
 import type { PeerCertificate } from 'node:tls';
 import type { CellCerts } from './messaging';
-import { BytesReader } from './util';
+import { BytesReader, sha256 } from './util';
 import * as ed from '@noble/ed25519';
 import { sha512 } from '@noble/hashes/sha512';
+import forge from 'node-forge';
 
 // enable synchronous ed25519 methods
 ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m));
@@ -204,7 +205,10 @@ type Signature = {
   text: Buffer;
 }
 
-export const validateCertsForEd25519Identity = (certsCell: CellCerts, peerCertSha256: Buffer, now: number, clockSkew: number): void => {
+export const validateCertsCellForIdentities = (certsCell: CellCerts, peerCertSha256: Buffer, now: number, clockSkew: number): {
+  rsaId: Buffer,
+  ed25519Id: Buffer,
+} => {
 	// To authenticate the responder as having a given Ed25519,RSA identity key
 	// combination, the initiator MUST check the following.
 
@@ -222,15 +226,6 @@ export const validateCertsForEd25519Identity = (certsCell: CellCerts, peerCertSh
 	assert(certs.filter(({ type }) => type === CertTypes.RSA_ID_V_IDENTITY).length === 1, 'The CERTS cell contains exactly one CertType 7 "RSA->Ed25519" cross-certificate.');
 	// 	* All X.509 certificates above have validAfter and validUntil dates;
 	// 		no X.509 or Ed25519 certificates are expired.
-	// const certObjs = certs.map((cert) => {
-	// 	console.log(cert)
-	// 	// console.log(cert.body.toString('utf8'))
-	// 	return new crypto.X509Certificate(derToPem(cert.body))
-	// 	// var asnObj = forge.asn1.fromDer(derKey);
-	// 	// var asn1Cert = forge.pki.certificateFromAsn1(asnObj);
-	// 	// return forge.pki.certificateToPem(asn1Cert);
-	// });
-	// console.log(certObjs)
 
 	// We need to check the following lines of authentication:
 	//
@@ -304,23 +299,75 @@ export const validateCertsForEd25519Identity = (certsCell: CellCerts, peerCertSh
   verifyTimeliness(skTls.expirationHours, now, clockSkew)
 
   if (!keysMatch(peerCertSha256, skTls.key)) {
-    console.log(peerCertSha256.toString('hex'), '<---')
-    console.log(idSk.key.toString('hex'))
-    console.log(skTls.key.toString('hex'))
-    console.log(signingKey.toString('hex'))
-    console.log(identityKey.toString('hex'))
-    console.log(idSkSig.key.toString('hex'))
     throw new Error(`Peer cert did not authenticate TLS cert`)
   }
 
-  // Batch-verify the ed25519 certificates in this handshake.
+  // Verify the ed25519 certificates in this handshake.
   sigs.forEach(({ key, signature, text }) => {
-    // const verified = crypto.verify('ed25519', text, key, signature);
     const verified = ed.verify(signature, text, key);
-    if (!verified) {
+    if (verified !== true) {
       throw new Error(`Invalid ed25519 signature in handshake`)
     }
   });
+
+
+  // Part 2: validate rsa stuff.
+
+  // What is the RSA identity key, according to the X.509 certificate
+  // in which it is self-signed?
+  //
+  // (We don't actually check this self-signed certificate, and we use
+  // a kludge to extract the RSA key)
+  // let pkrsa = c
+  //     .cert_body(CertType::RSA_ID_X509)
+  //     .and_then(ll::util::x509_extract_rsa_subject_kludge)
+  //     .ok_or_else(|| Error::HandshakeProto("Couldn't find RSA identity key".into()))?;
+	const pkrsaCertContainer = certs.find(({ type }) => type === CertTypes.RSA_ID_X509)
+  if (!pkrsaCertContainer) {
+    throw new Error(`Missing RSA identity cert`)
+  }
+  const pkrsaCert = parseRsaX509Certificate(pkrsaCertContainer.body);
+
+  // Now verify the RSA identity -> Ed Identity crosscert.
+  //
+  // This proves that the RSA key vouches for the Ed key.  Note that
+  // the Ed key does not vouch for the RSA key: The RSA key is too
+  // weak.
+  // let rsa_cert = c
+  //     .cert_body(CertType::RSA_ID_V_IDENTITY)
+  //     .ok_or_else(|| Error::HandshakeProto("No RSA->Ed crosscert".into()))?;
+  const rsaCrossCertContainer = certs.find(({ type }) => type === CertTypes.RSA_ID_V_IDENTITY)
+  if (!rsaCrossCertContainer) {
+    throw new Error(`Missing RSA->Ed crosscert signature`)
+  }
+  const rsaCrossCert = parseRsaCrossCertificate(rsaCrossCertContainer.body);
+  
+  // let rsa_cert = tor_cert::rsa::RsaCrosscert::decode(rsa_cert)
+  //     .map_err(|e| Error::from_bytes_err(e, "RSA identity cross-certificate"))?
+  //     .check_signature(&pkrsa)
+  //     .map_err(|_| Error::HandshakeProto("Bad RSA->Ed crosscert signature".into()))?;
+  // let (rsa_cert_timeliness, rsa_cert) = check_timeliness(rsa_cert, now, self.clock_skew);
+
+  // >>>>>>> SECURITY TODO: fix checking rsa signature <<<<<<<<<<<<<<<<<<<<
+
+  // if (rsaCrossCert.checkSignature(pkrsaCert.publicKey) !== true) {
+  //   throw new Error(`Bad RSA->Ed crosscert signature`)
+  // }
+  // check timeliness
+  verifyTimeliness(rsaCrossCert.expirationHours, now, clockSkew)
+
+  // if !rsa_cert.subject_key_matches(identity_key) {
+  //     return Err(Error::HandshakeProto(
+  //         "RSA->Ed crosscert certifies incorrect key".into(),
+  //     ));
+  // }
+  if (!keysMatch(rsaCrossCert.ed25519Key, identityKey)) {
+    throw new Error(`RSA->Ed crosscert certifies incorrect key`)
+  }
+
+  // let rsa_id = pkrsa.to_rsa_identity();
+  const rsaId = pkrsaCert.publicKey;
+
 
 	// 	* All certificates are correctly signed.
 	// 	* The certified key in the Signing->Link certificate matches the
@@ -335,6 +382,84 @@ export const validateCertsForEd25519Identity = (certsCell: CellCerts, peerCertSh
 	// 		"ID" certificate.
 	// 	* The certified key in the ID certificate is a 1024-bit RSA key.
 	// 	* The RSA ID certificate is correctly self-signed.
+
+  return {
+    rsaId,
+    ed25519Id: identityKey,
+  }
+}
+
+function convertDERtoPEM (derData: Buffer): Buffer {
+  // Base64 encode and split into lines of 64 characters
+  const base64 = derData.toString('base64');
+  const base64Lines = base64.match(/.{1,64}/g)!.join('\n');
+  const pemData = Buffer.from(
+    '-----BEGIN CERTIFICATE-----\n' +
+    base64Lines +
+    '\n-----END CERTIFICATE-----\n'
+  );
+  return pemData;
+}
+
+function parseRsaX509Certificate (certBody: Buffer) {
+  // const asn1Obj = forge.asn1.fromDer(certBody.toString('binary'))
+  // const cert = forge.pki.certificateFromAsn1(asn1Obj);
+  // console.log({ forgeCert: cert })
+  // return cert
+  return new crypto.X509Certificate(convertDERtoPEM(certBody));
+}
+
+export type CrossCertificate = {
+  ed25519Key: Buffer;
+  expirationHours: number;
+  signature: Buffer;
+  digest: Buffer;
+  checkSignature (publicKey: crypto.KeyObject): boolean;
+}
+
+const RsaCrossCertPrefix = Buffer.from('Tor TLS RSA/Ed25519 cross-certificate');
+
+function parseRsaCrossCertificate (certBody: Buffer): CrossCertificate {
+  const bytesReader = new BytesReader(certBody);
+  // ED25519_KEY                       [32 bytes]
+  // EXPIRATION_DATE                   [4 bytes]
+  // SIGLEN                            [1 byte]
+  // SIGNATURE                         [SIGLEN bytes]
+  const ed25519Key = bytesReader.readBytes(32);
+  const expirationHours = bytesReader.readUIntBE(4);
+  const sigLen = bytesReader.readUIntBE(1);
+  const signature = bytesReader.readBytes(sigLen);
+  const signedPortion = certBody.slice(0, 36);
+  const digest = sha256(
+    RsaCrossCertPrefix,
+    signedPortion,
+  )
+
+  return {
+    ed25519Key,
+    expirationHours,
+    signature,
+    digest,
+    checkSignature (_publicKey: crypto.KeyObject): boolean {
+      const verifier = crypto.createVerify('RSA-SHA256');
+      // // verifier.update(Buffer.concat([RsaCrossCertPrefix, signedPortion]));
+      verifier.update(RsaCrossCertPrefix);
+      verifier.update(signedPortion);
+      verifier.end();
+      // console.log({
+      //   digest: digest.toString('hex'),
+      //   signature: signature.toString('hex'),
+      //   publicKey: publicKey.export({ type: 'spki', format: 'der' }).toString('hex')
+      // })
+      return verifier.verify(publicKey, signature)
+      // need to verify digest not signedPortion
+      // return crypto.verify(null, digest, publicKey, signature)
+      // forge.pki.rsa.setPublicKey(publicKey);
+      // const asn1Obj = forge.asn1.fromDer(_publicKey.export({ type: 'pkcs1', format: 'der' }).toString('binary'))
+      // const publicKey = forge.pki.publicKeyFromAsn1(asn1Obj)
+      // return publicKey.verify(digest.toString('binary'), signature.toString('binary'));
+    }
+  }
 }
 
 const hoursToMs = (hours: number): number => hours * (60 * 60 * 1000);
