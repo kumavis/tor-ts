@@ -3,7 +3,7 @@ import tls from 'node:tls';
 import type { KeyInfo } from './profiles';
 import {
   getAuthTypeDescription,
-	makeRandomServerName,
+  makeRandomServerName,
 } from './tls';
 import {
   validateCertsCellForIdentities,
@@ -13,6 +13,7 @@ import {
   messageCells,
   serializeCommand,
   readCellsFromData,
+  AddressTypes,
 } from './messaging';
 import type {
   MessageCell,
@@ -77,9 +78,9 @@ export class Connection {
     const handshakePromise = receiveEvents(['VERSIONS', 'CERTS', 'AUTH_CHALLENGE'], this.incommingCommands)
     return handshakePromise;
   }
-	receiveEvents (eventNames: Array<string>): Promise<any[]> {
-		return receiveEvents(eventNames, this.incommingCommands)
-	}
+  receiveEvents (eventNames: Array<string>): Promise<any[]> {
+    return receiveEvents(eventNames, this.incommingCommands)
+  }
 }
 
 export async function testHandshake ({ keyInfo }: { keyInfo: KeyInfo }) {
@@ -100,20 +101,28 @@ export async function testHandshake ({ keyInfo }: { keyInfo: KeyInfo }) {
 
 }
 
+type PeerAddressInfo = {
+  port: number,
+  family: string,
+  address: string,
+}
+
 async function testConnectToKnownNode ({ connection, keyInfo }: { connection: Connection, keyInfo: KeyInfo }) {
   const server = {
     ip: '93.180.157.154',
     port: 9001,
   }
-	const options = {
-		servername: makeRandomServerName(),
-		rejectUnauthorized: false,
-	}
+  const options = {
+    servername: makeRandomServerName(),
+    rejectUnauthorized: false,
+  }
   const socket = tls.connect(server.port, server.ip, options, function() {
     const peerCert = socket.getPeerCertificate();
-		// console.log('peerCertRaw', peerCert.raw.toString('ascii'))
-		const linkProtocolSupportedVersions = [3, 4, 5];
-    performHandshake(connection, keyInfo, peerCert.raw, linkProtocolSupportedVersions)
+    // console.log('peerCertRaw', peerCert.raw.toString('ascii'))
+    const linkProtocolSupportedVersions = [3, 4, 5];
+    const peerAddressInfo = socket.address() as PeerAddressInfo;
+    // { port: 12346, family: 'IPv4', address: '127.0.0.1' }.
+    performHandshake(connection, keyInfo, peerCert.raw, linkProtocolSupportedVersions, peerAddressInfo)
   });
   connection.sendData = (data) => socket.write(data)
   socket.on('data', (data) => {
@@ -133,31 +142,31 @@ async function testConnectToKnownNode ({ connection, keyInfo }: { connection: Co
   socket.on('error', (err) => { console.log('error', err) });
 }
 
-export async function performHandshake (connection: Connection, keyInfo: KeyInfo, peerCert: Buffer, supportedVersions: Array<number> = defaultLinkSupportedVersions) {
+export async function performHandshake (connection: Connection, keyInfo: KeyInfo, peerCert: Buffer, supportedVersions: Array<number> = defaultLinkSupportedVersions, peerAddressInfo?: PeerAddressInfo) {
   // TODO: use NETINFO timestamp to determine clock skew
   const now = Date.now()
   const clockSkew = 0;
 
   const handshakePromise = connection.promiseForHandshake();
 
-	// need to do this synchronously so subsequent messages are parsed correctly based on the version
-	connection.incommingCommands.once('VERSIONS', (versionsCell: MessageCell) => {
-  	// determine shared link protocol version
-		console.log('supported versions:', supportedVersions, versionsCell.message.versions)
-		const linkProtocolVersion = getHighestSharedNumber(supportedVersions, versionsCell.message.versions)
-		if (linkProtocolVersion === undefined) {
-			throw new Error('No shared link protocol version')
-		}
-		connection.state.linkProtocolVersion = linkProtocolVersion
-		console.log('VERSIONS: set linkProtocolVersion', linkProtocolVersion)
-	})
+  // need to do this synchronously so subsequent messages are parsed correctly based on the version
+  connection.incommingCommands.once('VERSIONS', (versionsCell: MessageCell) => {
+    // determine shared link protocol version
+    console.log('supported versions:', supportedVersions, versionsCell.message.versions)
+    const linkProtocolVersion = getHighestSharedNumber(supportedVersions, versionsCell.message.versions)
+    if (linkProtocolVersion === undefined) {
+      throw new Error('No shared link protocol version')
+    }
+    connection.state.linkProtocolVersion = linkProtocolVersion
+    console.log('VERSIONS: set linkProtocolVersion', linkProtocolVersion)
+  })
   // send our handshake intro
   connection.sendMessage(messageCells.VERSIONS, { versions: supportedVersions })
   
   // receive their handshake intro
   const [_versionsCell, certsCell, authChallengeCell] = await handshakePromise;
 
-	// sha256 hash of (DER-encoded) peer certificate for this connection
+  // sha256 hash of (DER-encoded) peer certificate for this connection
   const peerCertSha256 = sha256(peerCert);
   // console.log('peerCertSha256', peerCertSha256.toString('hex'))
   const {
@@ -165,16 +174,35 @@ export async function performHandshake (connection: Connection, keyInfo: KeyInfo
     ed25519Id,
   } = validateCertsCellForIdentities(certsCell.message, peerCertSha256, now, clockSkew);
 
-  console.log('AUTH_CHALLENGE: accepted challenge methods');
-  for (const type of authChallengeCell.message.methods) {
-    console.log(`  ${getAuthTypeDescription(type)}`)
-  }
+  // console.log('AUTH_CHALLENGE: accepted challenge methods');
+  // for (const type of authChallengeCell.message.methods) {
+  //   console.log(`  ${getAuthTypeDescription(type)}`)
+  // }
+
   // If it does not want to authenticate, it MUST
   // send a NETINFO cell.  
   // If it does want to authenticate, it MUST send a
   //  CERTS cell, an AUTHENTICATE cell (4.4), and a NETINFO.
   // const certs = certsFromKeyInfo({ keyInfo });
   // connection.sendMessage(messageCells.CERTS, { certs });
+
+  // Complete handshake by sending NETINFO
+  // console.log('sending netinfo')
+
+  const otherAddress = peerAddressInfo ? {
+    type: AddressTypes[peerAddressInfo.family],
+    address: peerAddressInfo.address ? Buffer.from(peerAddressInfo.address, 'ascii') : Buffer.alloc(4),
+  } : {
+    type: 0,
+    address: Buffer.alloc(4),
+  };
+  connection.sendMessage(messageCells.NETINFO, {
+    //   Clients SHOULD send "0" as their timestamp, to
+    //  avoid fingerprinting.
+    time: 0,
+    otherAddress,
+    addresses: [],
+  })
 }
 
 

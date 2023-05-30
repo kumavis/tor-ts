@@ -74,6 +74,11 @@ const messageCellNames = {
 // byte equal to 7 ("VERSIONS"), or greater than or equal to 128.
 const variableLengthCells = Object.values(messageCells).filter(code => code === 7 || code >= 123);
 
+export const AddressTypes = {
+  IPv4: 4,
+  IPv6: 6,
+}
+
 export type MessageCell = {
   data: Buffer,
   circId: number,
@@ -239,7 +244,47 @@ const cellSerializers = {
         auth,
     ])
     return payloadBytes
-  }
+  },
+  [messageCells.NETINFO]: ({
+    time,
+    otherAddress,
+    addresses,
+  }: CellNetInfo) => {
+    //   TIME       (Timestamp)                     [4 bytes]
+    //   OTHERADDR  (Other OR's address)            [variable]
+    //      ATYPE   (Address type)                  [1 byte]
+    //      ALEN    (Address length)                [1 byte]
+    //      AVAL    (Address value in NBO)          [ALEN bytes]
+    //   NMYADDR    (Number of this OR's addresses) [1 byte]
+    //     NMYADDR times:
+    //       ATYPE   (Address type)                 [1 byte]
+    //       ALEN    (Address length)               [1 byte]
+    //       AVAL    (Address value in NBO))        [ALEN bytes]
+
+    // Recognized address types (ATYPE) are:
+
+    //  [04] IPv4.
+    //  [06] IPv6.
+    // ALEN MUST be 4 when ATYPE is 0x04 (IPv4) and 16 when ATYPE is 0x06
+    // (IPv6).
+    const payloadBytes = Buffer.concat([
+      bufferFromUint(4, time),
+      Buffer.concat([
+        bufferFromUint(1, otherAddress.type),
+        bufferFromUint(1, otherAddress.type === AddressTypes.IPv4 ? 4 : 16),
+        otherAddress.address,
+      ]),
+      bufferFromUint(1, addresses.length),
+      ...addresses.map(({ type, address }) => {
+        return Buffer.concat([
+          bufferFromUint(1, type),
+          bufferFromUint(1, type === AddressTypes.IPv4 ? 4 : 16),
+          address,
+        ])
+      }
+    )])
+    return payloadBytes
+  },
 }
 
 function serializeCell(commandCode: number, params: any) {
