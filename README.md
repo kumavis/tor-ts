@@ -1,26 +1,25 @@
-this doesnt actually work atm
+this doesnt actually work atm,
+just exploring the protocol
 
 ### setup
 
 - create keys
 ```bash
-node cli create
-```
-
-- publish (optional, skip this)
-```bash
-node cli publish
-```
-
-- get directory servers
-- get guards and exits (this is broken, due to directory lookup protocol changing)
-```bash
-node cli update --directory --relay
+yarn tsx cli create
 ```
 
 ### start
 
-this doesnt work, fails on `TypeError: this.stream_tor_.parse is not a function`
 ```bash
-node cli start
+yarn start
+```
+
+### development
+
+```bash
+yarn dev:test
+```
+
+```bash
+yarn dev
 ```
