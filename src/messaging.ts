@@ -1,4 +1,5 @@
-import * as crypto from "node:crypto";
+import assert from "node:assert";
+import crypto from "node:crypto";
 import { BytesReader, sha256 } from "./util";
 
 
@@ -79,6 +80,17 @@ export const AddressTypes = {
   IPv6: 6,
 }
 
+// Recognized HTYPEs (handshake types) are:
+
+// 0x0000  TAP  -- the original Tor handshake; see 5.1.3
+// 0x0001  reserved
+// 0x0002  ntor -- the ntor+curve25519+sha256 handshake; see 5.1.4
+
+export const HandshakeTypes = {
+  TAP: 0x0000,
+  NTOR: 0x0002,
+}
+
 export type MessageCell = {
   data: Buffer,
   circId: number,
@@ -114,9 +126,19 @@ export type CellAuthChallenge = {
 
 export type CellNetInfo = {
   time: number,
-  otherAddress: NetInfoAddress | undefined,
+  otherAddress: NetInfoAddress,
   addresses: Array<NetInfoAddress>,
 };
+
+export type NetInfoAddress = {
+  address: string,
+  type: number,
+}
+
+export type Create2Handshake = {
+  type: number,
+  data: Buffer,
+}
 
 const cellParsers = {
   [messageCells.VERSIONS]: (reader: BytesReader): CellVersions => {
@@ -267,27 +289,31 @@ const cellSerializers = {
     //  [06] IPv6.
     // ALEN MUST be 4 when ATYPE is 0x04 (IPv4) and 16 when ATYPE is 0x06
     // (IPv6).
+
     const payloadBytes = Buffer.concat([
       bufferFromUint(4, time),
-      Buffer.concat([
-        bufferFromUint(1, otherAddress.type),
-        bufferFromUint(1, otherAddress.type === AddressTypes.IPv4 ? 4 : 16),
-        otherAddress.address,
-      ]),
+      serializeNetInfoAddress(otherAddress),
       bufferFromUint(1, addresses.length),
-      ...addresses.map(({ type, address }) => {
-        return Buffer.concat([
-          bufferFromUint(1, type),
-          bufferFromUint(1, type === AddressTypes.IPv4 ? 4 : 16),
-          address,
-        ])
+      ...addresses.map((addressInfo) => {
+        return serializeNetInfoAddress(addressInfo)
       }
     )])
     return payloadBytes
   },
+  [messageCells.CREATE2]: (handshake: Create2Handshake) => {
+    // HTYPE     (Client Handshake Type)     [2 bytes]
+    // HLEN      (Client Handshake Data Len) [2 bytes]
+    // HDATA     (Client Handshake Data)     [HLEN bytes]
+    const payloadBytes = Buffer.concat([
+      bufferFromUint(2, handshake.type),
+      bufferFromUint(2, handshake.data.length),
+      handshake.data,
+    ])
+    return payloadBytes
+  },
 }
 
-function serializeCell(commandCode: number, params: any) {
+function serializeCell(commandCode: number, params: any, protocolVersion: number | undefined) {
   // On a version 1 connection, each cell contains the following
   // fields:
 
@@ -307,9 +333,13 @@ function serializeCell(commandCode: number, params: any) {
   if (cellSerializer === undefined) {
     throw new Error(`Unable to serialize command code ${commandCode} (${getCommandName(commandCode)})`)
   }
-  const circuitId = params.circuitId || 0;
+  const circuitLength = circuitIdLengthForProtocolVersion(protocolVersion)
+  const circuitId = params.circuitId || Buffer.alloc(circuitLength);
+  if (params.circuitId) {
+    assert.equal(params.circuitId.length, circuitLength, 'circuitId length is not expected length')
+  }
   const cellData = [
-    bufferFromUint(2, circuitId),
+    bufferFromUint(circuitLength, circuitId),
     bufferFromUint(1, commandCode),
   ];
   const payloadBytes = cellSerializer(params);
@@ -321,6 +351,17 @@ function serializeCell(commandCode: number, params: any) {
   }
   cellData.push(payloadBytes);
   return Buffer.concat(cellData);
+}
+
+export function circuitIdLengthForProtocolVersion (protocolVersion: number | undefined): number {
+    // CIRCID_LEN is 2 for link protocol versions 1, 2, and 3.  CIRCID_LEN
+    // is 4 for link protocol version 4 or higher.  The first VERSIONS cell,
+    // and any cells sent before the first VERSIONS cell, always have
+    // CIRCID_LEN == 2 for backward compatibility.
+
+    // for the "any cells sent before the first VERSIONS cell" case, we use an undefined protocol
+    // version
+  return protocolVersion && protocolVersion >= 4 ? 4 : 2;
 }
 
 function bufferFromUint (length: number, value: number) {
@@ -361,11 +402,7 @@ function parseCell (data: Buffer, version: number | undefined): { cell: MessageC
 
   try {
     const reader = new BytesReader(data);
-    // CIRCID_LEN is 2 for link protocol versions 1, 2, and 3.  CIRCID_LEN
-    // is 4 for link protocol version 4 or higher.  The first VERSIONS cell,
-    // and any cells sent before the first VERSIONS cell, always have
-    // CIRCID_LEN == 2 for backward compatibility.
-    const circIdLength = (version && version > 3) ? 4 : 2;
+    const circIdLength = circuitIdLengthForProtocolVersion(version);
     circId = reader.readUIntBE(circIdLength);
     commandCode = reader.readUIntBE(1);
     //  PAYLOAD_LEN -- The longest allowable cell payload, in bytes. (509)
@@ -408,25 +445,70 @@ function getCommandName (commandCode: number): string {
   return messageCellNames[commandCode] || `<UNKNOWN:${commandCode}|${commandCodeHex}>`
 }
 
-export type NetInfoAddress = {
-  address: Buffer,
-  type: number,
-}
-
-const readNetInfoAddress = (reader: BytesReader): NetInfoAddress | undefined => {
+function readNetInfoAddress (reader: BytesReader): NetInfoAddress {
   //   ATYPE   (Address type)                  [1 byte]
   //   ALEN    (Address length)                [1 byte]
   //   AVAL    (Address value in NBO)          [ALEN bytes]
   const type = reader.readUIntBE(1)
   const length = reader.readUIntBE(1)
-  const address = reader.readBytes(length)
+  const addressBytes = reader.readBytes(length)
+  const address = parseIpAddress(addressBytes, type);
   if (type === 4 && length === 4) {
     return { address, type }
   }
   if (type === 6 && length === 16) {
     return { address, type }
   }
-  return undefined;
+  throw new Error(`Invalid address type ${type} or length ${length}`)
+}
+
+function serializeNetInfoAddress (netInfoAddress: NetInfoAddress | undefined): Buffer {
+  if (!netInfoAddress) {
+    // return empty
+    return Buffer.concat([
+      bufferFromUint(1, 0),
+      bufferFromUint(1, 4),
+      Buffer.alloc(4),
+    ])
+  }
+  const { address, type } = netInfoAddress;
+  const length = type === AddressTypes.IPv4 ? 4 : 16
+  return Buffer.concat([
+    bufferFromUint(1, type),
+    bufferFromUint(1, length),
+    // allow empty address ?
+    ipAddressToBuffer(address, type),
+  ])
+}
+
+function parseIpAddress (address: Buffer, type: number): string {
+  if (type === AddressTypes.IPv4) {
+    return address.join('.');
+  } else if (type === AddressTypes.IPv6) {
+    return address.join(':');
+  } else {
+    throw new Error(`Invalid address type ${type}`)
+  }
+}
+
+function ipAddressToBuffer (ipAddress: string, type: number): Buffer {
+  if (type === AddressTypes.IPv4) {
+    const parts = ipAddress.split('.');
+    if (parts.length !== 4) {
+      throw new Error(`Invalid IP address ${ipAddress}`)
+    }
+    const bytes = parts.map(part => parseInt(part, 10));
+    return Buffer.from(bytes);
+  } else if (type === AddressTypes.IPv6) {
+    const parts = ipAddress.split(':');
+    if (parts.length !== 8) {
+      throw new Error(`Invalid IP address ${ipAddress}`)
+    }
+    const bytes = parts.map(part => parseInt(part, 16));
+    return Buffer.from(bytes);
+  } else {
+    throw new Error(`Invalid address type ${type}`)
+  }
 }
 
 function buildAuthenticateCell ({

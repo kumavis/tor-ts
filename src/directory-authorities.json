@@ -1,0 +1,517 @@
+[
+  {
+    "nickname": "moria1",
+    "fingerprint": "1A25C6358DB91342AA51720A5038B72742732498",
+    "or_addresses": [
+      "128.31.0.39:9201"
+    ],
+    "dir_address": "128.31.0.39:9231",
+    "last_seen": "2023-06-02 01:00:00",
+    "last_changed_address_or_port": "2022-12-06 19:00:00",
+    "first_seen": "2022-12-06 19:00:00",
+    "running": true,
+    "flags": [
+      "Authority",
+      "Running",
+      "Stable",
+      "V2Dir",
+      "Valid"
+    ],
+    "country": "us",
+    "country_name": "United States of America",
+    "as": "AS3",
+    "as_name": "MIT-GATEWAYS",
+    "consensus_weight": 20,
+    "verified_host_names": [
+      "belegost.csail.mit.edu"
+    ],
+    "last_restarted": "2023-06-01 20:23:37",
+    "bandwidth_rate": 40960,
+    "bandwidth_burst": 104857600,
+    "observed_bandwidth": 8538112,
+    "advertised_bandwidth": 40960,
+    "exit_policy": [
+      "reject *:*"
+    ],
+    "exit_policy_summary": {
+      "reject": [
+        "1-65535"
+      ]
+    },
+    "contact": "1024D/EB5A896A28988BF5 arma mit edu",
+    "platform": "Tor 0.4.8.1-alpha-dev on Linux",
+    "version": "0.4.8.1-alpha-dev",
+    "version_status": "experimental",
+    "effective_family": [
+      "1A25C6358DB91342AA51720A5038B72742732498"
+    ],
+    "consensus_weight_fraction": 1.6233075e-7,
+    "guard_probability": 0,
+    "middle_probability": 4.869453e-7,
+    "exit_probability": 0,
+    "recommended_version": false,
+    "measured": false
+  },
+  {
+    "nickname": "bastet",
+    "fingerprint": "24E2F139121D4394C54B5BCC368B3B411857C413",
+    "or_addresses": [
+      "204.13.164.118:443",
+      "[2620:13:4000:6000::1000:118]:443"
+    ],
+    "dir_address": "204.13.164.118:80",
+    "last_seen": "2023-06-02 01:00:00",
+    "last_changed_address_or_port": "2018-02-18 22:00:00",
+    "first_seen": "2017-10-14 20:00:00",
+    "running": true,
+    "flags": [
+      "Authority",
+      "Running",
+      "Stable",
+      "V2Dir",
+      "Valid"
+    ],
+    "country": "us",
+    "country_name": "United States of America",
+    "as": "AS16652",
+    "as_name": "RISEUP",
+    "consensus_weight": 20,
+    "verified_host_names": [
+      "bastet.readthefinemanual.net"
+    ],
+    "last_restarted": "2023-02-14 17:41:16",
+    "bandwidth_rate": 51200,
+    "bandwidth_burst": 10485760,
+    "observed_bandwidth": 3270986,
+    "advertised_bandwidth": 51200,
+    "exit_policy": [
+      "reject *:*"
+    ],
+    "exit_policy_summary": {
+      "reject": [
+        "1-65535"
+      ]
+    },
+    "contact": "stefani <nocat at readthefinemanual dot net> 4096/F4B863AD6642E7EE",
+    "platform": "Tor 0.4.7.13 on Linux",
+    "version": "0.4.7.13",
+    "version_status": "recommended",
+    "effective_family": [
+      "24E2F139121D4394C54B5BCC368B3B411857C413"
+    ],
+    "consensus_weight_fraction": 1.6233075e-7,
+    "guard_probability": 0,
+    "middle_probability": 4.869453e-7,
+    "exit_probability": 0,
+    "recommended_version": true,
+    "measured": false
+  },
+  {
+    "nickname": "longclaw",
+    "fingerprint": "74A910646BCEEFBCD2E874FC1DC997430F968145",
+    "or_addresses": [
+      "199.58.81.140:443"
+    ],
+    "dir_address": "199.58.81.140:80",
+    "last_seen": "2023-06-02 01:00:00",
+    "last_changed_address_or_port": "2017-10-11 05:00:00",
+    "first_seen": "2014-10-18 14:00:00",
+    "running": true,
+    "flags": [
+      "Authority",
+      "Running",
+      "Stable",
+      "V2Dir",
+      "Valid"
+    ],
+    "country": "ca",
+    "country_name": "Canada",
+    "as": "AS7765",
+    "as_name": "KOUMBIT",
+    "consensus_weight": 20,
+    "verified_host_names": [
+      "longclaw.riseup.net"
+    ],
+    "last_restarted": "2023-05-31 20:00:53",
+    "bandwidth_rate": 38912,
+    "bandwidth_burst": 20971520,
+    "observed_bandwidth": 3695616,
+    "advertised_bandwidth": 38912,
+    "exit_policy": [
+      "reject *:*"
+    ],
+    "exit_policy_summary": {
+      "reject": [
+        "1-65535"
+      ]
+    },
+    "contact": "Riseup Networks <collective at riseup dot net> - 1nNzekuHGGzBYRzyjfjFEfeisNvxkn4RT",
+    "platform": "Tor 0.4.7.13 on Linux",
+    "version": "0.4.7.13",
+    "version_status": "recommended",
+    "alleged_family": [
+      "131B60B9AFE6AEA60042132D648798534ABEA07E",
+      "7661E748639A0A31FFC49380AC19BFD53AD2A8AE"
+    ],
+    "effective_family": [
+      "74A910646BCEEFBCD2E874FC1DC997430F968145"
+    ],
+    "consensus_weight_fraction": 1.6233075e-7,
+    "guard_probability": 0,
+    "middle_probability": 4.869453e-7,
+    "exit_probability": 0,
+    "recommended_version": true,
+    "measured": false
+  },
+  {
+    "nickname": "dannenberg",
+    "fingerprint": "7BE683E65D48141321C5ED92F075C55364AC7123",
+    "or_addresses": [
+      "193.23.244.244:443",
+      "[2001:678:558:1000::244]:443"
+    ],
+    "dir_address": "193.23.244.244:80",
+    "last_seen": "2023-06-02 01:00:00",
+    "last_changed_address_or_port": "2022-01-23 23:00:00",
+    "first_seen": "2007-11-22 21:00:00",
+    "running": true,
+    "flags": [
+      "Authority",
+      "Fast",
+      "HSDir",
+      "Running",
+      "Stable",
+      "V2Dir",
+      "Valid"
+    ],
+    "country": "de",
+    "country_name": "Germany",
+    "as": "AS50472",
+    "as_name": "Chaos Computer Club e.V.",
+    "consensus_weight": 20,
+    "verified_host_names": [
+      "dannenberg.torauth.de"
+    ],
+    "last_restarted": "2023-05-28 09:35:26",
+    "bandwidth_rate": 102400,
+    "bandwidth_burst": 1073741824,
+    "observed_bandwidth": 8708745,
+    "advertised_bandwidth": 102400,
+    "exit_policy": [
+      "reject *:*"
+    ],
+    "exit_policy_summary": {
+      "reject": [
+        "1-65535"
+      ]
+    },
+    "contact": "Andreas Lehner",
+    "platform": "Tor 0.4.7.13 on OpenBSD",
+    "version": "0.4.7.13",
+    "version_status": "recommended",
+    "effective_family": [
+      "7BE683E65D48141321C5ED92F075C55364AC7123"
+    ],
+    "consensus_weight_fraction": 1.6233075e-7,
+    "guard_probability": 0,
+    "middle_probability": 4.869453e-7,
+    "exit_probability": 0,
+    "recommended_version": true,
+    "measured": false
+  },
+  {
+    "nickname": "dizum",
+    "fingerprint": "7EA6EAD6FD83083C538F44038BBFA077587DD755",
+    "or_addresses": [
+      "45.66.33.45:443"
+    ],
+    "dir_address": "45.66.33.45:80",
+    "last_seen": "2023-06-02 01:00:00",
+    "last_changed_address_or_port": "2019-08-12 16:00:00",
+    "first_seen": "2007-10-27 12:00:00",
+    "running": true,
+    "flags": [
+      "Authority",
+      "Fast",
+      "Running",
+      "Stable",
+      "V2Dir",
+      "Valid"
+    ],
+    "country": "nl",
+    "country_name": "Netherlands",
+    "as": "AS47482",
+    "as_name": "Spectre Operations B.V.",
+    "consensus_weight": 20,
+    "verified_host_names": [
+      "tor.dizum.com"
+    ],
+    "last_restarted": "2023-05-26 10:26:19",
+    "bandwidth_rate": 90112,
+    "bandwidth_burst": 68157440,
+    "observed_bandwidth": 8935599,
+    "advertised_bandwidth": 90112,
+    "exit_policy": [
+      "reject *:*"
+    ],
+    "exit_policy_summary": {
+      "reject": [
+        "1-65535"
+      ]
+    },
+    "contact": "email:usura[]sabotage.org url:https://386bsd.net proof:uri-rsa abuse:abuse[]sabotage.net twitter:adejoode ciissversion:2",
+    "platform": "Tor 0.4.7.13 on Linux",
+    "version": "0.4.7.13",
+    "version_status": "recommended",
+    "effective_family": [
+      "74C0C2705DB1192C03F19F7CD1BB234843B1A81F",
+      "7EA6EAD6FD83083C538F44038BBFA077587DD755"
+    ],
+    "consensus_weight_fraction": 1.6233075e-7,
+    "guard_probability": 0,
+    "middle_probability": 4.869453e-7,
+    "exit_probability": 0,
+    "recommended_version": true,
+    "measured": false,
+    "unreachable_or_addresses": [
+      "[::]:443"
+    ]
+  },
+  {
+    "nickname": "tor26",
+    "fingerprint": "847B1F850344D7876491A54892F904934E4EB85D",
+    "or_addresses": [
+      "86.59.21.38:443",
+      "[2001:858:2:2:aabb:0:563b:1526]:443"
+    ],
+    "dir_address": "86.59.21.38:80",
+    "last_seen": "2023-06-02 01:00:00",
+    "last_changed_address_or_port": "2021-01-19 22:00:00",
+    "first_seen": "2007-10-27 12:00:00",
+    "running": true,
+    "flags": [
+      "Authority",
+      "Running",
+      "Stable",
+      "V2Dir",
+      "Valid"
+    ],
+    "country": "at",
+    "country_name": "Austria",
+    "as": "AS8437",
+    "as_name": "Hutchison Drei Austria GmbH",
+    "consensus_weight": 20,
+    "verified_host_names": [
+      "tor.noreply.org"
+    ],
+    "last_restarted": "2023-05-14 09:35:15",
+    "bandwidth_rate": 76800,
+    "bandwidth_burst": 52428800,
+    "observed_bandwidth": 3426705,
+    "advertised_bandwidth": 76800,
+    "exit_policy": [
+      "reject *:*"
+    ],
+    "exit_policy_summary": {
+      "reject": [
+        "1-65535"
+      ]
+    },
+    "contact": "Peter Palfrader",
+    "platform": "Tor 0.4.7.13 on Linux",
+    "version": "0.4.7.13",
+    "version_status": "recommended",
+    "alleged_family": [
+      "01C5B10C5C6B1DEB47612E66EBF315B7C64DE803",
+      "03FF94D9E5001DD2290BC3B19FA7F59CE1E30279",
+      "6BD2FF175484CD7925A81DC42D89B3953252DBAD",
+      "995D0FE5A89563D79A383CCC2444D0E26C6BE625",
+      "CA1DDA678A477BD2F19714F88A3C0613C7AD3C10"
+    ],
+    "effective_family": [
+      "847B1F850344D7876491A54892F904934E4EB85D"
+    ],
+    "consensus_weight_fraction": 1.6233075e-7,
+    "guard_probability": 0,
+    "middle_probability": 4.869453e-7,
+    "exit_probability": 0,
+    "recommended_version": true,
+    "measured": false
+  },
+  {
+    "nickname": "Serge",
+    "fingerprint": "BA44A889E64B93FAA2B114E02C2A279A8555C533",
+    "or_addresses": [
+      "66.111.2.131:9001",
+      "[2610:1c0:0:5::131]:9001"
+    ],
+    "dir_address": "66.111.2.131:9030",
+    "last_seen": "2023-06-02 01:00:00",
+    "last_changed_address_or_port": "2018-07-11 10:00:00",
+    "first_seen": "2018-07-11 10:00:00",
+    "running": true,
+    "flags": [
+      "Authority",
+      "Running",
+      "Stable",
+      "V2Dir",
+      "Valid"
+    ],
+    "country": "us",
+    "country_name": "United States of America",
+    "as": "AS11403",
+    "as_name": "NYINTERNET",
+    "consensus_weight": 20,
+    "verified_host_names": [
+      "serge.torbsd.org"
+    ],
+    "last_restarted": "2023-05-26 18:50:19",
+    "bandwidth_rate": 102400,
+    "bandwidth_burst": 1536000,
+    "observed_bandwidth": 963068,
+    "advertised_bandwidth": 102400,
+    "exit_policy": [
+      "reject *:*"
+    ],
+    "exit_policy_summary": {
+      "reject": [
+        "1-65535"
+      ]
+    },
+    "contact": "george AT nycbug.org",
+    "platform": "Tor 0.4.7.13 on OpenBSD",
+    "version": "0.4.7.13",
+    "version_status": "recommended",
+    "effective_family": [
+      "3F092986E9B87D3FDA09B71FA3A602378285C77A",
+      "BA44A889E64B93FAA2B114E02C2A279A8555C533",
+      "D317C7889162E9EC4A1DA1A1095C2A0F377536D9"
+    ],
+    "consensus_weight_fraction": 1.6233075e-7,
+    "guard_probability": 0,
+    "middle_probability": 4.869453e-7,
+    "exit_probability": 0,
+    "recommended_version": true,
+    "measured": false
+  },
+  {
+    "nickname": "maatuska",
+    "fingerprint": "BD6A829255CB08E66FBE7D3748363586E46B3810",
+    "or_addresses": [
+      "171.25.193.9:80",
+      "[2001:67c:289c::9]:80"
+    ],
+    "dir_address": "171.25.193.9:443",
+    "last_seen": "2023-06-02 01:00:00",
+    "last_changed_address_or_port": "2022-06-22 23:00:00",
+    "first_seen": "2010-02-17 18:00:00",
+    "running": true,
+    "flags": [
+      "Authority",
+      "Running",
+      "Stable",
+      "V2Dir",
+      "Valid"
+    ],
+    "country": "se",
+    "country_name": "Sweden",
+    "as": "AS198093",
+    "as_name": "Foreningen for digitala fri- och rattigheter",
+    "consensus_weight": 20,
+    "verified_host_names": [
+      "maatuska.4711.se"
+    ],
+    "last_restarted": "2023-04-05 18:09:37",
+    "bandwidth_rate": 51200,
+    "bandwidth_burst": 209715200,
+    "observed_bandwidth": 7363785,
+    "advertised_bandwidth": 51200,
+    "exit_policy": [
+      "reject *:*"
+    ],
+    "exit_policy_summary": {
+      "reject": [
+        "1-65535"
+      ]
+    },
+    "contact": "4096R/1E8BF34923291265 Linus Nordberg <linus@nordberg.se>",
+    "platform": "Tor 0.4.7.13 on FreeBSD",
+    "version": "0.4.7.13",
+    "version_status": "recommended",
+    "alleged_family": [
+      "185663B7C12777F052B2C2D23D7A239D8DA88A0F",
+      "6D443156A22CD86BC41DF9D0E370AE9A7A8E55C7",
+      "79861CF8522FC637EF046F7688F5289E49D94576",
+      "A10C4F666D27364036B562823E5830BC448E046A",
+      "A478E421F83194C114F41E94F95999672AED51FE",
+      "B4B6E5C09E5EDDBDD04AAC1355EE1FE269E00F40",
+      "DD8BD7307017407FCC36F8D04A688F74A0774C02",
+      "EC84E23249F74BFFBC82B4E63CDA295CCC0292A0"
+    ],
+    "effective_family": [
+      "32EE911D968BE3E016ECA572BB1ED0A9EE43FC2F",
+      "BD6A829255CB08E66FBE7D3748363586E46B3810",
+      "FFA72BD683BC2FCF988356E6BEC1E490F313FB07"
+    ],
+    "consensus_weight_fraction": 1.6233075e-7,
+    "guard_probability": 0,
+    "middle_probability": 4.869453e-7,
+    "exit_probability": 0,
+    "recommended_version": true,
+    "measured": false
+  },
+  {
+    "nickname": "gabelmoo",
+    "fingerprint": "F2044413DAC2E02E3D6BCF4735A19BCA1DE97281",
+    "or_addresses": [
+      "131.188.40.189:443",
+      "[2001:638:a000:4140::ffff:189]:443"
+    ],
+    "dir_address": "131.188.40.189:80",
+    "last_seen": "2023-06-02 01:00:00",
+    "last_changed_address_or_port": "2018-04-01 11:00:00",
+    "first_seen": "2010-01-19 15:00:00",
+    "running": true,
+    "flags": [
+      "Authority",
+      "Running",
+      "Stable",
+      "V2Dir",
+      "Valid"
+    ],
+    "country": "de",
+    "country_name": "Germany",
+    "as": "AS680",
+    "as_name": "Verein zur Foerderung eines Deutschen Forschungsnetzes e.V.",
+    "consensus_weight": 20,
+    "verified_host_names": [
+      "despari.informatik.uni-erlangen.de"
+    ],
+    "last_restarted": "2023-03-06 06:08:14",
+    "bandwidth_rate": 40960,
+    "bandwidth_burst": 125829120,
+    "observed_bandwidth": 7485072,
+    "advertised_bandwidth": 40960,
+    "exit_policy": [
+      "reject *:*"
+    ],
+    "exit_policy_summary": {
+      "reject": [
+        "1-65535"
+      ]
+    },
+    "contact": "4096R/261C5FBE77285F88FB0C343266C8C2D7C5AA446D Sebastian Hahn <tor@sebastianhahn.net> - 12NbRAjAG5U3LLWETSF7fSTcdaz32Mu5CN",
+    "platform": "Tor 0.4.7.13 on Linux",
+    "version": "0.4.7.13",
+    "version_status": "recommended",
+    "effective_family": [
+      "F2044413DAC2E02E3D6BCF4735A19BCA1DE97281"
+    ],
+    "consensus_weight_fraction": 1.6233075e-7,
+    "guard_probability": 0,
+    "middle_probability": 4.869453e-7,
+    "exit_probability": 0,
+    "recommended_version": true,
+    "measured": false
+  }
+]

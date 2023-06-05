@@ -1,30 +1,33 @@
-import { EventEmitter } from 'events';
+import { EventEmitter } from 'node:events';
 import tls from 'node:tls';
+import crypto from 'node:crypto';
+
 import type { KeyInfo } from './profiles';
 import {
-  getAuthTypeDescription,
   makeRandomServerName,
 } from './tls';
 import {
   validateCertsCellForIdentities,
-  getCertDescription,
 } from './cert';
 import {
   messageCells,
   serializeCommand,
   readCellsFromData,
   AddressTypes,
+  circuitIdLengthForProtocolVersion,
 } from './messaging';
 import type {
   MessageCell,
-  CellNetInfo,
-  Certificate,
+  NetInfoAddress,
 } from './messaging';
-import { sha256 } from './util'
+import { sha256, sha1 } from './util'
+import { knownGuards } from './guard-nodes';
+import { makeCreate2CellForNtor } from './ntor';
+import { dangerouslyLookupOnionKey, getRandomDirectoryAuthority } from './directory';
 
 const defaultLinkSupportedVersions = [3, 4, 5];
 
-export class Connection {
+export class ChannelConnection {
   
   isInitiator: boolean;
   incommingCommands: any;
@@ -63,7 +66,7 @@ export class Connection {
   }
   sendMessage (messageType: number, messageParams: any): void {
     const { handShakeInProgress } = this.state
-    const serializedCell = serializeCommand(messageType, messageParams)
+    const serializedCell = serializeCommand(messageType, messageParams, this.state.linkProtocolVersion)
     if (handShakeInProgress) {
       this._outgoingHandshakeDigestData.push(serializedCell);
     }
@@ -73,10 +76,10 @@ export class Connection {
   sendData(_serializedCell: any) {
     throw new Error("Method not implemented.");
   }
-  promiseForHandshake (): Promise<any> {
+  async promiseForHandshake (): Promise<any> {
     // TODO: should fail if any of these are repeated
-    const handshakePromise = receiveEvents(['VERSIONS', 'CERTS', 'AUTH_CHALLENGE'], this.incommingCommands)
-    return handshakePromise;
+    const [versionsCell, certsCell, authChallengeCell] = await receiveEvents(['VERSIONS', 'CERTS', 'AUTH_CHALLENGE'], this.incommingCommands)
+    return { versionsCell, certsCell, authChallengeCell };
   }
   receiveEvents (eventNames: Array<string>): Promise<any[]> {
     return receiveEvents(eventNames, this.incommingCommands)
@@ -84,7 +87,7 @@ export class Connection {
 }
 
 export async function testHandshake ({ keyInfo }: { keyInfo: KeyInfo }) {
-  const connection = new Connection({ isInitiator: true })
+  const channelConnection = new ChannelConnection({ isInitiator: true })
   
   // connection.incommingCommands.once('NETINFO', (cell: MessageCell) => {
   //   const message = cell.message as CellNetInfo;
@@ -97,36 +100,31 @@ export async function testHandshake ({ keyInfo }: { keyInfo: KeyInfo }) {
   
   // test handshake
   // await testHandshakeFixture({ connection, keyInfo })
-  await testConnectToKnownNode({ connection, keyInfo })
+  await testConnectToKnownNode({ channelConnection, keyInfo })
 
 }
 
-type PeerAddressInfo = {
-  port: number,
-  family: string,
-  address: string,
-}
-
-async function testConnectToKnownNode ({ connection, keyInfo }: { connection: Connection, keyInfo: KeyInfo }) {
+async function testConnectToKnownNode ({ channelConnection, keyInfo }: { channelConnection: ChannelConnection, keyInfo: KeyInfo }) {
+  // select guard and connect
+  const randomGuard = knownGuards[Math.floor(Math.random()*knownGuards.length)]
+  // const randomGuard = ['109.105.109.162', 60784]
   const server = {
-    ip: '93.180.157.154',
-    port: 9001,
+    ip: randomGuard[0] as string,
+    port: randomGuard[1] as number,
   }
   const options = {
     servername: makeRandomServerName(),
     rejectUnauthorized: false,
   }
-  const socket = tls.connect(server.port, server.ip, options, function() {
-    const peerCert = socket.getPeerCertificate();
-    // console.log('peerCertRaw', peerCert.raw.toString('ascii'))
-    const linkProtocolSupportedVersions = [3, 4, 5];
-    const peerAddressInfo = socket.address() as PeerAddressInfo;
-    // { port: 12346, family: 'IPv4', address: '127.0.0.1' }.
-    performHandshake(connection, keyInfo, peerCert.raw, linkProtocolSupportedVersions, peerAddressInfo)
+  let socket = tls.connect(server.port, server.ip, options);
+  const socketReadyP = new Promise<void>((resolve) => {
+    socket.once('secureConnect', resolve);
   });
-  connection.sendData = (data) => socket.write(data)
+
+  // wire up connection to socket
+  channelConnection.sendData = (data) => socket.write(data)
   socket.on('data', (data) => {
-    connection.onData(data)
+    channelConnection.onData(data)
   });
   // connection.sendData = (data) => {
   //   console.log(`out-> ${data.toString('hex')}`)
@@ -136,43 +134,75 @@ async function testConnectToKnownNode ({ connection, keyInfo }: { connection: Co
   //   console.log(`in<- ${data.toString('hex')}`)
   //   connection.onData(data)
   // });
-
   socket.on('end',() => { console.log('end') });
   socket.on('close',() => { console.log('close') });
   socket.on('error', (err) => { console.log('error', err) });
+  await socketReadyP
+
+  // perform handshake
+  const peerCert = socket.getPeerCertificate(true);
+  const peerAddressInfo = socket.address() as NodejsPeerAddressInfo;
+  await performHandshake(channelConnection, keyInfo, peerCert.raw, defaultLinkSupportedVersions, peerAddressInfo)
+  console.log('handshake complete')
+  const peerIdentity = channelConnection.identity;
+
+
+  // lookup onion key
+  const directoryAuthority = await getRandomDirectoryAuthority()
+  const peerOnionKey = await dangerouslyLookupOnionKey(directoryAuthority.dir_address, peerIdentity.rsaIdDigest);
+
+  console.log('sending CREATE2')
+  // circuitId length is variable based on protocol version
+  const circuitId = randomCircuitIdForVersion(channelConnection.state.linkProtocolVersion);
+  const ownOnionKey = Buffer.alloc(32);
+  channelConnection.sendMessage(messageCells.CREATE2, {
+    circuitId,
+    ...makeCreate2CellForNtor(
+      ownOnionKey,
+      peerOnionKey,
+      peerIdentity.rsaIdDigest,
+    )
+  })
 }
 
-export async function performHandshake (connection: Connection, keyInfo: KeyInfo, peerCert: Buffer, supportedVersions: Array<number> = defaultLinkSupportedVersions, peerAddressInfo?: PeerAddressInfo) {
+export async function performHandshake (
+  channelConnection: ChannelConnection,
+  keyInfo: KeyInfo,
+  peerCert: Buffer,
+  supportedVersions: Array<number> = defaultLinkSupportedVersions,
+  peerAddressInfo?: NodejsPeerAddressInfo
+) {
   // TODO: use NETINFO timestamp to determine clock skew
   const now = Date.now()
   const clockSkew = 0;
 
-  const handshakePromise = connection.promiseForHandshake();
+  const handshakePromise = channelConnection.promiseForHandshake();
 
-  // need to do this synchronously so subsequent messages are parsed correctly based on the version
-  connection.incommingCommands.once('VERSIONS', (versionsCell: MessageCell) => {
+  // need to do this synchronously so subsequent messages are parsed correctly based on the protocol version
+  channelConnection.incommingCommands.once('VERSIONS', (versionsCell: MessageCell) => {
     // determine shared link protocol version
     console.log('supported versions:', supportedVersions, versionsCell.message.versions)
     const linkProtocolVersion = getHighestSharedNumber(supportedVersions, versionsCell.message.versions)
     if (linkProtocolVersion === undefined) {
       throw new Error('No shared link protocol version')
     }
-    connection.state.linkProtocolVersion = linkProtocolVersion
+    channelConnection.state.linkProtocolVersion = linkProtocolVersion
     console.log('VERSIONS: set linkProtocolVersion', linkProtocolVersion)
   })
   // send our handshake intro
-  connection.sendMessage(messageCells.VERSIONS, { versions: supportedVersions })
+  channelConnection.sendMessage(messageCells.VERSIONS, { versions: supportedVersions })
   
   // receive their handshake intro
-  const [_versionsCell, certsCell, authChallengeCell] = await handshakePromise;
+  const { certsCell } = await handshakePromise;
 
   // sha256 hash of (DER-encoded) peer certificate for this connection
   const peerCertSha256 = sha256(peerCert);
-  // console.log('peerCertSha256', peerCertSha256.toString('hex'))
   const {
     rsaId,
     ed25519Id,
   } = validateCertsCellForIdentities(certsCell.message, peerCertSha256, now, clockSkew);
+  const rsaIdDigest = sha1(rsaId.export({ type: 'pkcs1', format: 'der' }));
+  channelConnection.identity = { rsaId, rsaIdDigest, ed25519Id };
 
   // console.log('AUTH_CHALLENGE: accepted challenge methods');
   // for (const type of authChallengeCell.message.methods) {
@@ -187,53 +217,14 @@ export async function performHandshake (connection: Connection, keyInfo: KeyInfo
   // connection.sendMessage(messageCells.CERTS, { certs });
 
   // Complete handshake by sending NETINFO
-  // console.log('sending netinfo')
-
-  const otherAddress = peerAddressInfo ? {
-    type: AddressTypes[peerAddressInfo.family],
-    address: peerAddressInfo.address ? Buffer.from(peerAddressInfo.address, 'ascii') : Buffer.alloc(4),
-  } : {
-    type: 0,
-    address: Buffer.alloc(4),
-  };
-  connection.sendMessage(messageCells.NETINFO, {
+  console.log('sending NETINFO')
+  channelConnection.sendMessage(messageCells.NETINFO, {
     //   Clients SHOULD send "0" as their timestamp, to
     //  avoid fingerprinting.
     time: 0,
-    otherAddress,
+    otherAddress: nodejsPeerAddressToNetInfo(peerAddressInfo),
     addresses: [],
   })
-}
-
-
-
-function certsFromKeyInfo({ keyInfo }: { keyInfo: KeyInfo }) {
-  const certs: Certificate[] = [];
-
-  // To authenticate the initiator as having an RSA identity key only,
-  // the responder MUST check the following:
-
-  //   * The CERTS cell contains exactly one CertType 3 "AUTH" certificate.
-  //   * The CERTS cell contains exactly one CertType 2 "ID" certificate.
-  //   * Both certificates have validAfter and validUntil dates that
-  //     are not expired.
-  //   * The certified key in the AUTH certificate is a 1024-bit RSA key.
-  //   * The certified key in the ID certificate is a 1024-bit RSA key.
-  //   * The certified key in the ID certificate was used to sign both
-  //     certificates.
-  //   * The auth certificate is correctly signed with the key in the
-  //     ID certificate.
-  //   * The ID certificate is correctly self-signed.
-
-  certs.push({
-    type: 3,
-    body: keyInfo.pubkey,
-  })
-  certs.push({
-    type: 2,
-    body: keyInfo.pubid,
-  })
-  return certs
 }
 
 function receiveEvents (eventNames: Array<string>, eventEmitter: EventEmitter): Promise<any> {
@@ -254,4 +245,26 @@ function getHighestSharedNumber (listA: Array<number>, listB: Array<number>): nu
     }
     return highestNumber
   }, undefined)
+}
+
+export type NodejsPeerAddressInfo = {
+  port: number,
+  family: string,
+  address: string,
+}
+
+export function nodejsPeerAddressToNetInfo (peerAddressInfo: NodejsPeerAddressInfo | undefined): NetInfoAddress | undefined {
+  if (!peerAddressInfo) return undefined;
+  return {
+    type: AddressTypes[peerAddressInfo.family],
+    address: peerAddressInfo.address,
+  }
+}
+
+function randomCircuitIdForVersion (protocolVersion: number) {
+  if (protocolVersion === undefined) {
+    throw new Error('protocolVersion is undefined');
+  }
+  const circuitIdLength = circuitIdLengthForProtocolVersion(protocolVersion);
+  return crypto.randomBytes(circuitIdLength);
 }

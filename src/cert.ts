@@ -1,6 +1,5 @@
 import crypto from 'node:crypto';
 import assert from 'node:assert';
-import type { PeerCertificate } from 'node:tls';
 import type { CellCerts } from './messaging';
 import { BytesReader, sha256 } from './util';
 import * as ed from '@noble/ed25519';
@@ -206,7 +205,7 @@ type Signature = {
 }
 
 export const validateCertsCellForIdentities = (certsCell: CellCerts, peerCertSha256: Buffer, now: number, clockSkew: number): {
-  rsaId: Buffer,
+  rsaId: crypto.KeyObject,
   ed25519Id: Buffer,
 } => {
 	// To authenticate the responder as having a given Ed25519,RSA identity key
@@ -440,7 +439,7 @@ function parseRsaCrossCertificate (certBody: Buffer): CrossCertificate {
     expirationHours,
     signature,
     digest,
-    checkSignature (_publicKey: crypto.KeyObject): boolean {
+    checkSignature (publicKey: crypto.KeyObject): boolean {
       const verifier = crypto.createVerify('RSA-SHA256');
       // // verifier.update(Buffer.concat([RsaCrossCertPrefix, signedPortion]));
       verifier.update(RsaCrossCertPrefix);

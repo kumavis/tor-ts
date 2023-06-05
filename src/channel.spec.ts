@@ -1,5 +1,5 @@
 import test from 'ava';
-import { Connection, performHandshake } from './channel'
+import { ChannelConnection, performHandshake } from './channel'
 
 const b = (s: string) => Buffer.from(s, 'hex')
 
@@ -23,7 +23,7 @@ const v5HandshakeFixture = {
 }
 
 test('v3 handshake', async t => {
-  const connection = new Connection({ isInitiator: true })
+  const connection = new ChannelConnection({ isInitiator: true })
   const outboundTraffic: Buffer[] = []
   connection.sendData = (data) => outboundTraffic.push(data)
   const supportedVersions = [3]
@@ -34,7 +34,7 @@ test('v3 handshake', async t => {
 })
 
 test('v5 handshake', async t => {
-  const connection = new Connection({ isInitiator: true })
+  const connection = new ChannelConnection({ isInitiator: true })
   const outboundTraffic: Buffer[] = []
   connection.sendData = (data) => outboundTraffic.push(data)
   const handshakeCompleteP = performHandshake(connection, fixtureKeyInfo, v5HandshakeFixture.peerCert)

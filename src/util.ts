@@ -39,3 +39,11 @@ export const sha256 = (...data: Buffer[]): Buffer => {
   }
   return hash.digest()
 }
+
+export const sha1 = (...data: Buffer[]): Buffer => {
+  const hash = crypto.createHash('sha1')
+  for (const d of data) {
+    hash.update(d)
+  }
+  return hash.digest()
+}
