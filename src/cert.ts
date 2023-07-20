@@ -204,8 +204,10 @@ type Signature = {
   text: Buffer;
 }
 
+export type RsaId = crypto.KeyObject;
+
 export const validateCertsCellForIdentities = (certsCell: CellCerts, peerCertSha256: Buffer, now: number, clockSkew: number): {
-  rsaId: crypto.KeyObject,
+  rsaId: RsaId,
   ed25519Id: Buffer,
 } => {
 	// To authenticate the responder as having a given Ed25519,RSA identity key
@@ -413,7 +415,7 @@ export type CrossCertificate = {
   expirationHours: number;
   signature: Buffer;
   digest: Buffer;
-  checkSignature (publicKey: crypto.KeyObject): boolean;
+  checkSignature (publicKey: RsaId): boolean;
 }
 
 const RsaCrossCertPrefix = Buffer.from('Tor TLS RSA/Ed25519 cross-certificate');
@@ -439,7 +441,7 @@ function parseRsaCrossCertificate (certBody: Buffer): CrossCertificate {
     expirationHours,
     signature,
     digest,
-    checkSignature (publicKey: crypto.KeyObject): boolean {
+    checkSignature (publicKey: RsaId): boolean {
       const verifier = crypto.createVerify('RSA-SHA256');
       // // verifier.update(Buffer.concat([RsaCrossCertPrefix, signedPortion]));
       verifier.update(RsaCrossCertPrefix);
@@ -475,7 +477,7 @@ function keysMatch (keyA: Buffer, keyB: Buffer): boolean {
   return keyA === keyB || Buffer.prototype.equals.call(keyA, keyB)
 }
 
-function logCerts (certsCell) {
+export function logCerts (certsCell) {
   const { certs } = certsCell;
   console.log('CERTS: got certs');
   for (const { type, body } of certs) {

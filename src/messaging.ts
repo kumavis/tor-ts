@@ -28,52 +28,52 @@ import { BytesReader, sha256 } from "./util";
 // 131 -- AUTHENTICATE (Client authentication)(See Sec 4.5)
 // 132 -- AUTHORIZE (Client authorization)    (Not yet used)
 
-const messageCells = {
-  PADDING: 0,
-  CREATE: 1,
-  CREATED: 2,
-  RELAY: 3,
-  DESTROY: 4,
-  CREATE_FAST: 5,
-  CREATED_FAST: 6,
-  NETINFO: 8,
-  RELAY_EARLY: 9,
-  CREATE2: 10,
-  CREATED2: 11,
-  PADDING_NEGOTIATE: 12,
-  VERSIONS: 7,
-  VPADDING: 128,
-  CERTS: 129,
-  AUTH_CHALLENGE: 130,
-  AUTHENTICATE: 131,
-  AUTHORIZE: 132,
+enum MessageCells {
+  PADDING = 0,
+  CREATE = 1,
+  CREATED = 2,
+  RELAY = 3,
+  DESTROY = 4,
+  CREATE_FAST = 5,
+  CREATED_FAST = 6,
+  NETINFO = 8,
+  RELAY_EARLY = 9,
+  CREATE2 = 10,
+  CREATED2 = 11,
+  PADDING_NEGOTIATE = 12,
+  VERSIONS = 7,
+  VPADDING = 128,
+  CERTS = 129,
+  AUTH_CHALLENGE = 130,
+  AUTHENTICATE = 131,
+  AUTHORIZE = 132,
 }
 
 const messageCellNames = {
-  [messageCells.PADDING]: 'PADDING',
-  [messageCells.CREATE]: 'CREATE',
-  [messageCells.CREATED]: 'CREATED',
-  [messageCells.RELAY]: 'RELAY',
-  [messageCells.DESTROY]: 'DESTROY',
-  [messageCells.CREATE_FAST]: 'CREATE_FAST',
-  [messageCells.CREATED_FAST]: 'CREATED_FAST',
-  [messageCells.NETINFO]: 'NETINFO',
-  [messageCells.RELAY_EARLY]: 'RELAY_EARLY',
-  [messageCells.CREATE2]: 'CREATE2',
-  [messageCells.CREATED2]: 'CREATED2',
-  [messageCells.PADDING_NEGOTIATE]: 'PADDING_NEGOTIATE',
-  [messageCells.VERSIONS]: 'VERSIONS',
-  [messageCells.VPADDING]: 'VPADDING',
-  [messageCells.CERTS]: 'CERTS',
-  [messageCells.AUTH_CHALLENGE]: 'AUTH_CHALLENGE',
-  [messageCells.AUTHENTICATE]: 'AUTHENTICATE',
-  [messageCells.AUTHORIZE]: 'AUTHORIZE',
+  [MessageCells.PADDING]: 'PADDING',
+  [MessageCells.CREATE]: 'CREATE',
+  [MessageCells.CREATED]: 'CREATED',
+  [MessageCells.RELAY]: 'RELAY',
+  [MessageCells.DESTROY]: 'DESTROY',
+  [MessageCells.CREATE_FAST]: 'CREATE_FAST',
+  [MessageCells.CREATED_FAST]: 'CREATED_FAST',
+  [MessageCells.NETINFO]: 'NETINFO',
+  [MessageCells.RELAY_EARLY]: 'RELAY_EARLY',
+  [MessageCells.CREATE2]: 'CREATE2',
+  [MessageCells.CREATED2]: 'CREATED2',
+  [MessageCells.PADDING_NEGOTIATE]: 'PADDING_NEGOTIATE',
+  [MessageCells.VERSIONS]: 'VERSIONS',
+  [MessageCells.VPADDING]: 'VPADDING',
+  [MessageCells.CERTS]: 'CERTS',
+  [MessageCells.AUTH_CHALLENGE]: 'AUTH_CHALLENGE',
+  [MessageCells.AUTHENTICATE]: 'AUTHENTICATE',
+  [MessageCells.AUTHORIZE]: 'AUTHORIZE',
 }
 
 // On a version 3 or
 // higher connection, variable-length cells are indicated by a command
 // byte equal to 7 ("VERSIONS"), or greater than or equal to 128.
-const variableLengthCells = Object.values(messageCells).filter(code => code === 7 || code >= 123);
+const variableLengthCells = Object.values(MessageCells).filter((code: number) => code === 7 || code >= 123);
 
 export const AddressTypes = {
   IPv4: 4,
@@ -93,7 +93,7 @@ export const HandshakeTypes = {
 
 export type MessageCell = {
   data: Buffer,
-  circId: number,
+  circId: Buffer,
   command: number,
   length: number,
   payloadBytes: Buffer,
@@ -119,6 +119,18 @@ export type CellAuthenticate = {
   auth: Buffer,
 };
 
+export type CellCreate2 = {
+  handshake: Create2ClientHandshake,
+};
+
+export type CellCreated2 = {
+  handshake: Create2ServerHandshake,
+};
+
+export type CellDestroy = {
+  reason: number,
+};
+
 export type CellAuthChallenge = {
   challenge: Buffer,
   methods: Array<number>,
@@ -135,13 +147,17 @@ export type NetInfoAddress = {
   type: number,
 }
 
-export type Create2Handshake = {
+export type Create2ClientHandshake = {
   type: number,
   data: Buffer,
 }
 
+export type Create2ServerHandshake = {
+  data: Buffer,
+}
+
 const cellParsers = {
-  [messageCells.VERSIONS]: (reader: BytesReader): CellVersions => {
+  [MessageCells.VERSIONS]: (reader: BytesReader): CellVersions => {
     const versions = []
     for (let i = 0; i < reader.length; i += 2) {
       const version = reader.readUIntBE(2)
@@ -149,7 +165,7 @@ const cellParsers = {
     }
     return { versions }
   },
-  [messageCells.CERTS]: (reader: BytesReader): CellCerts => {
+  [MessageCells.CERTS]: (reader: BytesReader): CellCerts => {
     // N: Number of certs in cell            [1 octet]
     // N times:
     //    CertType                           [1 octet]
@@ -173,7 +189,7 @@ const cellParsers = {
     }
     return { certs }
   },
-  [messageCells.AUTH_CHALLENGE]: (reader: BytesReader): CellAuthChallenge => {
+  [MessageCells.AUTH_CHALLENGE]: (reader: BytesReader): CellAuthChallenge => {
     // Challenge [32 octets]
     // N_Methods [2 octets]
     // Methods   [2 * N_Methods octets]
@@ -186,7 +202,7 @@ const cellParsers = {
     }
     return { challenge, methods }
   },
-  [messageCells.NETINFO]: (reader: BytesReader): CellNetInfo => {
+  [MessageCells.NETINFO]: (reader: BytesReader): CellNetInfo => {
     //   TIME       (Timestamp)                     [4 bytes]
     //   OTHERADDR  (Other OR's address)            [variable]
     //      ATYPE   (Address type)                  [1 byte]
@@ -216,7 +232,7 @@ const cellParsers = {
     }
     return { time, otherAddress, addresses };
   },
-  [messageCells.AUTHENTICATE]: (reader: BytesReader): CellAuthenticate => {
+  [MessageCells.AUTHENTICATE]: (reader: BytesReader): CellAuthenticate => {
     // AuthType                              [2 octets]
     // AuthLen                               [2 octets]
     // Authentication                        [AuthLen octets]
@@ -225,17 +241,56 @@ const cellParsers = {
     const auth = reader.readBytes(authLength)
     return { type, auth }
   },
+  [MessageCells.DESTROY]: (reader: BytesReader): CellDestroy => {
+    // The payload of a DESTROY and RELAY_TRUNCATED cell contains a single
+    // octet, describing the reason that the circuit was
+    // closed. RELAY_TRUNCATED cells, and DESTROY cells sent _towards the
+    // client, should contain the actual reason from the list of error codes
+    // below.  Reasons in DESTROY cell SHOULD NOT be propagated downward or
+    // upward, due to potential side channel risk: An OR receiving a DESTROY
+    // command should use the DESTROYED reason for its next cell. An OP
+    // should always use the NONE reason for its own DESTROY cells.
+
+    // The error codes are:
+    //   0 -- NONE            (No reason given.)
+    //   1 -- PROTOCOL        (Tor protocol violation.)
+    //   2 -- INTERNAL        (Internal error.)
+    //   3 -- REQUESTED       (A client sent a TRUNCATE command.)
+    //   4 -- HIBERNATING     (Not currently operating; trying to save bandwidth.)
+    //   5 -- RESOURCELIMIT   (Out of memory, sockets, or circuit IDs.)
+    //   6 -- CONNECTFAILED   (Unable to reach relay.)
+    //   7 -- OR_IDENTITY     (Connected to relay, but its OR identity was not
+    //                         as expected.)
+    //   8 -- CHANNEL_CLOSED  (The OR connection that was carrying this circuit
+    //                         died.)
+    //   9 -- FINISHED        (The circuit has expired for being dirty or old.)
+    // 10 -- TIMEOUT         (Circuit construction took too long)
+    // 11 -- DESTROYED       (The circuit was destroyed w/o client TRUNCATE)
+    // 12 -- NOSUCHSERVICE   (Request for unknown hidden service)
+    const reason = reader.readUIntBE(1)
+    return { reason }
+  },
+  [MessageCells.CREATED2]: (reader: BytesReader): CellCreated2 => {
+    // HLEN      (Server Handshake Data Len) [2 bytes]
+    // HDATA     (Server Handshake Data)     [HLEN bytes]
+    const handshakeLength = reader.readUIntBE(2)
+    const handshakeData = reader.readBytes(handshakeLength)
+    const handshake = {
+      data: handshakeData,
+    }
+    return { handshake }
+  },
 }
 
 const cellSerializers = {
-  [messageCells.VERSIONS]: ({ versions }: CellVersions) => {
+  [MessageCells.VERSIONS]: ({ versions }: CellVersions) => {
     const payloadBytes = Buffer.alloc(versions.length * 2)
     versions.forEach((version, i) => {
       payloadBytes.writeUIntBE(version, i * 2, 2)
     })
     return payloadBytes
   },
-  [messageCells.CERTS]: ({ certs }: CellCerts) => {
+  [MessageCells.CERTS]: ({ certs }: CellCerts) => {
     // N: Number of certs in cell            [1 octet]
     // N times:
     //    CertType                           [1 octet]
@@ -253,7 +308,7 @@ const cellSerializers = {
     ])
     return payloadBytes
   },
-  [messageCells.AUTHENTICATE]: ({
+  [MessageCells.AUTHENTICATE]: ({
     type,
     auth,
   }: CellAuthenticate) => {
@@ -267,7 +322,7 @@ const cellSerializers = {
     ])
     return payloadBytes
   },
-  [messageCells.NETINFO]: ({
+  [MessageCells.NETINFO]: ({
     time,
     otherAddress,
     addresses,
@@ -300,7 +355,7 @@ const cellSerializers = {
     )])
     return payloadBytes
   },
-  [messageCells.CREATE2]: (handshake: Create2Handshake) => {
+  [MessageCells.CREATE2]: ({ handshake }: CellCreate2) => {
     // HTYPE     (Client Handshake Type)     [2 bytes]
     // HLEN      (Client Handshake Data Len) [2 bytes]
     // HDATA     (Client Handshake Data)     [HLEN bytes]
@@ -311,6 +366,7 @@ const cellSerializers = {
     ])
     return payloadBytes
   },
+
 }
 
 function serializeCell(commandCode: number, params: any, protocolVersion: number | undefined) {
@@ -339,7 +395,7 @@ function serializeCell(commandCode: number, params: any, protocolVersion: number
     assert.equal(params.circuitId.length, circuitLength, 'circuitId length is not expected length')
   }
   const cellData = [
-    bufferFromUint(circuitLength, circuitId),
+    circuitId,
     bufferFromUint(1, commandCode),
   ];
   const payloadBytes = cellSerializer(params);
@@ -348,8 +404,15 @@ function serializeCell(commandCode: number, params: any, protocolVersion: number
     cellData.push(
       bufferFromUint(2, payloadBytes.length)
     );
+    cellData.push(payloadBytes);
+  } else {
+    cellData.push(payloadBytes);
+    // not sure this length is correct
+    const paddingLength = 509 - payloadBytes.length;
+    if (paddingLength > 0) {
+      cellData.push(Buffer.alloc(paddingLength));
+    }
   }
-  cellData.push(payloadBytes);
   return Buffer.concat(cellData);
 }
 
@@ -365,6 +428,7 @@ export function circuitIdLengthForProtocolVersion (protocolVersion: number | und
 }
 
 function bufferFromUint (length: number, value: number) {
+  if (typeof value !== 'number') throw new Error('value must be a number')
   const data = Buffer.alloc(length);
   data.writeUintBE(value, 0, length);
   return data;
@@ -392,9 +456,9 @@ function parseCell (data: Buffer, version: number | undefined): { cell: MessageC
   //      CircID                                [CIRCID_LEN octets]
   //      Command                               [1 octet]
   //      Length                                [2 octets; big-endian integer]
-  //      Payload (some messageCells MAY pad)       [Length bytes]
+  //      Payload (some MessageCells MAY pad)       [Length bytes]
 
-  let circId: number;
+  let circId: Buffer;
   let commandCode: number;
   let payloadBytes: Buffer;
   let extraData: Buffer;
@@ -403,7 +467,7 @@ function parseCell (data: Buffer, version: number | undefined): { cell: MessageC
   try {
     const reader = new BytesReader(data);
     const circIdLength = circuitIdLengthForProtocolVersion(version);
-    circId = reader.readUIntBE(circIdLength);
+    circId = reader.readBytes(circIdLength);
     commandCode = reader.readUIntBE(1);
     //  PAYLOAD_LEN -- The longest allowable cell payload, in bytes. (509)
     let length = 509;
@@ -430,7 +494,7 @@ function parseCell (data: Buffer, version: number | undefined): { cell: MessageC
   } catch (err) {
     let message = `Error parsing cell: "${err.message}"`;
     if (circId !== undefined) {
-      message += ` (circuit id ${circId})`;
+      message += ` (circuit id ${circId.toString('hex')})`;
     }
     if (commandCode !== undefined) {
       message += ` (command code ${commandCode} = ${getCommandName(commandCode)})`;
@@ -601,7 +665,7 @@ function buildAuthenticateCell ({
 }
 
 export {
-  messageCells,
+  MessageCells,
   messageCellNames,
   readCellsFromData,
   serializeCell as serializeCommand,
