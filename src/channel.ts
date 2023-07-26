@@ -1,6 +1,7 @@
 import { EventEmitter } from 'node:events';
 import tls from 'node:tls';
 import crypto from 'node:crypto';
+import { secp256k1 } from '@noble/curves/secp256k1';
 
 import type { KeyInfo } from './profiles';
 import {
@@ -25,8 +26,12 @@ import type {
 } from './messaging';
 import { sha256, sha1, deferred } from './util'
 import { knownGuards } from './guard-nodes';
-import { makeCreate2ClientHandshakeForNtor } from './ntor';
 import { dangerouslyLookupOnionKey, getRandomDirectoryAuthority } from './directory';
+import {
+  makeCreate2ClientHandshakeForNtor,
+  parseCreate2ServerHandshakeForNtor,
+  getKeySeedFromNtorServerHandshake,
+} from './ntor';
 
 const defaultLinkSupportedVersions = [3, 4, 5];
 
@@ -126,9 +131,11 @@ export class ChannelConnection {
     }
     const peerOnionKey = await dangerouslyLookupOnionKey(directoryAuthority.dir_address, peerRsaIdDigest);
     // temporary fake key
-    const ownOnionKey = crypto.randomBytes(32);
+    // const ownOnionKey = crypto.randomBytes(32);
+    const clientNtorEphemeralKeyPrivate = secp256k1.utils.randomPrivateKey();
+    const clientNtorEphemeralKeyPublic = secp256k1.getPublicKey(clientNtorEphemeralKeyPrivate);
 
-    const circuitId = createRandomCircuitId(this.state.linkProtocolVersion, true);
+    const circuitId = createRandomCircuitId(this.state.linkProtocolVersion, this.isInitiator);
 
     // create listener for circuit CREATED2/DESTROY
     // TODO: need to retain or reopen DESTROY listener if CREATED2 is received first
@@ -151,7 +158,7 @@ export class ChannelConnection {
     this.incommingCommands.on('DESTROY', checkDestroyed)
     // submit create
     const clientHandshake = makeCreate2ClientHandshakeForNtor({
-      ownOnionKey,
+      ownOnionKey: clientNtorEphemeralKeyPublic,
       peerOnionKey,
       peerRsaIdDigest,
     })
@@ -160,8 +167,18 @@ export class ChannelConnection {
       handshake: clientHandshake,
     })
     const { message: { handshake: serverHandshake } } = await createdP;
-    // SECURITY TODO: verify server handshake
-    // TODO: generate keys from handshake
+    const { serverNtorEphemeralKeyPublic, serverNtorAuth } = parseCreate2ServerHandshakeForNtor(serverHandshake);
+
+    const keySeed = getKeySeedFromNtorServerHandshake({
+      clientNtorEphemeralKeyPrivate,
+      clientNtorEphemeralKeyPublic,
+      serverNtorEphemeralKeyPublic,
+      serverNtorIdentityKeyPublic: peerOnionKey,
+      serverRsaIdentityKeyDigest: peerRsaIdDigest,
+      serverNtorAuth,
+    })
+    // TODO: use KDF_RFC5869 to derive keys
+
   }
   async promiseForHandshake (): Promise<any> {
     const [versionsCell, certsCell, authChallengeCell] = await receiveEvents(['VERSIONS', 'CERTS', 'AUTH_CHALLENGE'], this.incommingCommands)

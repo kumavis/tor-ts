@@ -1,4 +1,7 @@
 import assert from 'node:assert';
+import { x25519 } from '@noble/curves/ed25519';
+import { hmac } from '@noble/hashes/hmac';
+import { sha256 } from '@noble/hashes/sha256';
 import {
   HandshakeTypes,
 } from './messaging';
@@ -123,8 +126,8 @@ export type NtorClientHandshake = {
 }
 
 export type NtorServerHandshake = {
-  peerOnionKey: Buffer,
-  auth: Buffer,
+  serverNtorEphemeralKeyPublic: Buffer,
+  serverNtorAuth: Buffer,
 }
 
 export function makeCreate2ClientHandshakeForNtor (handshake: NtorClientHandshake): Create2ClientHandshake {
@@ -156,7 +159,102 @@ export function parseCreate2ServerHandshakeForNtor (handshake: Create2ServerHand
   // AUTH        H(auth_input, t_mac)    [H_LENGTH bytes]
   assert.equal(handshakeData.length, G_LENGTH + H_LENGTH, 'handshake length is not expected length')
   const reader = new BytesReader(handshakeData);
-  const peerOnionKey = reader.readBytes(G_LENGTH);
-  const auth = reader.readBytes(H_LENGTH);
-  return { peerOnionKey, auth }
+  const serverNtorEphemeralKeyPublic = reader.readBytes(G_LENGTH);
+  const serverNtorAuth = reader.readBytes(H_LENGTH);
+  return { serverNtorEphemeralKeyPublic, serverNtorAuth }
+}
+
+//     H(x,t) as HMAC_SHA256 with message x and key t.
+function H (x: Buffer, t: Buffer): Buffer {
+  return hmac(sha256, t, x);
+}
+
+// EXP(a, b) = The ECDH algorithm for establishing a shared secret.
+function EXP (a: Buffer, b: Buffer): Buffer {
+  return x25519.getSharedSecret(a, b);
+}
+
+export function getKeySeedFromNtorServerHandshake ({
+  clientNtorEphemeralKeyPrivate,
+  clientNtorEphemeralKeyPublic,
+  serverNtorEphemeralKeyPublic,
+  serverNtorIdentityKeyPublic,
+  serverRsaIdentityKeyDigest,
+  serverNtorAuth,
+}) {
+  const x = clientNtorEphemeralKeyPrivate;
+  const X = clientNtorEphemeralKeyPublic;
+  const Y = serverNtorEphemeralKeyPublic;
+  const B = serverNtorIdentityKeyPublic;
+  const ID = serverRsaIdentityKeyDigest;
+  const AUTH = serverNtorAuth;
+
+  //     secret_input = EXP(Y,x) | EXP(B,x) | ID | B | X | Y | PROTOID
+  const secretInput = Buffer.concat([
+    EXP(Y, x),
+    EXP(B, x),
+    ID,
+    B,
+    X,
+    Y,
+    Buffer.from(PROTOID),
+  ]);
+  //     KEY_SEED = H(secret_input, t_key)
+  const keySeed = H(secretInput, Buffer.from(t_key, 'utf-8'));
+  //     verify = H(secret_input, t_verify)
+  const verify = H(secretInput, Buffer.from(t_verify, 'utf-8'));
+  //     auth_input = verify | ID | B | Y | X | PROTOID | "Server"
+  const authInput = Buffer.concat([
+    verify,
+    ID,
+    B,
+    Y,
+    X,
+    Buffer.from(PROTOID),
+    Buffer.from('Server'),
+  ]);
+  //   The client verifies that AUTH == H(auth_input, t_mac).
+  const auth = H(authInput, Buffer.from(t_mac, 'utf-8'));
+  assert.equal(auth.toString('hex'), AUTH.toString('hex'), 'ntor auth does not match');
+  
+  return keySeed;
+}
+
+// 5.2.2. KDF-RFC5869
+
+//    For newer KDF needs, Tor uses the key derivation function HKDF from
+//    RFC5869, instantiated with SHA256.  (This is due to a construction
+//    from Krawczyk.)  The generated key material is:
+
+//        K = K_1 | K_2 | K_3 | ...
+
+//        Where H(x,t) is HMAC_SHA256 with value x and key t
+//          and K_1     = H(m_expand | INT8(1) , KEY_SEED )
+//          and K_(i+1) = H(K_i | m_expand | INT8(i+1) , KEY_SEED )
+//          and m_expand is an arbitrarily chosen value,
+//          and INT8(i) is a octet with the value "i".
+
+//    In RFC5869's vocabulary, this is HKDF-SHA256 with info == m_expand,
+//    salt == t_key, and IKM == secret_input.
+
+//    When used in the ntor handshake, the first HASH_LEN bytes form the
+//    forward digest Df; the next HASH_LEN form the backward digest Db; the
+//    next KEY_LEN form Kf, the next KEY_LEN form Kb, and the final
+//    DIGEST_LEN bytes are taken as a nonce to use in the place of KH in the
+//    hidden service protocol.  Excess bytes from K are discarded.
+
+export function KDF_RFC5869 (keySeed: Buffer, keyLength: number): Buffer {
+  const M_EXPAND = Buffer.from(m_expand, 'utf-8');
+  const keyMaterial = Buffer.alloc(keyLength);
+  let prevHmacResult = Buffer.alloc(0);
+  const iterationCount = Math.ceil(keyLength / H_LENGTH);
+  for (let i = 0; i < iterationCount; i++) {
+    // K_1     = H(m_expand | INT8(1) , KEY_SEED )
+    // K_(i+1) = H(K_i | m_expand | INT8(i+1) , KEY_SEED )
+    const iterationIndex = Buffer.from([i + 1]);
+    const hmacResult = H(Buffer.concat([prevHmacResult, M_EXPAND, iterationIndex]), keySeed);
+    hmacResult.copy(keyMaterial, i * H_LENGTH);
+    prevHmacResult = hmacResult;
+  }
+  return keyMaterial;
 }
