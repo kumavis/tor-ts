@@ -1,7 +1,11 @@
 import { EventEmitter } from 'node:events';
 import tls from 'node:tls';
 import crypto from 'node:crypto';
+
 import { secp256k1 } from '@noble/curves/secp256k1';
+import {
+  aes_128_ctr
+} from '@noble/ciphers/webcrypto/aes';
 
 import type { KeyInfo } from './profiles';
 import {
@@ -31,8 +35,14 @@ import {
   makeCreate2ClientHandshakeForNtor,
   parseCreate2ServerHandshakeForNtor,
   getKeySeedFromNtorServerHandshake,
+  KDF_RFC5869,
 } from './ntor';
+import {
+  RelayCells,
+  serializeExtend2,
+} from './relay-cell'
 
+const KEY_LEN = 16;
 const defaultLinkSupportedVersions = [3, 4, 5];
 
 export class ChannelConnection {
@@ -169,6 +179,7 @@ export class ChannelConnection {
     const { message: { handshake: serverHandshake } } = await createdP;
     const { serverNtorEphemeralKeyPublic, serverNtorAuth } = parseCreate2ServerHandshakeForNtor(serverHandshake);
 
+    // generate Kf_1, Kb_1
     const keySeed = getKeySeedFromNtorServerHandshake({
       clientNtorEphemeralKeyPrivate,
       clientNtorEphemeralKeyPublic,
@@ -177,8 +188,24 @@ export class ChannelConnection {
       serverRsaIdentityKeyDigest: peerRsaIdDigest,
       serverNtorAuth,
     })
-    // TODO: use KDF_RFC5869 to derive keys
+    const keyMaterial = KDF_RFC5869(keySeed, KEY_LEN * 2);
+    // we use 128-bit AES in counter mode, with an IV of all 0 bytes.
+    const IV = Buffer.alloc(16)
+    const forwardKey = aes_128_ctr(keyMaterial.subarray(0, KEY_LEN), IV)
+    const backwardKey = aes_128_ctr(keyMaterial.subarray(KEY_LEN, 2*KEY_LEN), IV)
 
+    // extend to next hop
+    // TODO: get linkSpecifiers and generate handshake for next hop
+    const extend2PayloadPlaintext = serializeExtend2({ linkSpecifiers, handshake })
+    const extend2PayloadEncrypted = Buffer.from(await forwardKey.encrypt(extend2PayloadPlaintext))
+    this.sendMessage(MessageCells.RELAY, {
+      circuitId,
+      relayCommand: RelayCells.EXTEND2,
+      streamId: 1,
+      // this should be a running digest
+      digest: Buffer.alloc(4),
+      data: extend2PayloadEncrypted,
+    })
   }
   async promiseForHandshake (): Promise<any> {
     const [versionsCell, certsCell, authChallengeCell] = await receiveEvents(['VERSIONS', 'CERTS', 'AUTH_CHALLENGE'], this.incommingCommands)

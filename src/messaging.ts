@@ -1,7 +1,9 @@
 import assert from "node:assert";
 import crypto from "node:crypto";
-import { BytesReader, sha256 } from "./util";
+import { BytesReader, bufferFromUint, sha256 } from "./util";
 
+//  PAYLOAD_LEN -- The longest allowable cell payload, in bytes. (509)
+const PAYLOAD_LEN = 509
 
 // The 'Command' field of a fixed-length cell holds one of the following
 // values:
@@ -366,6 +368,31 @@ const cellSerializers = {
     ])
     return payloadBytes
   },
+  [MessageCells.RELAY]: ({ relayCommand, streamId, digest, data }): Buffer => {
+    // Relay command           [1 byte]
+    // 'Recognized'            [2 bytes]
+    // StreamID                [2 bytes]
+    // Digest                  [4 bytes]
+    // Length                  [2 bytes]
+    // Data                    [Length bytes]
+    // Padding                 [PAYLOAD_LEN - 11 - Length bytes]
+    assert.equal(digest.length, 4)
+    const payloadBytes = Buffer.concat([
+      bufferFromUint(1, relayCommand),
+      // When sending cells, the unencrypted 'recognized' MUST be set to zero.
+      Buffer.alloc(2),
+      bufferFromUint(2, streamId),
+      digest,
+      bufferFromUint(2, data.length),
+      data,
+      // SECURITY TODO
+      // Implementations SHOULD fill this field with four zero-valued bytes, followed by as many
+      // random bytes as will fit.  (If there are fewer than 4 bytes for padding,
+      // then they should all be filled with zero.
+      Buffer.alloc(PAYLOAD_LEN - 11 - data.length)
+    ])
+    return payloadBytes
+  }
 
 }
 
@@ -407,8 +434,7 @@ function serializeCell(commandCode: number, params: any, protocolVersion: number
     cellData.push(payloadBytes);
   } else {
     cellData.push(payloadBytes);
-    // not sure this length is correct
-    const paddingLength = 509 - payloadBytes.length;
+    const paddingLength = PAYLOAD_LEN - payloadBytes.length;
     if (paddingLength > 0) {
       cellData.push(Buffer.alloc(paddingLength));
     }
@@ -425,13 +451,6 @@ export function circuitIdLengthForProtocolVersion (protocolVersion: number | und
     // for the "any cells sent before the first VERSIONS cell" case, we use an undefined protocol
     // version
   return protocolVersion && protocolVersion >= 4 ? 4 : 2;
-}
-
-function bufferFromUint (length: number, value: number) {
-  if (typeof value !== 'number') throw new Error('value must be a number')
-  const data = Buffer.alloc(length);
-  data.writeUintBE(value, 0, length);
-  return data;
 }
 
 function* readCellsFromData (data: Buffer, getVersion: ()=>number): Generator<MessageCell> {
@@ -469,8 +488,7 @@ function parseCell (data: Buffer, version: number | undefined): { cell: MessageC
     const circIdLength = circuitIdLengthForProtocolVersion(version);
     circId = reader.readBytes(circIdLength);
     commandCode = reader.readUIntBE(1);
-    //  PAYLOAD_LEN -- The longest allowable cell payload, in bytes. (509)
-    let length = 509;
+    let length = PAYLOAD_LEN;
     if (variableLengthCells.includes(commandCode)) {
       length = reader.readUIntBE(2);
     }

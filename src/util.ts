@@ -32,6 +32,13 @@ export class BytesReader {
   }
 }
 
+export function bufferFromUint (length: number, value: number) {
+  if (typeof value !== 'number') throw new Error('value must be a number')
+  const data = Buffer.alloc(length);
+  data.writeUintBE(value, 0, length);
+  return data;
+}
+
 export const sha256 = (...data: Buffer[]): Buffer => {
 	const hash = crypto.createHash('sha256')
   for (const d of data) {
