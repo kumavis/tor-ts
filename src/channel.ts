@@ -38,7 +38,7 @@ import {
   KDF_RFC5869,
 } from './ntor';
 import {
-  RelayCells,
+  RelayCell,
   serializeExtend2,
 } from './relay-cell'
 
@@ -200,12 +200,43 @@ export class ChannelConnection {
     const extend2PayloadEncrypted = Buffer.from(await forwardKey.encrypt(extend2PayloadPlaintext))
     this.sendMessage(MessageCells.RELAY, {
       circuitId,
-      relayCommand: RelayCells.EXTEND2,
+      relayCommand: RelayCell.EXTEND2,
       streamId: 1,
       // this should be a running digest
       digest: Buffer.alloc(4),
       data: extend2PayloadEncrypted,
     })
+
+    // circuit to an exit node
+    // [gateway, router node?, exit node]
+    // Hop: link TLS/tcp to Gateway, tor/VERSIONS handshake, CREATE2/CREATED handshake
+    // Hop: Relay cell: EXTEND to router
+    // Hop: Relay cell: EXTEND to exit node
+    //
+    // Gateway Relay Rndvz Relay HS
+
+    circuit.hops[1].send()
+    circuit.hops[2].send()
+
+    // Circuit
+    // ?channel/link
+    // many hops
+    //   [LinkHop, ForwardedHop, ForwardedHop]
+    // many streams
+
+      // LinkHop : Hop
+      // ForwardedHop : Hop
+      //   previousHops
+
+      // LinkHop.send
+      //   encrypt?
+      //   link.send
+
+      // ForwardedHop.send
+      //   encrypt
+      //   previousHop.send
+
+
   }
   async promiseForHandshake (): Promise<any> {
     const [versionsCell, certsCell, authChallengeCell] = await receiveEvents(['VERSIONS', 'CERTS', 'AUTH_CHALLENGE'], this.incommingCommands)

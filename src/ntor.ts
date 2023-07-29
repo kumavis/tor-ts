@@ -99,6 +99,7 @@ import {
 // m_expand  = PROTOID | ":key_expand"
 // KEYID(A)  = A
 // EXP(a, b) = The ECDH algorithm for establishing a shared secret.
+
 const H_LENGTH = 32;
 const ID_LENGTH = 20;
 const G_LENGTH = 32;
@@ -247,11 +248,12 @@ export function KDF_RFC5869 (keySeed: Buffer, keyLength: number): Buffer {
   const M_EXPAND = Buffer.from(m_expand, 'utf-8');
   const keyMaterial = Buffer.alloc(keyLength);
   let prevHmacResult = Buffer.alloc(0);
+  let iterationIndex = Buffer.alloc(1);
   const iterationCount = Math.ceil(keyLength / H_LENGTH);
   for (let i = 0; i < iterationCount; i++) {
     // K_1     = H(m_expand | INT8(1) , KEY_SEED )
     // K_(i+1) = H(K_i | m_expand | INT8(i+1) , KEY_SEED )
-    const iterationIndex = Buffer.from([i + 1]);
+    iterationIndex.writeUint16BE(i+1, 0);
     const hmacResult = H(Buffer.concat([prevHmacResult, M_EXPAND, iterationIndex]), keySeed);
     hmacResult.copy(keyMaterial, i * H_LENGTH);
     prevHmacResult = hmacResult;

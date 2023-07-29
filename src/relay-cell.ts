@@ -30,7 +30,7 @@ import { bufferFromUint } from './util'
 // 43 -- XON             [forward or backward]
 // 44 -- XOFF            [forward or backward]
 
-export enum RelayCells {
+export enum RelayCell {
   BEGIN = 1,
   DATA = 2,
   END = 3,
@@ -49,21 +49,21 @@ export enum RelayCells {
 }
 
 const relayCellNames = {
-  [RelayCells.BEGIN]: 'BEGIN',
-  [RelayCells.DATA]: 'DATA',
-  [RelayCells.END]: 'END',
-  [RelayCells.CONNECTED]: 'CONNECTED',
-  [RelayCells.SENDME]: 'SENDME',
-  [RelayCells.EXTEND]: 'EXTEND',
-  [RelayCells.EXTENDED]: 'EXTENDED',
-  [RelayCells.TRUNCATE]: 'TRUNCATE',
-  [RelayCells.TRUNCATED]: 'TRUNCATED',
-  [RelayCells.DROP]: 'DROP',
-  [RelayCells.RESOLVE]: 'RESOLVE',
-  [RelayCells.RESOLVED]: 'RESOLVED',
-  [RelayCells.BEGIN_DIR]: 'BEGIN_DIR',
-  [RelayCells.EXTEND2]: 'EXTEND2',
-  [RelayCells.EXTENDED2]: 'EXTENDED2',
+  [RelayCell.BEGIN]: 'BEGIN',
+  [RelayCell.DATA]: 'DATA',
+  [RelayCell.END]: 'END',
+  [RelayCell.CONNECTED]: 'CONNECTED',
+  [RelayCell.SENDME]: 'SENDME',
+  [RelayCell.EXTEND]: 'EXTEND',
+  [RelayCell.EXTENDED]: 'EXTENDED',
+  [RelayCell.TRUNCATE]: 'TRUNCATE',
+  [RelayCell.TRUNCATED]: 'TRUNCATED',
+  [RelayCell.DROP]: 'DROP',
+  [RelayCell.RESOLVE]: 'RESOLVE',
+  [RelayCell.RESOLVED]: 'RESOLVED',
+  [RelayCell.BEGIN_DIR]: 'BEGIN_DIR',
+  [RelayCell.EXTEND2]: 'EXTEND2',
+  [RelayCell.EXTENDED2]: 'EXTENDED2',
 }
 
 export function serializeExtend2 ({ linkSpecifiers, handshake }): Buffer {
