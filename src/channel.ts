@@ -22,11 +22,12 @@ import {
   serializeCommand,
   readCellsFromData,
   AddressTypes,
-  circuitIdLengthForProtocolVersion,
+  serializeCellWithPayload,
 } from './messaging';
 import type {
   MessageCell,
-  NetInfoAddress,
+  LinkSpecifier,
+  AddressAndPort,
 } from './messaging';
 import { sha256, sha1, deferred } from './util'
 import { knownGuards } from './guard-nodes';
@@ -129,6 +130,7 @@ export class ChannelConnection {
       otherAddress: nodejsPeerAddressToNetInfo(peerAddressInfo),
       addresses: [],
     })
+    this.state.handShakeInProgress = false
   }
 
   async createCircuit () {
@@ -253,11 +255,21 @@ export class ChannelConnection {
       }
       console.log(`<< received ${cell.commandName} (${cell.data.length} bytes)`)
       this.incommingCommands.emit(cell.commandName, cell);
+      this.incommingCommands.emit('*', cell);
     }  
   }
   sendMessage (messageType: number, messageParams: any): void {
     const { handShakeInProgress } = this.state
     const serializedCell = serializeCommand(messageType, messageParams, this.state.linkProtocolVersion)
+    console.log(`>> sending ${MessageCells[messageType]} (${serializedCell.length} bytes)`)
+    if (handShakeInProgress) {
+      this._outgoingHandshakeDigestData.push(serializedCell);
+    }
+    this.sendData(serializedCell);
+  }
+  sendMessageWithPayload (circuitId: Buffer, messageType: number, payloadBytes: Buffer): void {
+    const { handShakeInProgress } = this.state
+    const serializedCell = serializeCellWithPayload(circuitId, messageType, payloadBytes)
     console.log(`>> sending ${MessageCells[messageType]} (${serializedCell.length} bytes)`)
     if (handShakeInProgress) {
       this._outgoingHandshakeDigestData.push(serializedCell);
@@ -274,18 +286,32 @@ export class ChannelConnection {
   receiveEvents (eventNames: Array<string>): Promise<any[]> {
     return receiveEvents(eventNames, this.incommingCommands)
   }
+  subscribeCircuit (circuitId: Buffer, eventName: string, handler: Function): () => void {
+    const listener = (message: MessageCell) => {
+      if (!circuitId.equals(message.circId)) return
+      handler(message)
+    }
+    this.incommingCommands.on(eventName, listener)
+    const unsubscribe = () => {
+      this.incommingCommands.off(eventName, listener)  
+    }
+    return unsubscribe
+  }
+  getProtocolVersion (): number {
+    return this.state.linkProtocolVersion
+  }
 }
 
 export class TlsChannelConnection extends ChannelConnection {
   socket?: tls.TLSSocket;
 
-  async connect (server: { ip: string, port: number }, additonalOptions: { localPort: number }) {
-    const options = {
+  async connect (server: AddressAndPort, additonalOptions?: { localPort: number }) {
+    const tlsOptions = {
       servername: makeRandomServerName(),
       rejectUnauthorized: false,
       ...additonalOptions,
     }
-    const socket = tls.connect(server.port, server.ip, options);
+    const socket = tls.connect(server.port, server.ip, tlsOptions);
     this.socket = socket;
     const socketReadyP = new Promise<void>((resolve) => {
       socket.once('secureConnect', resolve);
@@ -372,26 +398,10 @@ export type NodejsPeerAddressInfo = {
   address: string,
 }
 
-export function nodejsPeerAddressToNetInfo (peerAddressInfo: NodejsPeerAddressInfo | undefined): NetInfoAddress | undefined {
+export function nodejsPeerAddressToNetInfo (peerAddressInfo: NodejsPeerAddressInfo | undefined): LinkSpecifier | undefined {
   if (!peerAddressInfo) return undefined;
   return {
     type: AddressTypes[peerAddressInfo.family],
     address: peerAddressInfo.address,
   }
-}
-
-function createRandomCircuitId (protocolVersion: number, isInitiator: boolean): Buffer {
-  if (protocolVersion === undefined) {
-    throw new Error('protocolVersion is undefined');
-  }
-  // circuitId length is variable based on protocol version
-  const circuitIdLength = circuitIdLengthForProtocolVersion(protocolVersion);
-  const randomId = crypto.randomBytes(circuitIdLength);
-  // In link protocol version 4 or higher, whichever node initiated the
-  // connection MUST set its MSB to 1, and whichever node didn't initiate
-  // the connection MUST set its MSB to 0.
-  if (isInitiator && protocolVersion >= 4) {
-    randomId[0] |= 0x80;
-  }
-  return randomId;
 }

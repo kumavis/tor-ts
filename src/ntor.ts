@@ -137,8 +137,8 @@ export function makeCreate2ClientHandshakeForNtor (handshake: NtorClientHandshak
   // KEYID       KEYID(B)                [H_LENGTH bytes]
   // CLIENT_KP   X                       [G_LENGTH bytes]
   assert.equal(peerRsaIdDigest.length, ID_LENGTH, 'peer id digest length is not expected length')
-  assert.equal(peerOnionKey.length, H_LENGTH, 'peer ntor onion key length is not expected length')
-  assert.equal(ownOnionKey.length, G_LENGTH, 'own ntor onion key length is not expected length')
+  assert.equal(peerOnionKey.length, H_LENGTH, 'peer ntor onion pubkey length is not expected length')
+  assert.equal(ownOnionKey.length, G_LENGTH, 'own ntor onion pubkey length is not expected length')
   
   return {
     type: HandshakeTypes.NTOR,
@@ -167,12 +167,14 @@ export function parseCreate2ServerHandshakeForNtor (handshake: Create2ServerHand
 
 //     H(x,t) as HMAC_SHA256 with message x and key t.
 function H (x: Buffer, t: Buffer): Buffer {
-  return hmac(sha256, t, x);
+  return Buffer.from(hmac(sha256, t, x));
 }
+export { H as HmacSha256 };
 
 // EXP(a, b) = The ECDH algorithm for establishing a shared secret.
+// a is public, b is private
 function EXP (a: Buffer, b: Buffer): Buffer {
-  return x25519.getSharedSecret(a, b);
+  return x25519.getSharedSecret(b, a);
 }
 
 export function getKeySeedFromNtorServerHandshake ({
@@ -253,7 +255,7 @@ export function KDF_RFC5869 (keySeed: Buffer, keyLength: number): Buffer {
   for (let i = 0; i < iterationCount; i++) {
     // K_1     = H(m_expand | INT8(1) , KEY_SEED )
     // K_(i+1) = H(K_i | m_expand | INT8(i+1) , KEY_SEED )
-    iterationIndex.writeUint16BE(i+1, 0);
+    iterationIndex.writeUint8(i+1, 0);
     const hmacResult = H(Buffer.concat([prevHmacResult, M_EXPAND, iterationIndex]), keySeed);
     hmacResult.copy(keyMaterial, i * H_LENGTH);
     prevHmacResult = hmacResult;

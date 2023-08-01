@@ -1,6 +1,8 @@
 import fs from 'fs';
 import Onionoo from 'onionoo';
 import * as url from 'node:url';
+import { PeerInfo } from './circuit';
+import { AddressTypes, LinkSpecifier, LinkSpecifierTypes, addressAndPortToLinkSpecifier } from './messaging';
 const __dirname = url.fileURLToPath(new URL('.', import.meta.url));
 
 // get "consensus document"
@@ -85,10 +87,19 @@ async function requestOnionData ({ flags = [], ...opts } = {}) {
 export async function dangerouslyLookupOnionKey (peerIpPort: string, rsaIdDigest: Buffer) {
   const url = `http://${peerIpPort}/tor/server/fp/${rsaIdDigest.toString('hex').toUpperCase()}`
   const directoryRecord = await (await fetch(url)).text()
+  // console.log('fp lookup:', directoryRecord)
   const ntorOnionKeyText = extractNtorOnionKey(directoryRecord)
-  console.log('dangerouslyLookupOnionKey', ntorOnionKeyText)
+  // console.log('dangerouslyLookupOnionKey', ntorOnionKeyText)
   const ntorOnionKey = Buffer.from(ntorOnionKeyText, 'base64')
   return ntorOnionKey
+}
+
+
+export async function downloadMicrodescFromDirectory (directoryServerIpPort: string): string {
+  const url = `http://${directoryServerIpPort}/tor/status-vote/current/consensus-microdesc`
+  const directoryRecord = await (await fetch(url)).text()
+  // console.log('microdesc lookup:', directoryRecord)
+  return directoryRecord
 }
 
 function extractNtorOnionKey (directoryRecord: string): string {
@@ -99,3 +110,193 @@ function extractNtorOnionKey (directoryRecord: string): string {
   const ntorOnionKey = line.slice(linePrefix.length)
   return ntorOnionKey
 }
+
+export type MicroDescNodeInfo = {
+  nickname?: string;
+  rsaIdDigest?: Buffer;
+  publication_date?: Date;
+  ip_address?: string;
+  onion_router_port?: number;
+  directory_server_port?: number;
+  // idk what this is
+  mKey?: Buffer;
+  flags?: string[];
+  version?: string;
+  protocols?: string;
+  bandwidth?: number;
+  unmeasured?: number;
+};
+
+export function parseRelaysFromMicroDesc (microDescContent: string): MicroDescNodeInfo[] {
+  const lines = microDescContent.split('\n');
+  let relayInfo: MicroDescNodeInfo;
+  const relayInfos: MicroDescNodeInfo[] = []
+
+  // r test002a AB+0S6hvSEnm7ifzqh3QaYOxsm0 2038-01-01 00:00:00 127.0.0.1 5002 7002
+  // m BY6mSHVSthDKuKGu8aiGKhuGkwZqJqDLs9RxY99gKYs
+  // s Authority Exit Fast Guard HSDir Running Stable V2Dir Valid
+  // v Tor 0.4.8.1-alpha-dev
+  // pr Conflux=1 Cons=1-2 Desc=1-2 DirCache=2 FlowCtrl=1-2 HSDir=2 HSIntro=4-5 HSRend=1-2 Link=1-5 LinkAuth=1,3 Microdesc=1-2 Padding=2 Relay=1-4
+  // w Bandwidth=158 Unmeasured=1
+
+  for (let line of lines) {
+    const tokens = line.split(' ')
+    if (tokens[0] === 'r') {
+      let parts = line.split(' ');
+      relayInfo = {
+        nickname: parts[1],
+        rsaIdDigest: Buffer.from(parts[2], 'base64'),
+        publication_date: new Date(parts[3] + " " + parts[4]),
+        ip_address: parts[5],
+        onion_router_port: parseInt(parts[6]),
+        directory_server_port: parseInt(parts[7]),
+      };
+      relayInfos.push(relayInfo)
+    } else if (tokens[0] === 'm') {
+      let parts = line.split(' ');
+      relayInfo.mKey = Buffer.from(parts[1], 'base64');
+    } else if (tokens[0] === 's') {
+      let parts = line.split(' ');
+      relayInfo.flags = parts.slice(1);
+    } else if (tokens[0] === 'v') {
+      let parts = line.split(' ');
+      relayInfo.version = parts[1];
+    } else if (tokens[0] === 'pr') {
+      let parts = line.split(' ');
+      relayInfo.protocols = parts[1];
+    } else if (tokens[0] === 'w') {
+      let parts = line.split(' ');
+      relayInfo.bandwidth = parseInt(parts[1].split('=')[1]);
+      relayInfo.unmeasured = parseInt(parts[2].split('=')[1]);
+    }
+  }
+
+  return relayInfos;
+}
+
+export async function dangerouslyLookupPeerInfo (directoryServer: string, nodeInfo: MicroDescNodeInfo) {
+  const onionKey = await dangerouslyLookupOnionKey(directoryServer, nodeInfo.rsaIdDigest)
+  const peerInfo = microDescNodeInfoToPeerInfo(nodeInfo, onionKey)
+  return peerInfo
+}
+
+export function microDescNodeInfoToPeerInfo (nodeInfo: MicroDescNodeInfo, onionKey: Buffer): PeerInfo {
+  const linkSpecifiers: Array<LinkSpecifier> = []
+  linkSpecifiers.push(addressAndPortToLinkSpecifier({
+    type: AddressTypes.IPv4,
+    ip: nodeInfo.ip_address,
+    port: nodeInfo.onion_router_port,
+  }))
+  return {
+    onionKey,
+    rsaIdDigest: nodeInfo.rsaIdDigest,
+    linkSpecifiers,
+  }
+}
+
+
+// interface MicroDesc {
+//     networkStatusVersion: number;
+//     voteStatus: string;
+//     consensusMethod: number;
+//     validAfter: Date;
+//     freshUntil: Date;
+//     validUntil: Date;
+//     votingDelay: number[];
+//     clientVersions: string;
+//     serverVersions: string;
+//     knownFlags: string[];
+//     recommendedClientProtocols: Record<string, string>;
+//     recommendedRelayProtocols: Record<string, string>;
+//     requiredClientProtocols: Record<string, string>;
+//     requiredRelayProtocols: Record<string, string>;
+//     sharedRandPreviousValue: string;
+//     sharedRandCurrentValue: string;
+//     dirSource: string[];
+//     voteDigest: string;
+//     directoryFooter: string;
+//     bandwidthWeights: Record<string, number>;
+//     directorySignature: string[];
+// }
+
+// function parseMicroDesc(content: string): MicroDesc {
+//   let lines = content.split("\n");
+//   let microDesc: Partial<MicroDesc> = {};
+
+//   lines.forEach((line) => {
+//     let tokens = line.split(" ");
+
+//     // switch(tokens[0]) {
+//     //   case 'network-status-version':
+//     //     microDesc.networkStatusVersion = parseInt(tokens[2]);
+//     //     break;
+//     //   case 'vote-status':
+//     //     microDesc.voteStatus = tokens[1];
+//     //     break;
+//     //   case 'consensus-method':
+//     //     microDesc.consensusMethod = parseInt(tokens[1]);
+//     //     break;
+//     //   case 'valid-after':
+//     //     microDesc.validAfter = new Date(tokens[1] + ' ' + tokens[2]);
+//     //     break;
+//     //   case 'fresh-until':
+//     //     microDesc.freshUntil = new Date(tokens[1] + ' ' + tokens[2]);
+//     //     break;
+//     //   case 'valid-until':
+//     //     microDesc.validUntil = new Date(tokens[1] + ' ' + tokens[2]);
+//     //     break;
+//     //   case 'voting-delay':
+//     //     microDesc.votingDelay = [parseInt(tokens[1]), parseInt(tokens[2])];
+//     //     break;
+//     //   case 'client-versions':
+//     //     microDesc.clientVersions = tokens.slice(1).join(" ");
+//     //     break;
+//     //   case 'server-versions':
+//     //     microDesc.serverVersions = tokens.slice(1).join(" ");
+//     //     break;
+//     //   case 'known-flags':
+//     //     microDesc.knownFlags = tokens.slice(1);
+//     //     break;
+//     //   case 'recommended-client-protocols':
+//     //   case 'recommended-relay-protocols':
+//     //   case 'required-client-protocols':
+//     //   case 'required-relay-protocols':
+//     //     let protocolMap: Record<string, string> = {};
+//     //     tokens.slice(1).forEach((token) => {
+//     //       let [protocol, version] = token.split('=');
+//     //       protocolMap[protocol] = version;
+//     //     });
+//     //     microDesc[tokens[0]] = protocolMap;
+//     //     break;
+//     //   case 'shared-rand-previous-value':
+//     //   case 'shared-rand-current-value':
+//     //     microDesc[tokens[0]] = tokens.slice(2).join(" ");
+//     //     break;
+//     //   case 'dir-source':
+//     //     microDesc.dirSource = tokens.slice(1);
+//     //     break;
+//     //   case 'vote-digest':
+//     //     microDesc.voteDigest = tokens[1];
+//     //     break;
+//     //   case 'directory-footer':
+//     //     microDesc.directoryFooter = tokens[0];
+//     //     break;
+//     //   case 'bandwidth-weights':
+//     //     let bandwidthWeights: Record<string, number> = {};
+//     //     tokens.slice(1).forEach((token) => {
+//     //       let [weight, value] = token.split('=');
+//     //       bandwidthWeights[weight] = parseInt(value);
+//     //     });
+//     //     microDesc.bandwidthWeights = bandwidthWeights;
+//     //     break;
+//     //   case 'directory-signature':
+//     //     microDesc.directorySignature.push(tokens.slice(2).join(" "));
+//     //     break;
+//     // }
+//   });
+
+//   // if(!microDesc.networkStatusVersion || !microDesc.voteStatus || !microDesc.consensusMethod || !microDesc.validAfter || !microDesc.freshUntil || !microDesc.validUntil || !microDesc.votingDelay || !microDesc.knownFlags || !microDesc.recommendedClientProtocols || !microDesc.recommendedRelayProtocols || !microDesc.requiredClientProtocols || !microDesc.requiredRelayProtocols || !microDesc.sharedRandPreviousValue || !microDesc.sharedRandCurrentValue || !microDesc.dirSource || !microDesc.voteDigest || !microDesc.directoryFooter || !microDesc.bandwidthWeights || !microDesc.directorySignature){
+//   //   throw new Error("Parsing failed, not all necessary fields are provided");
+//   // }
+//   return microDesc as MicroDesc;
+// }
