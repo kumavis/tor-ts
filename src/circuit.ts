@@ -164,39 +164,41 @@ export class Circuit {
         handshake: clientHandshake,
       })
     } else {
-      // extending the relay -
+      // extending the relay - send extend2 to previous hop
+      const handshakeHopIndex = this.hops.indexOf(hop)
+      const targetHop = this.hops[handshakeHopIndex - 1]
       const extend2PayloadPlaintext = serializeExtend2({
         linkSpecifiers: hop.peerInfo.linkSpecifiers,
         handshake: clientHandshake,
       })
-      const streamId = 0
-      const relayCommand = RelayCell.EXTEND2
-      const data = extend2PayloadPlaintext
       // i expect to abstract this into a function
       const relayCellPayload = serializeRelayCellPayload({
-        streamId,
-        relayCommand,
-        data,
+        streamId: 0,
+        relayCommand: RelayCell.EXTEND2,
+        data: extend2PayloadPlaintext,
       })
-      const targetHopIndex = this.hops.indexOf(hop)
-      const backHops = this.hops.slice(0, targetHopIndex).reverse()
-      // this extend message is technically intended for the previous hop of the handshake hop
-      const targetHop = backHops[0]
-      targetHop.forwardDigest = sha1(targetHop.forwardDigest, relayCellPayload)
-      const integrity = targetHop.forwardDigest.subarray(0, 4)
-      setRelayCellIntegrity(relayCellPayload, integrity)
-      // encrypt
-      let currentPayload = relayCellPayload
-      for (const backHop of backHops) {
-        currentPayload = await backHop.encryptForward(relayCellPayload)
-      }
-      // send over channel
-      this.relayMessageCount++
-      const relayType = this.relayMessageCount > 8 ? MessageCellType.RELAY : MessageCellType.RELAY_EARLY
-      this.channel.sendMessageWithPayload(this.circuitId, relayType, currentPayload)
+      await this.sendRelayMessageToHop(relayCellPayload, targetHop)
     }
-
+    // wait until handshake response has been received
     await hop.handshakePromiseKit.promise
+  }
+
+  async sendRelayMessageToHop (relayCellPayload: Buffer, targetHop: Hop) {
+    const targetHopIndex = this.hops.indexOf(targetHop)
+    const backHops = this.hops.slice(0, targetHopIndex + 1).reverse()
+    // update the forwardDigest and set the integrity
+    targetHop.forwardDigest = sha1(targetHop.forwardDigest, relayCellPayload)
+    const integrity = targetHop.forwardDigest.subarray(0, 4)
+    setRelayCellIntegrity(relayCellPayload, integrity)
+    // encrypt
+    let currentPayload = relayCellPayload
+    for (const backHop of backHops) {
+      currentPayload = await backHop.encryptForward(relayCellPayload)
+    }
+    // send over channel
+    this.relayMessageCount++
+    const relayType = this.relayMessageCount > 8 ? MessageCellType.RELAY : MessageCellType.RELAY_EARLY
+    this.channel.sendMessageWithPayload(this.circuitId, relayType, currentPayload)
   }
 
   receiveMessage (message: MessageCell) {
