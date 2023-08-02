@@ -14,6 +14,7 @@ import {
   CellCreated2,
   serializeCommand,
   serializeRelayCellPayload,
+  setRelayCellIntegrity,
 } from './messaging';
 import type { CellDestroy, LinkSpecifier } from './messaging'
 import {
@@ -28,7 +29,7 @@ import {
   RelayCell,
   serializeExtend2,
 } from './relay-cell'
-import { BytesReader, deferred } from './util';
+import { BytesReader, deferred, sha1 } from './util';
 
 const KEY_LEN = 16;
 const HASH_LEN = 20;
@@ -118,14 +119,34 @@ class ChannelHop extends Hop {
       // TODO: this should be a running digest
       /////////////////////////////////////////////////////////////////////////////////////////////
       // THE FAILURE IS HERE: digest is wrong
+      // relay_crypto.c / relay_digest_matches <----
       /////////////////////////////////////////////////////////////////////////////////////////////
-      digest: this.forwardDigest,
+      // set digest as zero for the initial payload
+      // integrity: Buffer.alloc(4),
       data,
     })
-    // relay cell (circuitId, commandCode, cellPayload)
-    // relay cell payload (relay subcommand, recognized, streamId, digest....) <-- encrypt here
-    // relay cell payload data (extend2 handshake data)
+    this.forwardDigest = sha1(this.forwardDigest, relayCellPayload)
+    const integrity = this.forwardDigest.subarray(0, 4)
+    setRelayCellIntegrity(relayCellPayload, integrity)
     const encryptedPayload = Buffer.from(await this.forwardKey.encrypt(relayCellPayload))
+
+    // dest->command = get_uint8(src);
+    // dest->recognized = ntohs(get_uint16(src+1));
+    // dest->stream_id = ntohs(get_uint16(src+3));
+    // memcpy(dest->integrity, src+5, 4);
+    // dest->length = ntohs(get_uint16(src+9));
+
+    // relay cell (circuitId, commandCode, cellPayload)
+    // "message cell header" (?)
+    // relay cell payload (relay subcommand, recognized, streamId, digest....) <-- encrypt here
+    // "RelayHeader"
+    //   command
+    //   recognized
+    //   stream_id
+    //   integrity (4 bytes from digest)
+    //   length
+    // relay cell payload data (extend2 handshake data)
+    // const encryptedPayload = Buffer.from(await this.forwardKey.encrypt(relayCellPayload))
     this.channel.sendMessageWithPayload(this.circuitId, MessageCellType.RELAY, encryptedPayload)
   }
 }

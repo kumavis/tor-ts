@@ -87,7 +87,7 @@ async function getStandardChutneyCircuitPath () {
     return await dangerouslyLookupPeerInfo(directoryServer, relayInfo)
   }))
   // reverse so that gateway is first and exit is last
-  circuitPeerInfos.reverse!()
+  circuitPeerInfos.reverse()
 
   return circuitPeerInfos
 }

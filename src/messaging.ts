@@ -166,9 +166,9 @@ export type CellNetInfo = {
 
 export type CellRelay = {
   relayCommand: number,
-  recognized: Buffer,
+  recognized?: Buffer,
   streamId: number,
-  digest: Buffer,
+  integrity?: Buffer,
   data: Buffer,
 }
 
@@ -332,11 +332,11 @@ const cellParsers = {
     const relayCommand = reader.readUIntBE(1)
     const recognized = reader.readBytes(2)
     const streamId = reader.readUIntBE(2)
-    const digest = reader.readBytes(4)
+    const integrity = reader.readBytes(4)
     const length = reader.readUIntBE(2)
     const data = reader.readBytes(length)
     const _padding = reader.readBytes(PAYLOAD_LEN - 11 - length)
-    return { relayCommand, recognized, streamId, digest, data }
+    return { relayCommand, recognized, streamId, integrity, data }
   }
 }
 
@@ -424,21 +424,25 @@ const cellSerializers = {
     ])
     return payloadBytes
   },
-  [MessageCellType.RELAY]: ({ relayCommand, streamId, digest, data }): Buffer => {
+  [MessageCellType.RELAY]: ({ relayCommand, streamId, integrity, data }: CellRelay): Buffer => {
     // Relay command           [1 byte]
     // 'Recognized'            [2 bytes]
     // StreamID                [2 bytes]
-    // Digest                  [4 bytes]
+    // Digest (integrity)      [4 bytes]
     // Length                  [2 bytes]
     // Data                    [Length bytes]
     // Padding                 [PAYLOAD_LEN - 11 - Length bytes]
+    if (integrity === undefined) {
+      integrity = Buffer.alloc(4)
+    }
+    assert.equal(integrity.length, 4, 'integrity should be 4 bytes')
     const payloadBytes = Buffer.concat([
       bufferFromUint(1, relayCommand),
       // When sending cells, the unencrypted 'recognized' MUST be set to zero.
       Buffer.alloc(2),
       bufferFromUint(2, streamId),
       // take the first 4 bytes of the running digest
-      digest.subarray(0, 4),
+      integrity,
       bufferFromUint(2, data.length),
       data,
       // SECURITY TODO
@@ -453,6 +457,14 @@ const cellSerializers = {
 }
 
 export const serializeRelayCellPayload = cellSerializers[MessageCellType.RELAY]
+
+// used when updating relay cell integrity after initialization
+export function setRelayCellIntegrity (relayCellPayload: Buffer, integrity: Buffer): void {
+  assert.equal(relayCellPayload.length, PAYLOAD_LEN, `payload should be ${PAYLOAD_LEN} bytes`)
+  assert.equal(integrity.length, 4, 'integrity should be 4 bytes')
+  const integrityOffset = 1 + 2 + 2
+  relayCellPayload.set(integrity, integrityOffset)
+}
 
 function serializeCell(commandCode: number, params: any, protocolVersion?: number) {
   // On a version 1 connection, each cell contains the following
