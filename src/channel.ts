@@ -276,10 +276,6 @@ export class ChannelConnection {
     }
     this.sendData(serializedCell);
   }
-  // virtual - override
-  sendData(_serializedCell: any) {
-    throw new Error("Method not implemented.");
-  }
   receiveEvent (eventName: string): Promise<any> {
     return receiveEvent(eventName, this.incommingCommands)
   }
@@ -299,6 +295,10 @@ export class ChannelConnection {
   }
   getProtocolVersion (): number {
     return this.state.linkProtocolVersion
+  }
+  // virtual - override
+  sendData(_serializedCell: any) {
+    throw new Error("virtual method 'sendData' not implemented.");
   }
 }
 

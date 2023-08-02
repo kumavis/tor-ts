@@ -172,6 +172,10 @@ export type CellRelay = {
   data: Buffer,
 }
 
+export type CellRelayUnparsed = {
+  payload: Buffer,
+}
+
 export type LinkSpecifier = {
   type: LinkSpecifierTypes,
   data: Buffer,
@@ -321,23 +325,16 @@ const cellParsers = {
     }
     return { handshake }
   },
-  [MessageCellType.RELAY]: (reader: BytesReader): CellRelay => {
-    // Relay command           [1 byte]
-    // 'Recognized'            [2 bytes]
-    // StreamID                [2 bytes]
-    // Digest                  [4 bytes]
-    // Length                  [2 bytes]
-    // Data                    [Length bytes]
-    // Padding                 [PAYLOAD_LEN - 11 - Length bytes]
-    const relayCommand = reader.readUIntBE(1)
-    const recognized = reader.readBytes(2)
-    const streamId = reader.readUIntBE(2)
-    const integrity = reader.readBytes(4)
-    const length = reader.readUIntBE(2)
-    const data = reader.readBytes(length)
-    const _padding = reader.readBytes(PAYLOAD_LEN - 11 - length)
-    return { relayCommand, recognized, streamId, integrity, data }
+  [MessageCellType.RELAY]: (reader: BytesReader): CellRelayUnparsed => {
+    // we dont want to attempt to parse this here because its likely encrypted
+    const payload = reader.readRemainder()
+    return { payload }
   }
+}
+
+export const parseCreate2Cell = function(data: Buffer): CellCreated2 {
+  const reader = new BytesReader(data)
+  return cellParsers[MessageCellType.CREATED2](reader)
 }
 
 const cellSerializers = {
@@ -464,6 +461,31 @@ export function setRelayCellIntegrity (relayCellPayload: Buffer, integrity: Buff
   assert.equal(integrity.length, 4, 'integrity should be 4 bytes')
   const integrityOffset = 1 + 2 + 2
   relayCellPayload.set(integrity, integrityOffset)
+}
+
+export function checkRelayCellRecognized (relayCellPayload: Buffer) {
+  const relayCellOffset = 1
+  const recognizedField = relayCellPayload.readUint16BE(relayCellOffset)
+  return recognizedField === 0
+}
+
+export function parseRelayCellPayload (relayCellPayload: Buffer): CellRelay {
+  // Relay command           [1 byte]
+  // 'Recognized'            [2 bytes]
+  // StreamID                [2 bytes]
+  // Digest                  [4 bytes]
+  // Length                  [2 bytes]
+  // Data                    [Length bytes]
+  // Padding                 [PAYLOAD_LEN - 11 - Length bytes]
+  const reader = new BytesReader(relayCellPayload)
+  const relayCommand = reader.readUIntBE(1)
+  const recognized = reader.readBytes(2)
+  const streamId = reader.readUIntBE(2)
+  const integrity = reader.readBytes(4)
+  const length = reader.readUIntBE(2)
+  const data = reader.readBytes(length)
+  const _padding = reader.readBytes(PAYLOAD_LEN - 11 - length)
+  return { relayCommand, recognized, streamId, integrity, data }
 }
 
 function serializeCell(commandCode: number, params: any, protocolVersion?: number) {

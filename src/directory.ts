@@ -182,11 +182,36 @@ export async function dangerouslyLookupPeerInfo (directoryServer: string, nodeIn
 
 export function microDescNodeInfoToPeerInfo (nodeInfo: MicroDescNodeInfo, onionKey: Buffer): PeerInfo {
   const linkSpecifiers: Array<LinkSpecifier> = []
+  // For purposes of indistinguishability, implementations SHOULD send
+  //  these link specifiers, if using them, in this order:
+  // [00], [02], [03], [01].
+
+  // [00] TLS-over-TCP, IPv4 address
+  //       A four-byte IPv4 address plus two-byte ORPort
+  // [01] TLS-over-TCP, IPv6 address
+  //       A sixteen-byte IPv6 address plus two-byte ORPort
+  // [02] Legacy identity
+  //       A 20-byte SHA1 identity fingerprint. At most one may be listed.
+  // [03] Ed25519 identity
+  //       A 32-byte Ed25519 identity fingerprint. At most one may
+  //       be listed.
+
   linkSpecifiers.push(addressAndPortToLinkSpecifier({
     type: AddressTypes.IPv4,
     ip: nodeInfo.ip_address,
     port: nodeInfo.onion_router_port,
   }))
+  linkSpecifiers.push({
+    type: LinkSpecifierTypes.LegacyId,
+    data: nodeInfo.rsaIdDigest,
+  })
+  // Ed25519 identity keys are not required in EXTEND2 cells, so all zero
+  //  keys SHOULD be accepted. If the extending relay knows the ed25519 key from
+  //  the consensus, it SHOULD also check that key. (See section 5.1.2.)
+  // linkSpecifiers.push({
+  //   type: LinkSpecifierTypes.Ed25519Id,
+  //   data: Buffer.alloc(32),
+  // })
   return {
     onionKey,
     rsaIdDigest: nodeInfo.rsaIdDigest,
