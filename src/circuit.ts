@@ -49,7 +49,7 @@ export type PeerInfo = {
 }
 
 class Hop {
-  circuitId: Buffer;
+  isConnected = false;
   peerInfo: PeerInfo;
   ntorEphemeralKeyPrivate: Buffer;
   ntorEphemeralKeyPublic: Buffer;
@@ -58,20 +58,14 @@ class Hop {
   forwardKey: HopKey;
   backwardKey: HopKey;
   handshakePromiseKit = deferred<void>()
-  isConnected = false;
-  async sendRelayMessage (streamId: number, messageType: RelayCell, data: Buffer) {
-    throw new Error('virtual sendRelayMessage method')
-  }
-  async sendHandshake (_handshake: Create2ClientHandshake) {
-    throw new Error('virtual sendHandshake method')
-  }
+
   async encryptForward (data: Buffer) {
     return Buffer.from(await this.forwardKey.encrypt(data))
   }
   async decryptBackward (data: Buffer) {
     return Buffer.from(await this.backwardKey.decrypt(data))
   }
-  async performHandshake () {
+  createClientHandshake () {
     this.ntorEphemeralKeyPrivate = Buffer.from(x25519.utils.randomPrivateKey())
     this.ntorEphemeralKeyPublic = Buffer.from(x25519.getPublicKey(this.ntorEphemeralKeyPrivate))
     const clientHandshake = makeCreate2ClientHandshakeForNtor({
@@ -79,8 +73,7 @@ class Hop {
       peerOnionKey: this.peerInfo.onionKey,
       peerRsaIdDigest: this.peerInfo.rsaIdDigest,
     })
-    await this.sendHandshake(clientHandshake)
-    await this.handshakePromiseKit.promise
+    return clientHandshake
   }
   receiveCreated2Handshake (handshake: NtorServerHandshake) {
     const { serverNtorEphemeralKeyPublic, serverNtorAuth } = handshake
@@ -104,100 +97,14 @@ class Hop {
     this.isConnected = true
     this.handshakePromiseKit.resolve()
   }
-  async receiveRelayMessage (relayCell: CellRelay): Promise<void> {
-    // TODO: review this
-    // decrypt
-    // const decryptedMessage = Buffer.from(await this.backwardKey.decrypt(message.payload))
-    // TODO: check if this message is for here
-    // pass onward
-    // this.sendRelayMessage(this.circuitId, message.relayCommand, decryptedMessage)
-    // unecryptedPayload
-    // check received
-    // check digest
-    // parse type
-    console.log('received relay message', relayCell)
-    // switch (relayCell.relayCommand) {
-    //   case RelayCell.EXTENDED2: {
-    //     console.log('got extended2!')
-    //     const create2Cell = parseCreate2Cell(relayCell.data)
-    //     const handshake = parseCreate2ServerHandshakeForNtor(create2Cell.handshake)
-    //     this.receiveCreated2Handshake(handshake)
-    //     return
-    //   }
-    //   default: {
-    //     throw new Error(`Hop received unknown relay message type ${relayCell.relayCommand}`)
-    //   }
-    // }
-  }
-}
-
-class ChannelHop extends Hop {
-  channel: ChannelConnection;
-  relayMessageCount = 0;
-  async sendHandshake(handshake: Create2ClientHandshake): Promise<void> {
-    this.channel.sendMessage(MessageCellType.CREATE2, {
-      circuitId: this.circuitId,
-      handshake,
-    })
-  }
-  async sendRelayMessage (streamId: number, messageType: RelayCell, data: Buffer) {
-    const relayCellPayload = serializeRelayCellPayload({
-      streamId,
-      relayCommand: messageType,
-      data,
-    })
-    this.forwardDigest = sha1(this.forwardDigest, relayCellPayload)
-    const integrity = this.forwardDigest.subarray(0, 4)
-    setRelayCellIntegrity(relayCellPayload, integrity)
-    const encryptedPayload = Buffer.from(await this.forwardKey.encrypt(relayCellPayload))
-
-    // dest->command = get_uint8(src);
-    // dest->recognized = ntohs(get_uint16(src+1));
-    // dest->stream_id = ntohs(get_uint16(src+3));
-    // memcpy(dest->integrity, src+5, 4);
-    // dest->length = ntohs(get_uint16(src+9));
-
-    // relay cell (circuitId, commandCode, cellPayload)
-    // "message cell header" (?)
-    // relay cell payload (relay subcommand, recognized, streamId, digest....) <-- encrypt here
-    // "RelayHeader"
-    //   command
-    //   recognized
-    //   stream_id
-    //   integrity (4 bytes from digest)
-    //   length
-    // relay cell payload data (extend2 handshake data)
-    // const encryptedPayload = Buffer.from(await this.forwardKey.encrypt(relayCellPayload))
-    this.relayMessageCount++
-    const relayType = this.relayMessageCount > 8 ? MessageCellType.RELAY : MessageCellType.RELAY_EARLY
-    this.channel.sendMessageWithPayload(this.circuitId, relayType, encryptedPayload)
-  }
-}
-
-class RelayedHop extends Hop {
-  previousHop: Hop;
-  linkProtocolVersion: number;
-  async sendHandshake(handshake: Create2ClientHandshake): Promise<void> {
-    // TODO: include ed25519 linkSpecifiers if available
-    console.log('extend2 linkSpecifiers', this.peerInfo.linkSpecifiers)
-    const extend2PayloadPlaintext = serializeExtend2({
-      linkSpecifiers: this.peerInfo.linkSpecifiers,
-      handshake,
-    })
-    // we dont encypt this message here because we haven't established keys yet
-    this.previousHop.sendRelayMessage(0, RelayCell.EXTEND2, extend2PayloadPlaintext)
-  }
-  async sendRelayMessage (streamId: number, messageType: RelayCell, data: Buffer) {
-    // encrypt
-    const encryptedMessage = Buffer.from(await this.forwardKey.encrypt(data))
-    // pass onward
-    this.previousHop.sendRelayMessage(streamId, messageType, encryptedMessage)
-  }
 }
 
 export class Circuit {
+  channel: ChannelConnection;
   hops: Array<Hop> = [];
   unsubscribeFromChannel?: () => void;
+  circuitId: Buffer;
+  relayMessageCount: 0;
 
   constructor ({
     path,
@@ -206,21 +113,16 @@ export class Circuit {
     path: Array<PeerInfo>,
     channel: ChannelConnection,
   }) {
+    this.channel = channel
     // select circuitId
     const protocolVersion = channel.getProtocolVersion()
     const circuitId = createRandomCircuitId(protocolVersion, true)
+    this.circuitId = circuitId
     // setup hops
-    const channelHop = new ChannelHop()
-    channelHop.channel = channel
-    channelHop.peerInfo = path[0]
-    channelHop.circuitId = circuitId
-    this.hops.push(channelHop)
-    for (let i = 1; i < path.length; i++) {
+    for (let i = 0; i < path.length; i++) {
       const relayPeerInfo = path[i]
-      const relayedHop = new RelayedHop()
+      const relayedHop = new Hop()
       relayedHop.peerInfo = relayPeerInfo
-      relayedHop.previousHop = this.hops[i - 1]
-      relayedHop.circuitId = circuitId
       this.hops.push(relayedHop)
     }
     // listen for messages
@@ -229,26 +131,72 @@ export class Circuit {
     })
   }
 
-  async connect () {
-    const channelHop = this.hops[0]
-    console.log('> circuit 0 handshake')
-    await channelHop.performHandshake()
-    console.log('< circuit 0 handshake')
-
-    console.log('> circuit 1 handshake')
-    await this.hops[1].performHandshake()
-    console.log('< circuit 1 handshake')
-
-    console.log('> circuit 2 handshake')
-    await this.hops[2].performHandshake()
-    console.log('< circuit 2 handshake')
-  }
-
   get firstHop () {
     return this.hops[0]
   }
   get lastHop () {
     return this.hops[this.hops.length - 1]
+  }
+
+  async connect () {
+    console.log('> circuit 0 handshake')
+    await this.performHandshakeForHop(this.hops[0])
+    console.log('< circuit 0 handshake')
+
+    console.log('> circuit 1 handshake')
+    await this.performHandshakeForHop(this.hops[1])
+    console.log('< circuit 1 handshake')
+
+    console.log('> circuit 2 handshake')
+    await this.performHandshakeForHop(this.hops[2])
+    console.log('< circuit 2 handshake')
+  }
+
+  async performHandshakeForHop (hop: Hop) {
+    if (hop.isConnected) {
+      throw new Error('hop already connected during handshake attempt')
+    }
+    const clientHandshake = hop.createClientHandshake()
+    if (hop === this.firstHop) {
+      // this is our first hop - just a create2
+      this.channel.sendMessage(MessageCellType.CREATE2, {
+        circuitId: this.circuitId,
+        handshake: clientHandshake,
+      })
+    } else {
+      // extending the relay -
+      const extend2PayloadPlaintext = serializeExtend2({
+        linkSpecifiers: hop.peerInfo.linkSpecifiers,
+        handshake: clientHandshake,
+      })
+      const streamId = 0
+      const relayCommand = RelayCell.EXTEND2
+      const data = extend2PayloadPlaintext
+      // i expect to abstract this into a function
+      const relayCellPayload = serializeRelayCellPayload({
+        streamId,
+        relayCommand,
+        data,
+      })
+      const targetHopIndex = this.hops.indexOf(hop)
+      const backHops = this.hops.slice(0, targetHopIndex).reverse()
+      // this extend message is technically intended for the previous hop of the handshake hop
+      const targetHop = backHops[0]
+      targetHop.forwardDigest = sha1(targetHop.forwardDigest, relayCellPayload)
+      const integrity = targetHop.forwardDigest.subarray(0, 4)
+      setRelayCellIntegrity(relayCellPayload, integrity)
+      // encrypt
+      let currentPayload = relayCellPayload
+      for (const backHop of backHops) {
+        currentPayload = await backHop.encryptForward(relayCellPayload)
+      }
+      // send over channel
+      this.relayMessageCount++
+      const relayType = this.relayMessageCount > 8 ? MessageCellType.RELAY : MessageCellType.RELAY_EARLY
+      this.channel.sendMessageWithPayload(this.circuitId, relayType, currentPayload)
+    }
+
+    await hop.handshakePromiseKit.promise
   }
 
   receiveMessage (message: MessageCell) {
@@ -272,7 +220,6 @@ export class Circuit {
   }
 
   async receiveRelayMessage (relayMessage: CellRelayUnparsed) {
-    // this.firstHop.receiveRelayMessage(relayMessage);
     let currentPayload = relayMessage.payload
     let targetHop: Hop
     for (const hop of this.hops) {

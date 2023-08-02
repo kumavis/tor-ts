@@ -205,6 +205,7 @@ export function microDescNodeInfoToPeerInfo (nodeInfo: MicroDescNodeInfo, onionK
     type: LinkSpecifierTypes.LegacyId,
     data: nodeInfo.rsaIdDigest,
   })
+  // TODO: include ed25519 linkSpecifiers if available
   // Ed25519 identity keys are not required in EXTEND2 cells, so all zero
   //  keys SHOULD be accepted. If the extending relay knows the ed25519 key from
   //  the consensus, it SHOULD also check that key. (See section 5.1.2.)
