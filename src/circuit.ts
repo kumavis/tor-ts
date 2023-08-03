@@ -1,7 +1,10 @@
 import { x25519 } from '@noble/curves/ed25519';
+// import {
+//   aes_128_ctr
+// } from '@noble/ciphers/webcrypto/aes';
 import {
   aes_128_ctr
-} from '@noble/ciphers/webcrypto/aes';
+} from './noble-ciphers';
 import crypto from 'node:crypto';
 
 import { ChannelConnection } from "./channel";
@@ -57,6 +60,8 @@ class Hop {
   backwardDigest: Buffer;
   forwardKey: HopKey;
   backwardKey: HopKey;
+  _forwardKeyB: Buffer;
+  _backwardKeyB: Buffer;
   handshakePromiseKit = deferred<void>()
 
   async encryptForward (data: Buffer) {
@@ -90,12 +95,19 @@ class Hop {
     this.forwardDigest = keyMaterial.readBytes(HASH_LEN)
     this.backwardDigest = keyMaterial.readBytes(HASH_LEN)
     // we use 128-bit AES in counter mode, with an IV of all 0 bytes.
-    const IV = Buffer.alloc(16)
-    this.forwardKey = aes_128_ctr(keyMaterial.readBytes(KEY_LEN), IV)
-    this.backwardKey = aes_128_ctr(keyMaterial.readBytes(KEY_LEN), IV)
+    // this.forwardKey = aes_128_ctr(keyMaterial.readBytes(KEY_LEN), Buffer.alloc(16))
+    // this.backwardKey = aes_128_ctr(keyMaterial.readBytes(KEY_LEN), Buffer.alloc(16))
+    this._forwardKeyB = keyMaterial.readBytes(KEY_LEN)
+    this.forwardKey = aes_128_ctr(this._forwardKeyB, Buffer.alloc(16))
+    this._backwardKeyB = keyMaterial.readBytes(KEY_LEN)
+    this.backwardKey = aes_128_ctr(this._backwardKeyB, Buffer.alloc(16))
     console.log('established keys')
     this.isConnected = true
     this.handshakePromiseKit.resolve()
+  }
+  toString () {
+    const port = this.peerInfo.linkSpecifiers[0].data.subarray(4).readInt16BE()
+    return `hop:${port}`
   }
 }
 
@@ -193,12 +205,28 @@ export class Circuit {
     // encrypt
     let currentPayload = relayCellPayload
     for (const backHop of backHops) {
-      currentPayload = await backHop.encryptForward(relayCellPayload)
+      console.log(`key forward for ${backHop.toString()} ${backHop._forwardKeyB.toString('hex')}`)
+      console.log(`key backward for ${backHop.toString()} ${backHop._backwardKeyB.toString('hex')}`)
+      console.log(`encrypting ${backHop.toString()} before ${currentPayload.toString('hex')}`)
+      currentPayload = await backHop.encryptForward(currentPayload)
+      console.log(`encrypting ${backHop.toString()} after ${currentPayload.toString('hex')}`)
     }
     // send over channel
     this.relayMessageCount++
     const relayType = this.relayMessageCount > 8 ? MessageCellType.RELAY : MessageCellType.RELAY_EARLY
     this.channel.sendMessageWithPayload(this.circuitId, relayType, currentPayload)
+    // // encrypt
+    // // let currentPayload = relayCellPayload
+    // currentPayload = relayCellPayload
+    // for (const backHop of backHops) {
+    //   console.log(`encrypting ${backHop.toString()} before ${currentPayload.toString('hex')}`)
+    //   currentPayload = await backHop.encryptForward(currentPayload)
+    //   console.log(`encrypting ${backHop.toString()} after ${currentPayload.toString('hex')}`)
+    // }
+    // // send over channel
+    // this.relayMessageCount++
+    // // const relayType = this.relayMessageCount > 8 ? MessageCellType.RELAY : MessageCellType.RELAY_EARLY
+    // this.channel.sendMessageWithPayload(this.circuitId, relayType, currentPayload)
   }
 
   receiveMessage (message: MessageCell) {
@@ -209,6 +237,7 @@ export class Circuit {
       case MessageCellType.CREATED2:
         const created2Message = message.message as CellCreated2
         const serverHandshake = parseCreate2ServerHandshakeForNtor(created2Message.handshake)
+        console.log(`received created2 handshake for ${this.firstHop.toString()}`)
         this.firstHop.receiveCreated2Handshake(serverHandshake)
         break;
       case MessageCellType.DESTROY:
@@ -222,17 +251,21 @@ export class Circuit {
   }
 
   async receiveRelayMessage (relayMessage: CellRelayUnparsed) {
+    // decrypt and identify target hop
     let currentPayload = relayMessage.payload
     let targetHop: Hop
     for (const hop of this.hops) {
       if (!hop.isConnected) continue
+      console.log(`decrypting ${hop.toString()} before ${currentPayload.subarray(0,6).toString('hex')}`)
       currentPayload = Buffer.from(await hop.decryptBackward(currentPayload))
+      console.log(`decrypting ${hop.toString()} after ${currentPayload.subarray(0,6).toString('hex')}`)
       const looksRecognized = checkRelayCellRecognized(currentPayload)
-      // TODO: check digest
       if (looksRecognized) {
         targetHop = hop
         const targetHopIndex = this.hops.indexOf(targetHop)
         console.log(`receiveRelayMessage looksRecognized for hop:`, targetHopIndex)
+        // TODO: check digest
+        // TODO: update backward digest
         break
       }
     }
@@ -240,8 +273,8 @@ export class Circuit {
       console.warn('did not find matching hop for relay message')
       return
     }
+    // parse and process relay message
     const relayCell = parseRelayCellPayload(currentPayload)
-    // await targetHop.receiveRelayMessage(relayCell)
     switch (relayCell.relayCommand) {
       case RelayCell.EXTENDED2: {
         console.log('got extended2!')
@@ -249,6 +282,7 @@ export class Circuit {
         const handshake = parseCreate2ServerHandshakeForNtor(create2Cell.handshake)
         const targetHopIndex = this.hops.indexOf(targetHop)
         const nextHop = this.hops[targetHopIndex + 1]
+        console.log(`received handshake for ${nextHop.toString()}`)
         nextHop.receiveCreated2Handshake(handshake)
         return
       }

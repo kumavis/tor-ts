@@ -1,11 +1,5 @@
 import { EventEmitter } from 'node:events';
 import tls from 'node:tls';
-import crypto from 'node:crypto';
-
-import { secp256k1 } from '@noble/curves/secp256k1';
-import {
-  aes_128_ctr
-} from '@noble/ciphers/webcrypto/aes';
 
 import type { KeyInfo } from './profiles';
 import {
