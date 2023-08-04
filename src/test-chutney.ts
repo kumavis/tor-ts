@@ -1,3 +1,4 @@
+import net from 'node:net'
 import { Circuit } from './circuit'
 import type { PeerInfo } from './circuit'
 import { TlsChannelConnection } from './channel';
@@ -88,7 +89,7 @@ async function getStandardChutneyCircuitPath () {
   const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent)
 
   const circuitPlan: Array<MicroDescNodeInfo> = []
-  circuitPlan.push(microDescNodeInfos.find(nodeInfo => nodeInfo.onion_router_port === 5002))
+  circuitPlan.push(microDescNodeInfos.find(nodeInfo => nodeInfo.onion_router_port === 5004))
   circuitPlan.push(microDescNodeInfos.find(nodeInfo => nodeInfo.onion_router_port === 5001))
   circuitPlan.push(microDescNodeInfos.find(nodeInfo => nodeInfo.onion_router_port === 5000))
   
@@ -121,5 +122,46 @@ const circuit = new Circuit({
 })
 await circuit.connect()
 console.log('circuit established')
+// await circuit.open('localhost:5000')
+// console.log('connection established')
+
+const port = 1234
+const server = net.createServer()
+server.listen(port, () => {
+  console.log(`Server started and listening on port ${port}`)
+})
+server.on('connection', async (socket) => {
+  console.log('New client connected')
+  const circuitStream = await circuit.open('kumavis.me:80')
+  // const circuitStream = await circuit.open('kumavis.me:443')
+  console.log('connection established')
+  
+  circuitStream.on('data', (data) => {
+    console.log(`Received data from end: ${data.length}`)
+    socket.write(data)
+  })
+  circuitStream.on('end', (err) => {
+    if (err) {
+      console.log('circuit disconnected with error')
+      console.error(err)
+      socket.end()
+      return
+    }
+    console.log('circuit disconnected')
+    socket.end()
+  })
+  socket.on('data', (data) => {
+    console.log(`Received data from start: ${data.length}`)
+    circuitStream.write(data)
+  })
+  socket.on('error', (err) => {
+    console.log('Client errored', err)
+    circuitStream.destroy()
+  })
+  socket.on('end', () => {
+    console.log('Client disconnected')
+  })
+})
+
 
 // circuit.sendRequest()

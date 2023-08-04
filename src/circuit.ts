@@ -12,8 +12,12 @@ import {
   checkRelayCellRecognized,
   parseRelayCellPayload,
   parseCreate2Cell,
+  serializeCellWithPayload,
+  readCellsFromData,
+  RELAY_PAYLOAD_LEN,
+  chunkDataForRelayDataCells,
 } from './messaging';
-import type { CellDestroy, CellRelayUnparsed, LinkSpecifier } from './messaging'
+import type { CellDestroy, CellRelay, CellRelayUnparsed, LinkSpecifier } from './messaging'
 import {
   makeCreate2ClientHandshakeForNtor,
   parseCreate2ServerHandshakeForNtor,
@@ -25,7 +29,8 @@ import {
   RelayCell,
   serializeExtend2,
 } from './relay-cell'
-import { BytesReader, deferred, sha1 } from './util';
+import { BytesReader, deferred } from './util';
+import EventEmitter from 'node:events';
 
 const KEY_LEN = 16;
 const HASH_LEN = 20;
@@ -45,9 +50,9 @@ class Hop {
   isConnected = false;
   peerInfo: PeerInfo;
   ntorEphemeralKeyPrivate: Buffer;
-  ntorEphemeralKeyPublic: Buffer;
-  forwardDigest: Buffer;
-  backwardDigest: Buffer;
+  ntorEphemeralKeyPublic: Buffer;  
+  forwardDigest = crypto.createHash('sha1');
+  backwardDigest = crypto.createHash('sha1');
   forwardKey: HopKey;
   backwardKey: HopKey;
   handshakePromiseKit = deferred<void>()
@@ -80,8 +85,8 @@ class Hop {
       serverNtorAuth,
     })
     const keyMaterial = new BytesReader(KDF_RFC5869(keySeed, 2 * HASH_LEN + 2 * KEY_LEN));
-    this.forwardDigest = keyMaterial.readBytes(HASH_LEN)
-    this.backwardDigest = keyMaterial.readBytes(HASH_LEN)
+    this.forwardDigest.update(keyMaterial.readBytes(HASH_LEN))
+    this.backwardDigest.update(keyMaterial.readBytes(HASH_LEN))
     // we use 128-bit AES in counter mode, with an IV of all 0 bytes.
     this.forwardKey = await makeAes128CtrKey(keyMaterial.readBytes(KEY_LEN))
     this.backwardKey = await makeAes128CtrKey(keyMaterial.readBytes(KEY_LEN))
@@ -94,12 +99,29 @@ class Hop {
   }
 }
 
+export class CircuitStream extends EventEmitter {
+  streamId: number
+  destroyed = false
+  connectionPromiseKit = deferred<void>()
+  write: (data: Buffer) => Promise<void>
+  close () {
+    this.destroy()
+  }
+  destroy (err?: Error) {
+    this.connectionPromiseKit.reject(err)
+    this.destroyed = true
+    this.emit('end', err)
+  }
+}
+
 export class Circuit {
-  channel: ChannelConnection;
-  hops: Array<Hop> = [];
-  unsubscribeFromChannel?: () => void;
-  circuitId: Buffer;
-  relayMessageCount: 0;
+  channel: ChannelConnection
+  hops: Array<Hop> = []
+  unsubscribeFromChannel?: () => void
+  circuitId: Buffer
+  relayMessageCount = 0
+  lastStreamId = 0
+  streams: Array<CircuitStream> = []
 
   constructor ({
     path,
@@ -158,27 +180,26 @@ export class Circuit {
         linkSpecifiers: hop.peerInfo.linkSpecifiers,
         handshake: clientHandshake,
       })
-      // i expect to abstract this into a function
-      const relayCellPayload = serializeRelayCellPayload({
+      await this.sendRelayMessage({
         streamId: 0,
         relayCommand: RelayCell.EXTEND2,
         data: extend2PayloadPlaintext,
-      })
-      await this.sendRelayMessageToHop(relayCellPayload, targetHop)
+      }, targetHop)
     }
     // wait until handshake response has been received
     await hop.handshakePromiseKit.promise
   }
 
-  async sendRelayMessageToHop (relayCellPayload: Buffer, targetHop: Hop) {
+  async sendRelayMessage (relayCell: CellRelay, targetHop: Hop = this.lastHop) {
+    const relayCellPayload = serializeRelayCellPayload(relayCell)
     const targetHopIndex = this.hops.indexOf(targetHop)
-    const backHops = this.hops.slice(0, targetHopIndex + 1).reverse()
     // update the forwardDigest and set the integrity
-    targetHop.forwardDigest = sha1(targetHop.forwardDigest, relayCellPayload)
-    const integrity = targetHop.forwardDigest.subarray(0, 4)
+    targetHop.forwardDigest.update(relayCellPayload)
+    const integrity = targetHop.forwardDigest.copy().digest().subarray(0, 4)
     setRelayCellIntegrity(relayCellPayload, integrity)
     // encrypt
     let currentPayload = relayCellPayload
+    const backHops = this.hops.slice(0, targetHopIndex + 1).reverse()
     for (const backHop of backHops) {
       currentPayload = await backHop.encryptForward(currentPayload)
     }
@@ -202,6 +223,9 @@ export class Circuit {
         const destroyMessage = message.message as CellDestroy
         console.warn('! got destroy', destroyMessage)
         // this.receiveDestroyMessage(message.message as CellDestroy)
+        this.streams.forEach(stream => {
+          stream.destroy()
+        })
         break;
       default:
         throw new Error(`Circuit received unknown message type: ${message.command}`)
@@ -230,20 +254,86 @@ export class Circuit {
     }
     // parse and process relay message
     const relayCell = parseRelayCellPayload(currentPayload)
-    switch (relayCell.relayCommand) {
+    const { streamId, relayCommand, data } = relayCell
+    const stream = streamId === 0 ? undefined : this.streams.find(stream => stream.streamId === streamId)
+    switch (relayCommand) {
       case RelayCell.EXTENDED2: {
-        const create2Cell = parseCreate2Cell(relayCell.data)
+        const create2Cell = parseCreate2Cell(data)
         const handshake = parseCreate2ServerHandshakeForNtor(create2Cell.handshake)
         const targetHopIndex = this.hops.indexOf(targetHop)
         const nextHop = this.hops[targetHopIndex + 1]
         nextHop.receiveCreated2Handshake(handshake)
         return
       }
+      case RelayCell.CONNECTED: {
+        stream.connectionPromiseKit.resolve()
+        return
+      }
+      case RelayCell.DATA: {
+        console.log(`got ${data.length} bytes of data for stream ${streamId}`)
+        // console.log(data.toString('hex'))
+        stream.emit('data', data)
+        return
+      }
+      case RelayCell.END: {
+        const reason = data[0]
+        console.warn('! got end', reason)
+        if (reason === 2) {
+          // ended normally
+          stream.end()
+          return
+        }
+        stream.destroy(new Error(`stream ended: ${reason}`))
+        return
+      }
       default: {
-        throw new Error(`Hop received unknown relay message type ${relayCell.relayCommand}`)
+        throw new Error(`Hop received unknown relay message type ${relayCommand}`)
       }
     }
+  }
 
+  async writeToStream (stream: CircuitStream, data: Buffer) {
+    const { streamId, destroyed } = stream
+    if (destroyed) {
+      throw new Error('stream is destroyed')
+    }
+    for (const chunk of chunkDataForRelayDataCells(data)) {
+      console.log(`writing ${chunk.length} bytes to stream ${streamId}`)
+      const relayCell = {
+        streamId,
+        relayCommand: RelayCell.DATA,
+        data: chunk,
+      }
+      await this.sendRelayMessage(relayCell)
+    }
+  }
+
+  async open (desination: string): Promise<CircuitStream> {
+    const streamId = ++this.lastStreamId
+    const stream = new CircuitStream()
+    stream.streamId = streamId
+    stream.write = async (data: Buffer) => {
+      await this.writeToStream(stream, data)
+    }
+    this.streams.push(stream)
+    console.log(`opening stream ${streamId} to ${desination}`)
+
+    // RELAY_BEGIN
+    //   ADDRPORT [nul-terminated string]
+    //   FLAGS    [4 bytes]
+    const flagsData = Buffer.alloc(4)
+    const data = Buffer.concat([
+      Buffer.from(desination, 'ascii'),
+      Buffer.from([0x00]),
+      flagsData,
+    ])
+    await this.sendRelayMessage({
+      streamId,
+      relayCommand: RelayCell.BEGIN,
+      data,
+    })
+    await stream.connectionPromiseKit.promise
+    return stream
   }
 
   destroy () {

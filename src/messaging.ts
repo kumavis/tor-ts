@@ -2,10 +2,10 @@ import assert from "node:assert";
 import crypto from "node:crypto";
 import { circuitIdLengthForProtocolVersion } from './circuit'
 import { BytesReader, bufferFromUint, sha256 } from "./util";
-import { link } from "node:fs";
 
 //  PAYLOAD_LEN -- The longest allowable cell payload, in bytes. (509)
 const PAYLOAD_LEN = 509
+export const RELAY_PAYLOAD_LEN = PAYLOAD_LEN - 11
 
 // The 'Command' field of a fixed-length cell holds one of the following
 // values:
@@ -433,6 +433,7 @@ const cellSerializers = {
       integrity = Buffer.alloc(4)
     }
     assert.equal(integrity.length, 4, 'integrity should be 4 bytes')
+    assert(data.length <= RELAY_PAYLOAD_LEN, `data should be less than ${RELAY_PAYLOAD_LEN} bytes, got ${data.length} bytes`)
     const payloadBytes = Buffer.concat([
       bufferFromUint(1, relayCommand),
       // When sending cells, the unencrypted 'recognized' MUST be set to zero.
@@ -727,6 +728,19 @@ export function addressAndPortToLinkSpecifier (address: AddressAndPort): LinkSpe
     type: addressTypeToLinkSpecifierType(address.type),
     data: addressAndPortToBuffer(address),
   }
+}
+
+export function chunkDataForRelayDataCells (data: Buffer): Array<Buffer> {
+  if (data.length <= RELAY_PAYLOAD_LEN) {
+    return [data]
+  }
+  const chunks = []
+  const reader = new BytesReader(data)
+  while (!reader.isExhausted()) {
+    const chunk = reader.readBytes(RELAY_PAYLOAD_LEN, { allowShorter: true })
+    chunks.push(chunk)
+  }
+  return chunks
 }
 
 function buildAuthenticateCell ({

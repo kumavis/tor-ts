@@ -147,7 +147,8 @@ export class ChannelConnection {
   sendMessageWithPayload (circuitId: Buffer, messageType: number, payloadBytes: Buffer): void {
     const { handShakeInProgress } = this.state
     const serializedCell = serializeCellWithPayload(circuitId, messageType, payloadBytes)
-    // console.log(`>> sending ${MessageCells[messageType]} (${serializedCell.length} bytes)`)
+    // console.log(`>> sending ${MessageCells[messageType]} (${serializedCell.length} bytes on ${circuitId.toString('hex')})`)
+    // console.log(`>> ${serializedCell.toString('hex')}`)
     if (handShakeInProgress) {
       this._outgoingHandshakeDigestData.push(serializedCell);
     }
