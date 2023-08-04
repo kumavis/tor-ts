@@ -2,20 +2,12 @@ import { Circuit } from './circuit'
 import type { PeerInfo } from './circuit'
 import { TlsChannelConnection } from './channel';
 import {
-  LinkSpecifier,
-  LinkSpecifierTypes,
   linkSpecifierToAddressAndPort,
-  addressAndPortToBuffer,
-  AddressAndPort,
-  AddressTypes,
-  addressAndPortToLinkSpecifier,
 } from './messaging'
 import {
-  dangerouslyLookupOnionKey,
   downloadMicrodescFromDirectory,
   parseRelaysFromMicroDesc,
   MicroDescNodeInfo,
-  microDescNodeInfoToPeerInfo,
   dangerouslyLookupPeerInfo,
 } from './directory'
 
@@ -69,21 +61,38 @@ function pickRelayWithFlags (relays: MicroDescNodeInfo[], flags: string[], ignor
   return matchingRelays[randomIndex]
 }
 
+async function getRandomChutneyCircuitPath () {
+  const loopback = '127.0.0.1'
+  const directoryServer = `${loopback}:7000`
+  const microDescContent = await downloadMicrodescFromDirectory(directoryServer)
+  const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent)
+
+  const circuitPlan: Array<MicroDescNodeInfo> = []
+  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Exit'], circuitPlan))
+  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, [], circuitPlan))
+  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Guard'], circuitPlan))
+  
+  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(circuitPlan.map(async (relayInfo) => {
+    return await dangerouslyLookupPeerInfo(directoryServer, relayInfo)
+  }))
+  // reverse so that gateway is first and exit is last
+  circuitPeerInfos.reverse()
+
+  return circuitPeerInfos
+}
+
 async function getStandardChutneyCircuitPath () {
   const loopback = '127.0.0.1'
   const directoryServer = `${loopback}:7000`
   const microDescContent = await downloadMicrodescFromDirectory(directoryServer)
   const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent)
 
-  const circuitMicroDescNodeInfos: Array<MicroDescNodeInfo> = []
-  // circuitMicroDescNodeInfos.push(pickRelayWithFlags(microDescNodeInfos, ['Exit'], circuitMicroDescNodeInfos))
-  // circuitMicroDescNodeInfos.push(pickRelayWithFlags(microDescNodeInfos, [], circuitMicroDescNodeInfos))
-  // circuitMicroDescNodeInfos.push(pickRelayWithFlags(microDescNodeInfos, ['Guard'], circuitMicroDescNodeInfos))
-  circuitMicroDescNodeInfos.push(microDescNodeInfos.find(nodeInfo => nodeInfo.onion_router_port === 5002))
-  circuitMicroDescNodeInfos.push(microDescNodeInfos.find(nodeInfo => nodeInfo.onion_router_port === 5001))
-  circuitMicroDescNodeInfos.push(microDescNodeInfos.find(nodeInfo => nodeInfo.onion_router_port === 5000))
+  const circuitPlan: Array<MicroDescNodeInfo> = []
+  circuitPlan.push(microDescNodeInfos.find(nodeInfo => nodeInfo.onion_router_port === 5002))
+  circuitPlan.push(microDescNodeInfos.find(nodeInfo => nodeInfo.onion_router_port === 5001))
+  circuitPlan.push(microDescNodeInfos.find(nodeInfo => nodeInfo.onion_router_port === 5000))
   
-  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(circuitMicroDescNodeInfos.map(async (relayInfo) => {
+  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(circuitPlan.map(async (relayInfo) => {
     return await dangerouslyLookupPeerInfo(directoryServer, relayInfo)
   }))
   // reverse so that gateway is first and exit is last
@@ -98,22 +107,19 @@ const circuitPeerInfos = await getStandardChutneyCircuitPath()
 const gatewayPeerInfo = circuitPeerInfos[0]
 const gatewayAddress = linkSpecifierToAddressAndPort(gatewayPeerInfo.linkSpecifiers[0])
 
-console.log(circuitPeerInfos.map(info => {
-  const addressAndPort = linkSpecifierToAddressAndPort(info.linkSpecifiers[0])
-  return `${addressAndPort.ip}:${addressAndPort.port}`
-}).join('\n'))
+// console.log(circuitPeerInfos.map(info => {
+//   const addressAndPort = linkSpecifierToAddressAndPort(info.linkSpecifiers[0])
+//   return `${addressAndPort.ip}:${addressAndPort.port}`
+// }).join('\n'))
+// console.log(gatewayPeerInfo, gatewayAddress)
 
-console.log(gatewayPeerInfo, gatewayAddress)
 const channel = new TlsChannelConnection()
 await channel.connect(gatewayAddress)
-console.log('connected')
-await channel.performHandshake()
-console.log('handshake complete')
-
 const circuit = new Circuit({
   path: circuitPeerInfos,
   channel,
 })
 await circuit.connect()
+console.log('circuit established')
 
 // circuit.sendRequest()
