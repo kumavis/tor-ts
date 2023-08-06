@@ -12,9 +12,6 @@ import {
   checkRelayCellRecognized,
   parseRelayCellPayload,
   parseCreate2Cell,
-  serializeCellWithPayload,
-  readCellsFromData,
-  RELAY_PAYLOAD_LEN,
   chunkDataForRelayDataCells,
 } from './messaging';
 import type { CellDestroy, CellRelay, CellRelayUnparsed, LinkSpecifier } from './messaging'
@@ -40,6 +37,44 @@ type HopKey = {
   decrypt(message: Buffer): Promise<Uint8Array>;
 }
 
+interface Cipher {
+  key: HopKey,
+  digest: crypto.Hash,
+}
+
+class CipherPair {
+  forward: Cipher
+  backward: Cipher
+  constructor (forward: Cipher, backward: Cipher) {
+    this.forward = forward
+    this.backward = backward
+  }
+}
+
+class Tor1Cipher implements Cipher {
+  key: HopKey
+  digest: crypto.Hash
+  constructor (key: HopKey, digest: crypto.Hash) {
+    this.key = key
+    this.digest = digest
+  }
+}
+
+function makeTor1CipherPairFromKeyMaterial (keyMaterial: Buffer) {
+  const keyMaterialReader = new BytesReader(keyMaterial)
+  const forwardDigest = crypto.createHash('sha1');
+  const backwardDigest = crypto.createHash('sha1');
+  forwardDigest.update(keyMaterialReader.readBytes(HASH_LEN))
+  backwardDigest.update(keyMaterialReader.readBytes(HASH_LEN))
+  // we use 128-bit AES in counter mode, with an IV of all 0 bytes.
+  const forwardKey = makeAes128CtrKey(keyMaterialReader.readBytes(KEY_LEN))
+  const backwardKey = makeAes128CtrKey(keyMaterialReader.readBytes(KEY_LEN))
+  return new CipherPair(
+    new Tor1Cipher(forwardKey, forwardDigest),
+    new Tor1Cipher(backwardKey, backwardDigest),
+  )
+}
+
 export type PeerInfo = {
   onionKey: Buffer;
   rsaIdDigest: Buffer;
@@ -49,19 +84,23 @@ export type PeerInfo = {
 class Hop {
   isConnected = false;
   peerInfo: PeerInfo;
-  ntorEphemeralKeyPrivate: Buffer;
-  ntorEphemeralKeyPublic: Buffer;  
-  forwardDigest = crypto.createHash('sha1');
-  backwardDigest = crypto.createHash('sha1');
-  forwardKey: HopKey;
-  backwardKey: HopKey;
   handshakePromiseKit = deferred<void>()
+  cipherPair: CipherPair;
+
+  ntorEphemeralKeyPrivate: Buffer;
+  ntorEphemeralKeyPublic: Buffer;
 
   async encryptForward (data: Buffer) {
-    return Buffer.from(await this.forwardKey.encrypt(data))
+    return Buffer.from(await this.cipherPair.forward.key.encrypt(data))
   }
   async decryptBackward (data: Buffer) {
-    return Buffer.from(await this.backwardKey.decrypt(data))
+    return Buffer.from(await this.cipherPair.backward.key.decrypt(data))
+  }
+  async witnessForwardPayload (relayCellPayload: Buffer) {
+    // update the forwardDigest and set the integrity
+    this.cipherPair.forward.digest.update(relayCellPayload)
+    const integrity = this.cipherPair.forward.digest.copy().digest().subarray(0, 4)
+    return integrity
   }
   createClientHandshake () {
     this.ntorEphemeralKeyPrivate = Buffer.from(x25519.utils.randomPrivateKey())
@@ -84,12 +123,8 @@ class Hop {
       serverNtorEphemeralKeyPublic,
       serverNtorAuth,
     })
-    const keyMaterial = new BytesReader(KDF_RFC5869(keySeed, 2 * HASH_LEN + 2 * KEY_LEN));
-    this.forwardDigest.update(keyMaterial.readBytes(HASH_LEN))
-    this.backwardDigest.update(keyMaterial.readBytes(HASH_LEN))
-    // we use 128-bit AES in counter mode, with an IV of all 0 bytes.
-    this.forwardKey = await makeAes128CtrKey(keyMaterial.readBytes(KEY_LEN))
-    this.backwardKey = await makeAes128CtrKey(keyMaterial.readBytes(KEY_LEN))
+    const keyMaterial = KDF_RFC5869(keySeed, 2 * HASH_LEN + 2 * KEY_LEN)
+    this.cipherPair = makeTor1CipherPairFromKeyMaterial(keyMaterial)
     this.isConnected = true
     this.handshakePromiseKit.resolve()
   }
@@ -193,9 +228,7 @@ export class Circuit {
   async sendRelayMessage (relayCell: CellRelay, targetHop: Hop = this.lastHop) {
     const relayCellPayload = serializeRelayCellPayload(relayCell)
     const targetHopIndex = this.hops.indexOf(targetHop)
-    // update the forwardDigest and set the integrity
-    targetHop.forwardDigest.update(relayCellPayload)
-    const integrity = targetHop.forwardDigest.copy().digest().subarray(0, 4)
+    const integrity = await targetHop.witnessForwardPayload(relayCellPayload)
     setRelayCellIntegrity(relayCellPayload, integrity)
     // encrypt
     let currentPayload = relayCellPayload
@@ -280,7 +313,7 @@ export class Circuit {
         console.warn('! got end', reason)
         if (reason === 2) {
           // ended normally
-          stream.end()
+          stream.close()
           return
         }
         stream.destroy(new Error(`stream ended: ${reason}`))

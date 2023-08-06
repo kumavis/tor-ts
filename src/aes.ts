@@ -11,7 +11,7 @@ const incrementCounter = (counter, blockCount: number) => {
   counter.writeUIntBE(currentCounter + blockCount, counterOffset, numberLength)
 }
 
-export const makeAes128CtrKey = async (key: Buffer) => {
+export const makeAes128CtrKey = (key: Buffer) => {
   const counter = Buffer.alloc(blockLength)
   const cryptParams = { ...keyParams, length: 64, counter }
   // when AES-CTR is used in stream mode, it will leave unused
@@ -20,10 +20,11 @@ export const makeAes128CtrKey = async (key: Buffer) => {
   // prepending padding to the input and then removing from the beggining of
   // the output and not incrementing our counter for the partial block
   let internalOffset = 0
-  const iKey = await crypto.subtle.importKey('raw', key, keyParams, false, ['encrypt', 'decrypt'])
+  const iKeyP = crypto.subtle.importKey('raw', key, keyParams, false, ['encrypt', 'decrypt'])
   const mutex = new Mutex()
   
   const crypt = async (input: Buffer): Promise<Buffer> => {
+    const iKey = await iKeyP
     const unlock = await mutex.lock()
     try {
       const paddedInput = Buffer.concat([
