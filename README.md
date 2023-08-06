@@ -1,12 +1,12 @@
-### dragons
+### dragons 🐉
 
-*dont use this for anything important!*
+⚠️ *dont use this for anything important!*
 
-this has not been audited, skips some security precautions, and is likely highly fingerprintable.
+this has **not** been audited, skips some security precautions, and is likely highly fingerprintable.
 
 this is for educational and experimental purposes.
 
-### tor
+### tor 🧅
 
 This is a (partial) implementation of [the tor anonymization and anti-censorship protocol](https://www.torproject.org/).
 
