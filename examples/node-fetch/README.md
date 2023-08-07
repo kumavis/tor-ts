@@ -1,9 +1,6 @@
-### http-proxy
+### node-fetch
 
-Node Proxy Server for http/https/websockets over tor.
-
-For http/ws proxying, uses `http-proxy` with a `createConnection` parameter from `makeHttpCreateConnectionFnForCircuit`
-For https proxying, uses simple stream forwarding via `proxyCircuitStreamDuplex` / `circuitStreamToNodeDuplex`
+Node fetch over tor. Uses `node-fetch` package to enable use of the tor `http.Agent`.
 
 
 ### requirements

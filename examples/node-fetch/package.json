@@ -1,15 +1,15 @@
 {
-  "name": "tor-example-http-proxy",
+  "name": "tor-example-node-fetch",
   "version": "1.0.0",
   "main": "index.js",
   "license": "MIT",
   "private": true,
   "scripts": {
     "start": "tsx index.ts",
-    "dev": "pm2 start --name tor-example-http-proxy --watch=../../ --no-daemon --interpreter=tsx index.ts"
+    "dev": "pm2 start --name tor-example-node-fetch --watch=../../ --no-daemon --interpreter=tsx index.ts"
   },
   "dependencies": {
-    "http-proxy": "^1.18.1"
+    "node-fetch": "^3.3.2"
   },
   "devDependencies": {
     "tsx": "^3.12.7"
