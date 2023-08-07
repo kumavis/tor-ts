@@ -3,6 +3,7 @@ import http from 'http'
 import httpProxy from 'http-proxy'
 import { Circuit, TlsChannelConnection, chutney } from '../../src/index'
 import { CircuitHttpAgent, CircuitHttpsAgent, proxyCircuitStreamDuplex } from '../../src/node'
+import { getRandomCircuitPath } from '../../src/build-circuit/mainnet'
 
 main()
 
@@ -13,7 +14,7 @@ async function main () {
 
 async function setupTor () {
   // choose relays
-  const circuitPeerInfos = await chutney.getStandardChutneyCircuitPath()
+  const circuitPeerInfos = await getRandomCircuitPath()
   const gatewayPeerInfo = circuitPeerInfos[0]
   const channel = new TlsChannelConnection()
   await channel.connectPeerInfo(gatewayPeerInfo)

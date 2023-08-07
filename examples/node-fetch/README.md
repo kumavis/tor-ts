@@ -9,14 +9,14 @@ this currently expects a chutney testnet running the `basic-min` network in the 
 
 ### usage
 
-start the proxy server (on port :1234)
+start the client
 
 ```bash
 yarn start
 ```
 
-in another window, make a proxied curl request
+compare ip address with curl
 
 ```bash
-curl -v -x http://localhost:1234 https://kumavis.me > /dev/null
+curl 'https://api.ipify.org'
 ```

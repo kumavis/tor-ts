@@ -1,34 +1,31 @@
-import http, { ClientRequest } from 'http'
+import http, { ClientRequestArgs } from 'http'
 import https from 'https'
 import url from 'url'
 import { Circuit, CircuitStream } from './circuit'
 import { Readable, Writable, Duplex } from 'stream'
 
 
+export const getCircuitAgentForUrl = (circuit: Circuit, target: string): CircuitHttpsAgent | CircuitHttpAgent => {
+  const urlDetails = url.parse(target, false, true)
+  const agent = urlDetails.protocol === 'https:' ? new CircuitHttpsAgent(circuit) : new CircuitHttpAgent(circuit)
+  return agent
+}
+
 // https - can be given to https.get({ agent, ... })
 export class CircuitHttpsAgent extends https.Agent {
   circuit: Circuit
+  createConnection: (req: ClientRequestArgs, opts: http.AgentOptions) => Duplex
   constructor (circuit: Circuit, opts?: http.AgentOptions) {
     super(opts)
     this.circuit = circuit
-  }
-  createConnection(req): ClientRequest {
-    const urlDetails = url.parse(`//${req.hostname}:${req.port}`, false, true)
-    const port = urlDetails.port ? Number.parseInt(urlDetails.port, 10) : 443
-    const target = `${urlDetails.hostname}:${port}`
-    const circuitStream = this.circuit.openStream(target)
-    const duplexNodeStream = circuitStreamToNodeDuplex(circuitStream) as ClientRequest
-    // Nodejs docs suggest this returns a Socket but in reality it returns a ClientRequest (?)
-    // called by 'node:_http_client' via 'node-fetch' so I'm adding it here
-    duplexNodeStream.setTimeout = () => {}
-    // very sorry about this
-    return (duplexNodeStream as unknown as ClientRequest)
+    this.createConnection = makeHttpCreateConnectionFnForCircuit(circuit)
   }
 }
 
 // http - can be given to http.get({ agent, ... })
 export class CircuitHttpAgent extends http.Agent {
   circuit: Circuit
+  createConnection: (req: ClientRequestArgs, opts: http.AgentOptions) => Duplex
   constructor (circuit: Circuit, opts?: http.AgentOptions) {
     super(opts)
     this.circuit = circuit
@@ -37,12 +34,17 @@ export class CircuitHttpAgent extends http.Agent {
 }
 
 export function makeHttpCreateConnectionFnForCircuit (circuit: Circuit) {
-  return (req) => {
+  return (req: ClientRequestArgs): Duplex => {
     const urlDetails = url.parse(`//${req.hostname}:${req.port}`, false, true)
     const port = urlDetails.port ? Number.parseInt(urlDetails.port, 10) : 443
     const target = `${urlDetails.hostname}:${port}`
     const circuitStream = circuit.openStream(target)
     const duplexNodeStream = circuitStreamToNodeDuplex(circuitStream)
+    
+    // Nodejs docs suggest this returns a Socket but in reality it returns a ClientRequest (?)
+    // called by 'node:_http_client' via 'node-fetch' so I'm adding it here
+    duplexNodeStream.setTimeout = () => {}
+    
     return duplexNodeStream
   }
 }

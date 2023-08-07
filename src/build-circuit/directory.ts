@@ -123,8 +123,9 @@ export type MicroDescNodeInfo = {
   flags?: string[];
   version?: string;
   protocols?: string;
-  bandwidth?: number;
-  unmeasured?: number;
+  // bandwidth?: number;
+  // unmeasured?: number;
+  bandwidthStats?: Record<string, number>;
 };
 
 export function parseRelaysFromMicroDesc (microDescContent: string): MicroDescNodeInfo[] {
@@ -166,8 +167,12 @@ export function parseRelaysFromMicroDesc (microDescContent: string): MicroDescNo
       relayInfo.protocols = parts[1];
     } else if (tokens[0] === 'w') {
       let parts = line.split(' ');
-      relayInfo.bandwidth = parseInt(parts[1].split('=')[1]);
-      relayInfo.unmeasured = parseInt(parts[2].split('=')[1]);
+      relayInfo.bandwidthStats = {}
+      // w Bandwidth=82000 Unmeasured=1
+      parts.slice(1).forEach((token) => {
+        let [type, value] = token.split('=');
+        relayInfo.bandwidthStats[type] = parseInt(value);
+      });
     }
   }
 

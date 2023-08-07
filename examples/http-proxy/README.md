@@ -18,8 +18,22 @@ start the proxy server (on port :1234)
 yarn start
 ```
 
-in another window, make a proxied curl request
+in another window, look up ip via tor proxied curl request + normal curl
 
 ```bash
-curl -v -x http://localhost:1234 https://kumavis.me > /dev/null
+URL=https://api.ipify.org \
+&& echo "normal:" \
+&& curl "$URL" \
+&& echo "\ntor:" \
+&& curl -x localhost:1234 "$URL"
+```
+
+plumbing for http and https are different -- try http as well
+
+```bash
+URL=http://api.ipify.org \
+&& echo "normal:" \
+&& curl "$URL" \
+&& echo "\ntor:" \
+&& curl -x localhost:1234 "$URL"
 ```
