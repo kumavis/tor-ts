@@ -90,3 +90,58 @@ export function serializeExtend2 ({ linkSpecifiers, handshake }): Buffer {
   ])
   return payloadBytes;
 }
+
+// RELAY_END Reason
+
+// 1 -- REASON_MISC           (catch-all for unlisted reasons)
+// 2 -- REASON_RESOLVEFAILED  (couldn't look up hostname)
+// 3 -- REASON_CONNECTREFUSED (remote host refused connection) [*]
+// 4 -- REASON_EXITPOLICY     (OR refuses to connect to host or port)
+// 5 -- REASON_DESTROY        (Circuit is being destroyed)
+// 6 -- REASON_DONE           (Anonymized TCP connection was closed)
+// 7 -- REASON_TIMEOUT        (Connection timed out, or OR timed out
+//                             while connecting)
+// 8 -- REASON_NOROUTE        (Routing error while attempting to
+//                             contact destination)
+// 9 -- REASON_HIBERNATING    (OR is temporarily hibernating)
+// 10 -- REASON_INTERNAL       (Internal error at the OR)
+// 11 -- REASON_RESOURCELIMIT  (OR has no resources to fulfill request)
+// 12 -- REASON_CONNRESET      (Connection was unexpectedly reset)
+// 13 -- REASON_TORPROTOCOL    (Sent when closing connection because of
+//                             Tor protocol violations.)
+// 14 -- REASON_NOTDIRECTORY   (Client sent RELAY_BEGIN_DIR to a
+//                             non-directory relay.)
+
+export enum RelayEndReasons {
+  REASON_MISC = 1,
+  REASON_RESOLVEFAILED = 2,
+  REASON_CONNECTREFUSED = 3,
+  REASON_EXITPOLICY = 4,
+  REASON_DESTROY = 5,
+  REASON_DONE = 6,
+  REASON_TIMEOUT = 7,
+  REASON_NOROUTE = 8,
+  REASON_HIBERNATING = 9,
+  REASON_INTERNAL = 10,
+  REASON_RESOURCELIMIT = 11,
+  REASON_CONNRESET = 12,
+  REASON_TORPROTOCOL = 13,
+  REASON_NOTDIRECTORY = 14,
+}
+
+export const RelayEndReasonNames = {
+  [RelayEndReasons.REASON_MISC]: 'REASON_MISC',
+  [RelayEndReasons.REASON_RESOLVEFAILED]: 'REASON_RESOLVEFAILED',
+  [RelayEndReasons.REASON_CONNECTREFUSED]: 'REASON_CONNECTREFUSED',
+  [RelayEndReasons.REASON_EXITPOLICY]: 'REASON_EXITPOLICY',
+  [RelayEndReasons.REASON_DESTROY]: 'REASON_DESTROY',
+  [RelayEndReasons.REASON_DONE]: 'REASON_DONE',
+  [RelayEndReasons.REASON_TIMEOUT]: 'REASON_TIMEOUT',
+  [RelayEndReasons.REASON_NOROUTE]: 'REASON_NOROUTE',
+  [RelayEndReasons.REASON_HIBERNATING]: 'REASON_HIBERNATING',
+  [RelayEndReasons.REASON_INTERNAL]: 'REASON_INTERNAL',
+  [RelayEndReasons.REASON_RESOURCELIMIT]: 'REASON_RESOURCELIMIT',
+  [RelayEndReasons.REASON_CONNRESET]: 'REASON_CONNRESET',
+  [RelayEndReasons.REASON_TORPROTOCOL]: 'REASON_TORPROTOCOL',
+  [RelayEndReasons.REASON_NOTDIRECTORY]: 'REASON_NOTDIRECTORY',
+}

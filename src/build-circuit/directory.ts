@@ -1,8 +1,8 @@
 import fs from 'fs';
 import Onionoo from 'onionoo';
 import * as url from 'node:url';
-import { PeerInfo } from './circuit';
-import { AddressTypes, LinkSpecifier, LinkSpecifierTypes, addressAndPortToLinkSpecifier } from './messaging';
+import { PeerInfo } from '../circuit';
+import { AddressTypes, LinkSpecifier, LinkSpecifierTypes, addressAndPortToLinkSpecifier } from '../messaging';
 const __dirname = url.fileURLToPath(new URL('.', import.meta.url));
 
 // get "consensus document"

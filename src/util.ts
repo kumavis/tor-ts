@@ -8,13 +8,13 @@ export class BytesReader {
     this.offset = 0;
   }
   readUIntBE (length: number) {
-    if (this.offset + length > this.data.length) throw new Error('out of bounds')
+    if (this.offset + length > this.data.length) throw new Error(`Bytes reader: Attempted to read ${length} bytes but only ${this.data.length - this.offset} bytes remain`)
     const value = this.data.readUIntBE(this.offset, length);
     this.offset += length;
     return value
   }
   readBytes (length: number, { allowShorter = false}: { allowShorter?: boolean } = {}) {
-    if (!allowShorter && (this.offset + length > this.data.length)) throw new Error('out of bounds')
+    if (!allowShorter && (this.offset + length > this.data.length)) throw new Error(`Bytes reader: Attempted to read ${length} bytes but only ${this.data.length - this.offset} bytes remain`)
     const bytes = this.data.slice(this.offset, this.offset + length);
     this.offset += length;
     return bytes

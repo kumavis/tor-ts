@@ -24,10 +24,13 @@ import {
 } from './ntor';
 import {
   RelayCell,
+  RelayEndReasons,
+  RelayEndReasonNames,
   serializeExtend2,
 } from './relay-cell'
 import { BytesReader, deferred } from './util';
 import EventEmitter from 'node:events';
+import { ReadableStream, WritableStream } from 'stream/web';
 
 const KEY_LEN = 16;
 const HASH_LEN = 20;
@@ -58,21 +61,6 @@ class Tor1Cipher implements Cipher {
     this.key = key
     this.digest = digest
   }
-}
-
-function makeTor1CipherPairFromKeyMaterial (keyMaterial: Buffer) {
-  const keyMaterialReader = new BytesReader(keyMaterial)
-  const forwardDigest = crypto.createHash('sha1');
-  const backwardDigest = crypto.createHash('sha1');
-  forwardDigest.update(keyMaterialReader.readBytes(HASH_LEN))
-  backwardDigest.update(keyMaterialReader.readBytes(HASH_LEN))
-  // we use 128-bit AES in counter mode, with an IV of all 0 bytes.
-  const forwardKey = makeAes128CtrKey(keyMaterialReader.readBytes(KEY_LEN))
-  const backwardKey = makeAes128CtrKey(keyMaterialReader.readBytes(KEY_LEN))
-  return new CipherPair(
-    new Tor1Cipher(forwardKey, forwardDigest),
-    new Tor1Cipher(backwardKey, backwardDigest),
-  )
 }
 
 export type PeerInfo = {
@@ -136,14 +124,23 @@ class Hop {
 
 export class CircuitStream extends EventEmitter {
   streamId: number
+  destination: string
   destroyed = false
   connectionPromiseKit = deferred<void>()
+  source: ReadableStream
+  sink: WritableStream
+  constructor () {
+    super()
+    const { source, sink } = createSourceAndSinkForCircuit(this)
+    this.source = source
+    this.sink = sink
+  }
   write: (data: Buffer) => Promise<void>
   close () {
     this.destroy()
   }
   destroy (err?: Error) {
-    this.connectionPromiseKit.reject(err)
+    if (err) this.connectionPromiseKit.reject(err)
     this.destroyed = true
     this.emit('end', err)
   }
@@ -255,9 +252,9 @@ export class Circuit {
       case MessageCellType.DESTROY:
         const destroyMessage = message.message as CellDestroy
         console.warn('! got destroy', destroyMessage)
-        // this.receiveDestroyMessage(message.message as CellDestroy)
+        const err = new Error(`circuit destroyed: ${destroyMessage.reason}`)
         this.streams.forEach(stream => {
-          stream.destroy()
+          stream.destroy(err)
         })
         break;
       default:
@@ -310,12 +307,13 @@ export class Circuit {
       }
       case RelayCell.END: {
         const reason = data[0]
-        console.warn('! got end', reason)
-        if (reason === 2) {
+        const reasonName = RelayEndReasonNames[reason]
+        if (reason === RelayEndReasons.REASON_DONE) {
           // ended normally
           stream.close()
           return
         }
+        console.warn(`Got ungraceful end for stream ${streamId} with reason ${reasonName}`)
         stream.destroy(new Error(`stream ended: ${reason}`))
         return
       }
@@ -341,22 +339,43 @@ export class Circuit {
     }
   }
 
+  // TODO: delete?
   async open (desination: string): Promise<CircuitStream> {
+    const stream = this.createStream(desination)
+    await this.performStreamHandshake(stream)
+    return stream
+  }
+
+  openStream (desination: string): CircuitStream {
+    const stream = this.createStream(desination)
+    // kick off handshake, but dont wait for it
+    this.performStreamHandshake(stream)
+    return stream
+  }
+
+  createStream (desination: string): CircuitStream {
     const streamId = ++this.lastStreamId
     const stream = new CircuitStream()
     stream.streamId = streamId
+    stream.destination = desination
+    // TODO better to use event emitter so its self-contained?
     stream.write = async (data: Buffer) => {
+      await stream.connectionPromiseKit.promise
       await this.writeToStream(stream, data)
     }
     this.streams.push(stream)
-    console.log(`opening stream ${streamId} to ${desination}`)
+    return stream
+  }
 
+  async performStreamHandshake (stream: CircuitStream): Promise<void> {
+    const { streamId, destination } = stream
+    console.log(`opening stream ${streamId} to ${destination}`)
     // RELAY_BEGIN
     //   ADDRPORT [nul-terminated string]
     //   FLAGS    [4 bytes]
     const flagsData = Buffer.alloc(4)
     const data = Buffer.concat([
-      Buffer.from(desination, 'ascii'),
+      Buffer.from(destination, 'ascii'),
       Buffer.from([0x00]),
       flagsData,
     ])
@@ -366,7 +385,6 @@ export class Circuit {
       data,
     })
     await stream.connectionPromiseKit.promise
-    return stream
   }
 
   destroy () {
@@ -401,4 +419,51 @@ export function circuitIdLengthForProtocolVersion (protocolVersion: number | und
   // for the "any cells sent before the first VERSIONS cell" case, we use an undefined protocol
   // version
   return protocolVersion && protocolVersion >= 4 ? 4 : 2;
+}
+
+function createSourceAndSinkForCircuit (circuitStream: CircuitStream) {
+  // stream consumer can write to this
+  // and it gets forwarded to the circuit
+  const sink = new WritableStream({
+    write: (chunk) => {
+      circuitStream.write(chunk)
+    },
+    close: () => {
+      circuitStream.close()
+    },
+    abort: (err) => {
+      circuitStream.destroy(err)
+    },
+  })
+  // stream consumer can read from this
+  // and it gets data forwarded from the circuit
+  const source = new ReadableStream({
+    start: (controller) => {
+      circuitStream.on('data', (data) => {
+        controller.enqueue(data)
+      })
+      circuitStream.on('end', () => {
+        controller.close()
+      })
+    },
+    cancel: () => {
+      circuitStream.destroy()
+    },
+  })
+  return { source, sink }
+}
+
+function makeTor1CipherPairFromKeyMaterial (keyMaterial: Buffer) {
+  const keyMaterialReader = new BytesReader(keyMaterial)
+  const forwardDigest = crypto.createHash('sha1');
+  const backwardDigest = crypto.createHash('sha1');
+  forwardDigest.update(keyMaterialReader.readBytes(HASH_LEN))
+  backwardDigest.update(keyMaterialReader.readBytes(HASH_LEN))
+  // we use 128-bit AES in counter mode, with an IV of all 0 bytes.
+  const forwardKey = makeAes128CtrKey(keyMaterialReader.readBytes(KEY_LEN))
+  const backwardKey = makeAes128CtrKey(keyMaterialReader.readBytes(KEY_LEN))
+  return new CipherPair(
+    new Tor1Cipher(forwardKey, forwardDigest),
+    new Tor1Cipher(backwardKey, backwardDigest),
+  )
 }

@@ -10,77 +10,9 @@ import {
   parseRelaysFromMicroDesc,
   MicroDescNodeInfo,
   dangerouslyLookupPeerInfo,
-} from './directory'
+} from './build-circuit/directory'
 
-/* chutney testing instructions:
 
-start
-```sh
-./chutney configure networks/basic-min
-./chutney start networks/basic-min
-./chutney status networks/basic-min
-./chutney wait_for_bootstrap networks/basic-min
-./chutney verify networks/basic-min
-```
-
-stop
-```sh
-./chutney hup networks/basic-min
-./chutney stop networks/basic-min
-```
-
-restart
-```sh
-./chutney stop networks/basic-min
-./chutney start networks/basic-min
-./chutney status networks/basic-min
-./chutney wait_for_bootstrap networks/basic-min
-./chutney verify networks/basic-min
-```
-*/
-
-function filterRelaysByFlags (relays: MicroDescNodeInfo[], flags: string[], ignoreList: MicroDescNodeInfo[] = []): MicroDescNodeInfo[] {
-  const matchingRelays = relays.filter(relayInfo => {
-    const flagMatches = flags.every(flag => relayInfo.flags.includes(flag))
-    if (!flagMatches) return false
-    const isIgnored = ignoreList.find(ignoredNodeInfo => {
-      return ignoredNodeInfo === relayInfo || ignoredNodeInfo.rsaIdDigest.equals(relayInfo.rsaIdDigest)
-    })
-    if (isIgnored) return false
-    return true
-  })
-  return matchingRelays
-}
-
-function pickRelayWithFlags (relays: MicroDescNodeInfo[], flags: string[], ignoreList: MicroDescNodeInfo[] = []) {
-  const matchingRelays = filterRelaysByFlags(relays, flags, ignoreList)
-  if (matchingRelays.length === 0) {
-    throw new Error(`Failed to find any matching relays for [${flags}] from ${relays.length} relays`)
-  }
-  // console.log(`matching`, flags, matchingRelays)
-  const randomIndex = Math.floor(Math.random() * matchingRelays.length)
-  return matchingRelays[randomIndex]
-}
-
-async function getRandomChutneyCircuitPath () {
-  const loopback = '127.0.0.1'
-  const directoryServer = `${loopback}:7000`
-  const microDescContent = await downloadMicrodescFromDirectory(directoryServer)
-  const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent)
-
-  const circuitPlan: Array<MicroDescNodeInfo> = []
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Exit'], circuitPlan))
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, [], circuitPlan))
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Guard'], circuitPlan))
-  
-  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(circuitPlan.map(async (relayInfo) => {
-    return await dangerouslyLookupPeerInfo(directoryServer, relayInfo)
-  }))
-  // reverse so that gateway is first and exit is last
-  circuitPeerInfos.reverse()
-
-  return circuitPeerInfos
-}
 
 async function getStandardChutneyCircuitPath () {
   const loopback = '127.0.0.1'

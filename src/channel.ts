@@ -15,6 +15,7 @@ import {
   readCellsFromData,
   AddressTypes,
   serializeCellWithPayload,
+  linkSpecifierToAddressAndPort,
 } from './messaging';
 import type {
   MessageCell,
@@ -24,6 +25,7 @@ import type {
   NetInfoAddress,
 } from './messaging';
 import { sha256, sha1 } from './util'
+import { PeerInfo } from './circuit';
 
 const defaultLinkSupportedVersions = [3, 4, 5];
 
@@ -182,6 +184,13 @@ export class ChannelConnection {
 
 export class TlsChannelConnection extends ChannelConnection {
   socket?: tls.TLSSocket;
+
+  async connectPeerInfo (gatewayPeerInfo: PeerInfo, additonalOptions?: { localPort: number }) {
+    return this.connect(
+      linkSpecifierToAddressAndPort(gatewayPeerInfo.linkSpecifiers[0]),
+      additonalOptions
+    )
+  }
 
   async connect (server: AddressAndPort, additonalOptions?: { localPort: number }) {
     const tlsOptions = {
