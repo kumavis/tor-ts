@@ -1,8 +1,7 @@
-import url from 'url'
 import http from 'http'
 import httpProxy from 'http-proxy'
-import { Circuit, TlsChannelConnection, chutney } from '../../src/index'
-import { CircuitHttpAgent, CircuitHttpsAgent, proxyCircuitStreamDuplex } from '../../src/node'
+import { Circuit, TlsChannelConnection } from '../../src/index'
+import { getCircuitAgentForUrl, proxyCircuitStreamDuplex } from '../../src/node'
 import { getRandomCircuitPath } from '../../src/build-circuit/mainnet'
 
 main()
@@ -36,9 +35,8 @@ function setupCircuitProxyServer (circuit) {
   const proxy = new httpProxy.createProxyServer()
   const proxyServer = http.createServer(function (req, res) {
     const target = req.url
-    const targetDetails = url.parse(target)
     console.log(`Proxying HTTP request to: ${target}`)
-    const agent = targetDetails.protocol === 'https' ? new CircuitHttpsAgent(circuit) : new CircuitHttpAgent(circuit)
+    const agent = getCircuitAgentForUrl(circuit, target, { skipTls: true })
     // forward request to target and back
     proxy.web(req, res, { target, agent })
   })

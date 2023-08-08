@@ -1,5 +1,5 @@
 import { getRandomCircuitPath } from '../../src/build-circuit/mainnet'
-import { Circuit, TlsChannelConnection, chutney } from '../../src/index'
+import { Circuit, TlsChannelConnection } from '../../src/index'
 import { getCircuitAgentForUrl } from '../../src/node'
 
 import fetch from 'node-fetch'
@@ -16,6 +16,7 @@ async function main () {
 
   const circuit = await setupTor()
   const ipAddresResult = await makeWebRequest(circuit, target)
+  circuit.destroy()
 
   console.log('my ip address is:', ipAddresResult)
 }

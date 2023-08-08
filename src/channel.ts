@@ -180,6 +180,9 @@ export class ChannelConnection {
   sendData(_serializedCell: any) {
     throw new Error("virtual method 'sendData' not implemented.");
   }
+  destroy () {
+    this.incommingCommands.removeAllListeners()
+  }
 }
 
 export class TlsChannelConnection extends ChannelConnection {
@@ -224,6 +227,11 @@ export class TlsChannelConnection extends ChannelConnection {
       throw new Error('socket is undefined')
     }
     this.socket.write(data)
+  }
+
+  destroy(): void {
+    super.destroy()
+    this.socket?.destroy()
   }
 }
 

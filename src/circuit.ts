@@ -391,6 +391,7 @@ export class Circuit {
     if (this.unsubscribeFromChannel) {
       this.unsubscribeFromChannel()
     }
+    this.channel.destroy()
   }
 }
 

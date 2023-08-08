@@ -1,52 +1,74 @@
 import http, { ClientRequestArgs } from 'http'
 import https from 'https'
+import tls from 'tls'
+import net from 'net'
 import url from 'url'
 import { Circuit, CircuitStream } from './circuit'
 import { Readable, Writable, Duplex } from 'stream'
 
 
-export const getCircuitAgentForUrl = (circuit: Circuit, target: string): CircuitHttpsAgent | CircuitHttpAgent => {
+export const getCircuitAgentForUrl = (circuit: Circuit, target: string, opts: { skipTls }): CircuitHttpsAgent | CircuitHttpAgent => {
   const urlDetails = url.parse(target, false, true)
-  const agent = urlDetails.protocol === 'https:' ? new CircuitHttpsAgent(circuit) : new CircuitHttpAgent(circuit)
+  const isHttps = urlDetails.protocol === 'https:'
+  const agent = isHttps ?
+    new CircuitHttpsAgent(circuit)
+    : new CircuitHttpAgent(circuit)
+  if (isHttps && opts.skipTls) {
+    (agent as CircuitHttpsAgent).skipTls = opts.skipTls
+  }
   return agent
 }
 
 // https - can be given to https.get({ agent, ... })
 export class CircuitHttpsAgent extends https.Agent {
+  skipTls = false
   circuit: Circuit
-  createConnection: (req: ClientRequestArgs, opts: http.AgentOptions) => Duplex
   constructor (circuit: Circuit, opts?: http.AgentOptions) {
     super(opts)
     this.circuit = circuit
-    this.createConnection = makeHttpCreateConnectionFnForCircuit(circuit)
+  }
+  createConnection (req: ClientRequestArgs): Duplex {
+    const duplexStream = makeNodeDuplexStreamForCircuit(this.circuit, req)
+    // when used with "http-proxy" they handle TLS themselves (?)
+    // but they still need a https.Agent derived class
+    if (this.skipTls) {
+      return duplexStream
+    }
+    // re-apply TLS as per https://github.com/TooTallNate/proxy-agents/blob/d5cdaa1b774c699c75b543eb4b112290d261e321/packages/https-proxy-agent/src/index.ts#L144
+    // TODO: need to pass all options in here?
+    return tls.connect({
+      socket: duplexStream,
+      servername: net.isIP(req.hostname) ? undefined : req.hostname,
+    });
   }
 }
 
 // http - can be given to http.get({ agent, ... })
 export class CircuitHttpAgent extends http.Agent {
   circuit: Circuit
-  createConnection: (req: ClientRequestArgs, opts: http.AgentOptions) => Duplex
   constructor (circuit: Circuit, opts?: http.AgentOptions) {
     super(opts)
     this.circuit = circuit
-    this.createConnection = makeHttpCreateConnectionFnForCircuit(circuit)
+  }
+  createConnection (req: ClientRequestArgs): Duplex {
+    return makeNodeDuplexStreamForCircuit(this.circuit, req)
   }
 }
 
-export function makeHttpCreateConnectionFnForCircuit (circuit: Circuit) {
-  return (req: ClientRequestArgs): Duplex => {
-    const urlDetails = url.parse(`//${req.hostname}:${req.port}`, false, true)
-    const port = urlDetails.port ? Number.parseInt(urlDetails.port, 10) : 443
-    const target = `${urlDetails.hostname}:${port}`
-    const circuitStream = circuit.openStream(target)
-    const duplexNodeStream = circuitStreamToNodeDuplex(circuitStream)
-    
-    // Nodejs docs suggest this returns a Socket but in reality it returns a ClientRequest (?)
-    // called by 'node:_http_client' via 'node-fetch' so I'm adding it here
-    duplexNodeStream.setTimeout = () => {}
-    
-    return duplexNodeStream
-  }
+export function makeNodeDuplexStreamForCircuit(circuit: Circuit, req: ClientRequestArgs): Duplex {
+  const urlDetails = url.parse(`//${req.hostname}:${req.port}`, false, true)
+  const port = urlDetails.port ? Number.parseInt(urlDetails.port, 10) : 443
+  const target = `${urlDetails.hostname}:${port}`
+  const circuitStream = circuit.openStream(target)
+  const duplexStream = circuitStreamToNodeDuplex(circuitStream)
+
+  // Nodejs docs suggest this can return a Duplex but it frequently returns a Socket
+  // and `node-fetch` seems to expect it to return a ClientRequest (?)
+  // "setTimeout" is called by 'node:_http_client' via 'node-fetch'
+  // adding a stub here to prevent errors
+  ;(duplexStream as any).setTimeout = () => { console.warn('CircuitHttpAgent - setTimeout stub called') }
+
+  return duplexStream
 }
 
 // TODO: this should be replaced by "circuitStreamToNodeDuplex" when the issue can be resolved
@@ -61,12 +83,12 @@ export function proxyCircuitStream (circuitStream: CircuitStream, inStream: Read
   })
   circuitStream.on('end', (err) => {
     if (err) {
-      console.log('circuit disconnected with error')
+      console.log('circuitstream  disconnected with error')
       console.error(err)
       outStream.end()
       return
     }
-    console.log('circuit disconnected')
+    console.log('circuitstream  disconnected')
     outStream.end()
   })
   inStream.on('data', (data) => {
@@ -85,6 +107,7 @@ export function proxyCircuitStream (circuitStream: CircuitStream, inStream: Read
 export const circuitStreamToNodeDuplex = (circuitStream: CircuitStream): Duplex => {
   console.log('circuitStreamToNodeDuplex')
   // write into circuitStream
+  const writer = circuitStream.sink.getWriter()
   const nodeDuplexStream = new Duplex({
     read(size) {
       // no means of triggering read
@@ -92,7 +115,7 @@ export const circuitStreamToNodeDuplex = (circuitStream: CircuitStream): Duplex 
     write(chunk, encoding, callback) {
       console.log('writing to circuitStream')
 
-      circuitStream.sink.getWriter().write(chunk)
+      writer.write(chunk)
       .then(() => {
         callback()
       })
@@ -116,7 +139,14 @@ export const circuitStreamToNodeDuplex = (circuitStream: CircuitStream): Duplex 
     reader.releaseLock()
   })
   circuitStream.on('end', (err) => {
-    nodeDuplexStream.end(err)
+    if (err) {
+      console.log('circuit stream disconnected with error')
+      console.error(err)
+      nodeDuplexStream.destroy(err)
+      return
+    }
+    console.log('circuit stream disconnected')
+    nodeDuplexStream.destroy()
   })
   return nodeDuplexStream
 }
