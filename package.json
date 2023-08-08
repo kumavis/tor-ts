@@ -15,14 +15,14 @@
   "devDependencies": {
     "@types/node": "^20.2.5",
     "ava": "^5.3.0",
-    "nodemon": "^2.0.22",
+    "pm2": "^5.3.0",
     "tsx": "^3.12.7",
     "typescript": "^5.0.4"
   },
   "scripts": {
-    "dev": "nodemon",
-    "test": "ava src/*.spec.ts",
-    "test:dev": "nodemon --exec 'yarn ava'"
+    "dev": "pm2 start --no-daemon scripts/dev.config.cjs",
+    "test": "tsx ./node_modules/.bin/ava src/*.spec.ts",
+    "test:dev": "pm2 start --no-daemon scripts/test-dev.config.cjs"
   },
   "ava": {
     "extensions": {
