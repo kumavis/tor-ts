@@ -43,7 +43,6 @@ export default {
     "node:http": require.resolve("stream-http"),
     "node:https": require.resolve("https-browserify"),
     "node:querystring": require.resolve("querystring-es3"),
-    "node:fs": false,
     "node:assert": require.resolve("assert/"),
     "node:crypto": require.resolve("crypto-browserify"),
     "node:events": require.resolve("events/"),
