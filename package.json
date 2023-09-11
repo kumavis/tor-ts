@@ -14,15 +14,31 @@
   },
   "devDependencies": {
     "@types/node": "^20.2.5",
+    "assert": "^2.1.0",
     "ava": "^5.3.0",
+    "buffer": "^6.0.3",
+    "crypto-browserify": "^3.12.0",
+    "events": "^3.3.0",
+    "https-browserify": "^1.0.0",
+    "net-browserify": "^0.2.4",
     "pm2": "^5.3.0",
+    "querystring-es3": "^0.2.1",
+    "stream-browserify": "^3.0.0",
+    "stream-http": "^3.2.0",
+    "tls-browserify": "^0.2.2",
+    "ts-loader": "^9.4.4",
     "tsx": "^3.12.7",
-    "typescript": "^5.0.4"
+    "typescript": "^5.0.4",
+    "url": "^0.11.2",
+    "util": "^0.12.5",
+    "webpack": "^5.88.2",
+    "webpack-cli": "^5.1.4"
   },
   "scripts": {
     "dev": "pm2 start --no-daemon scripts/dev.config.cjs",
     "test": "tsx ./node_modules/.bin/ava src/*.spec.ts",
-    "test:dev": "pm2 start --no-daemon scripts/test-dev.config.cjs"
+    "test:dev": "pm2 start --no-daemon scripts/test-dev.config.cjs",
+    "build": "webpack"
   },
   "ava": {
     "extensions": {
