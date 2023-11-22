@@ -18,4 +18,4 @@ current implementation status:
 - [ ] exit relay implementation
 - [ ] directory authority relay implementation
 - [ ] hidden service implementation
-
+- [ ] browser support via [Snowflake](https://snowflake.torproject.org/)
