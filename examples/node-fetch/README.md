@@ -3,9 +3,9 @@
 Node fetch over tor. Uses `node-fetch` package to enable use of the tor `http.Agent`.
 
 
-### requirements
+### note
 
-this currently expects a chutney testnet running the `basic-min` network in the background
+this demo seems to be flakey and does not always succeed.
 
 ### usage
 

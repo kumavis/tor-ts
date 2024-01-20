@@ -340,24 +340,24 @@ export class Circuit {
   }
 
   // TODO: delete?
-  async open (desination: string): Promise<CircuitStream> {
-    const stream = this.createStream(desination)
+  async open (destination: string): Promise<CircuitStream> {
+    const stream = this.createStream(destination)
     await this.performStreamHandshake(stream)
     return stream
   }
 
-  openStream (desination: string): CircuitStream {
-    const stream = this.createStream(desination)
+  openStream (destination: string): CircuitStream {
+    const stream = this.createStream(destination)
     // kick off handshake, but dont wait for it
     this.performStreamHandshake(stream)
     return stream
   }
 
-  createStream (desination: string): CircuitStream {
+  createStream (destination: string): CircuitStream {
     const streamId = ++this.lastStreamId
     const stream = new CircuitStream()
     stream.streamId = streamId
-    stream.destination = desination
+    stream.destination = destination
     // TODO better to use event emitter so its self-contained?
     stream.write = async (data: Buffer) => {
       await stream.connectionPromiseKit.promise

@@ -6,22 +6,19 @@ import url from 'url'
 import { Circuit, CircuitStream } from './circuit'
 import { Readable, Writable, Duplex } from 'stream'
 
-
-export const getCircuitAgentForUrl = (circuit: Circuit, target: string, opts: { skipTls }): CircuitHttpsAgent | CircuitHttpAgent => {
-  const urlDetails = url.parse(target, false, true)
-  const isHttps = urlDetails.protocol === 'https:'
-  const agent = isHttps ?
-    new CircuitHttpsAgent(circuit)
-    : new CircuitHttpAgent(circuit)
-  if (isHttps && opts.skipTls) {
-    (agent as CircuitHttpsAgent).skipTls = opts.skipTls
+// Node HTTP Agent https://nodejs.org/docs/latest-v20.x/api/http.html#class-httpagent
+export const getTorAgentForUrl = (circuit: Circuit, target: string): CircuitHttpsAgent | CircuitHttpAgent => {
+  const urlDetails = url.parse(target, false, true);
+  const isHttps = urlDetails.protocol === 'https:';
+  if (isHttps) {
+    return new CircuitHttpsAgent(circuit);
+  } else {
+    return new CircuitHttpAgent(circuit);
   }
-  return agent
 }
 
-// https - can be given to https.get({ agent, ... })
+// Node HTTPS Agent https://nodejs.org/docs/latest-v20.x/api/https.html#class-httpsagent
 export class CircuitHttpsAgent extends https.Agent {
-  skipTls = false
   circuit: Circuit
   constructor (circuit: Circuit, opts?: http.AgentOptions) {
     super(opts)
@@ -29,11 +26,6 @@ export class CircuitHttpsAgent extends https.Agent {
   }
   createConnection (req: ClientRequestArgs): Duplex {
     const duplexStream = makeNodeDuplexStreamForCircuit(this.circuit, req)
-    // when used with "http-proxy" they handle TLS themselves (?)
-    // but they still need a https.Agent derived class
-    if (this.skipTls) {
-      return duplexStream
-    }
     // re-apply TLS as per https://github.com/TooTallNate/proxy-agents/blob/d5cdaa1b774c699c75b543eb4b112290d261e321/packages/https-proxy-agent/src/index.ts#L144
     // TODO: need to pass all options in here?
     return tls.connect({

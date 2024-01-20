@@ -2,13 +2,10 @@
 
 Node Proxy Server for http/https/websockets over tor.
 
-For http/ws proxying, uses `http-proxy` with a `createConnection` parameter from `makeHttpCreateConnectionFnForCircuit`
+For http/ws proxying, uses `http-proxy` with a Node HTTP Agent.
 For https proxying, uses simple stream forwarding via `proxyCircuitStreamDuplex` / `circuitStreamToNodeDuplex`
 
-
-### requirements
-
-this currently expects a chutney testnet running the `basic-min` network in the background
+This demo establishes a single tor circuit and on it opens up new a tor stream for each request.
 
 ### usage
 
