@@ -97,7 +97,6 @@ export function proxyCircuitStream (circuitStream: CircuitStream, inStream: Read
 }
 
 export const circuitStreamToNodeDuplex = (circuitStream: CircuitStream): Duplex => {
-  console.log('circuitStreamToNodeDuplex')
   // write into circuitStream
   const writer = circuitStream.sink.getWriter()
   const nodeDuplexStream = new Duplex({

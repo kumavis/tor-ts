@@ -84,9 +84,36 @@ async function requestOnionData ({ flags = [], ...opts } = {}) {
   return relays
 }
 
+// perform fetch with retry and delay
+const fetchWithRetry = async (url: string, opts: any = {}) => {
+  const maxRetries = 3;
+  const retryDelay = 500;
+  let retries = 0;
+  while (true) {
+    try {
+      const response = await fetch(url, opts);
+      if (!response.ok) {
+        throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
+      }
+      return response;
+    } catch (err) {
+      retries++;
+      if (retries > maxRetries) {
+        throw err;
+      }
+      await new Promise(resolve => setTimeout(resolve, retryDelay));
+    }
+  }
+};
+
+// this is "dangerous" because we're performing it over http
 export async function dangerouslyLookupOnionKey (peerIpPort: string, rsaIdDigest: Buffer) {
   const url = `http://${peerIpPort}/tor/server/fp/${rsaIdDigest.toString('hex').toUpperCase()}`
-  const directoryRecord = await (await fetch(url)).text()
+  const response = await fetchWithRetry(url)
+  if (!response.ok) {
+    throw new Error(`Failed to query peer for onion key: ${response.status} ${response.statusText}`)
+  }
+  const directoryRecord = await response.text()
   // console.log('fp lookup:', directoryRecord)
   const ntorOnionKeyText = extractNtorOnionKey(directoryRecord)
   // console.log('dangerouslyLookupOnionKey', ntorOnionKeyText)
@@ -97,7 +124,11 @@ export async function dangerouslyLookupOnionKey (peerIpPort: string, rsaIdDigest
 
 export async function downloadMicrodescFromDirectory (directoryServerIpPort: string): string {
   const url = `http://${directoryServerIpPort}/tor/status-vote/current/consensus-microdesc`
-  const directoryRecord = await (await fetch(url)).text()
+  const response = await fetchWithRetry(url)
+  if (!response.ok) {
+    throw new Error(`Failed to query directory for microdesc: ${response.status} ${response.statusText}`)
+  }
+  const directoryRecord = await response.text()
   // console.log('microdesc lookup:', directoryRecord)
   return directoryRecord
 }
@@ -179,6 +210,7 @@ export function parseRelaysFromMicroDesc (microDescContent: string): MicroDescNo
   return relayInfos;
 }
 
+// this is "dangerous" because we're performing it over http
 export async function dangerouslyLookupPeerInfo (directoryServer: string, nodeInfo: MicroDescNodeInfo) {
   const onionKey = await dangerouslyLookupOnionKey(directoryServer, nodeInfo.rsaIdDigest)
   const peerInfo = microDescNodeInfoToPeerInfo(nodeInfo, onionKey)
