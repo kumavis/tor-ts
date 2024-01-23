@@ -1,7 +1,7 @@
 import { Circuit, PeerInfo } from "../circuit"
 import { TlsChannelConnection } from "../channel"
 import { MicroDescNodeInfo, dangerouslyLookupPeerInfo, downloadMicrodescFromDirectory, parseRelaysFromMicroDesc } from "./directory"
-import { pickRelayWithFlags, pickRelayWithFlagsAndVerify } from "./util"
+import { pickRelayWithFlags } from "./util"
 import mainnetDirectoryAuthorities from '../directory-authorities.json'
 
 const getRandomDirectoryAuthority = () => {
@@ -23,12 +23,14 @@ export async function getRandomCircuitPath () {
     }
   }
   // console.log('microdesc nodeinfos downloaded from', directoryServer)
+  // console.log('microdesc content:', microDescContent)
 
   const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
   if (microDescNodeInfos.length === 0) {
     console.warn('microdesc content:', microDescContent)
     throw new Error(`Failed to parwse relays from directory server (${directoryServer}). No relays parsed from microdesc.`)
   }
+  // console.log('microdesc nodeinfos parsed', microDescNodeInfos)
 
   // console.log('constructing circuit plan')
   const circuitPlan: Array<MicroDescNodeInfo> = [];
