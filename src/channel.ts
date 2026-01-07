@@ -20,11 +20,14 @@ import type {
 } from './messaging.ts';
 import { sha256, sha1 } from './util.ts';
 import type { PeerInfo } from './circuit.ts';
+import { getTime as defaultGetTime } from './time.ts';
+import type { GetTime } from './time.ts';
 
 const defaultLinkSupportedVersions = [3, 4, 5];
 
 export class ChannelConnection {
   isInitiator: boolean;
+  getTime: GetTime;
   incommingCommands: EventEmitter;
   state: {
     linkProtocolVersion: number | undefined;
@@ -44,8 +47,12 @@ export class ChannelConnection {
   _incommingHandshakeDigestData: any;
   _outgoingHandshakeDigestData: any;
 
-  constructor({ isInitiator = true } = {}) {
+  constructor({
+    isInitiator = true,
+    getTime = defaultGetTime,
+  }: { isInitiator?: boolean; getTime?: GetTime } = {}) {
     this.isInitiator = isInitiator;
+    this.getTime = getTime;
     this.incommingCommands = new EventEmitter();
     this.state = {
       linkProtocolVersion: undefined,
@@ -63,7 +70,7 @@ export class ChannelConnection {
 
   async performHandshake() {
     // TODO: use NETINFO timestamp to determine clock skew
-    const now = Date.now();
+    const now = this.getTime();
     const clockSkew = 0;
 
     const handshakePromise = this.promiseForHandshake();

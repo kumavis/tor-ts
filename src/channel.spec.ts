@@ -43,21 +43,18 @@ test('v3 handshake', async (t) => {
 });
 
 test('v5 handshake', async (t) => {
-  const originalDateNow = Date.now;
-  Date.now = () => new Date('2023-05-31T20:00:00Z').valueOf();
-  try {
-    const connection = new ChannelConnection({ isInitiator: true });
-    const outboundTraffic: Buffer[] = [];
-    connection.sendData = (data) => outboundTraffic.push(data);
-    connection.peerConnectionDetails = {
-      cert: { raw: v5HandshakeFixture.peerCert } as any,
-      addressInfo: { port: 443, family: 'IPv4', address: '127.0.0.1' },
-    };
-    const handshakeCompleteP = connection.performHandshake();
-    connection.onData(v5HandshakeFixture.serverHello);
-    await handshakeCompleteP;
-    t.pass();
-  } finally {
-    Date.now = originalDateNow;
-  }
+  const connection = new ChannelConnection({
+    isInitiator: true,
+    getTime: () => new Date('2023-05-31T20:00:00Z').valueOf(),
+  });
+  const outboundTraffic: Buffer[] = [];
+  connection.sendData = (data) => outboundTraffic.push(data);
+  connection.peerConnectionDetails = {
+    cert: { raw: v5HandshakeFixture.peerCert } as any,
+    addressInfo: { port: 443, family: 'IPv4', address: '127.0.0.1' },
+  };
+  const handshakeCompleteP = connection.performHandshake();
+  connection.onData(v5HandshakeFixture.serverHello);
+  await handshakeCompleteP;
+  t.pass();
 });
