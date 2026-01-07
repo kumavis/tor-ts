@@ -1,11 +1,11 @@
-import assert from "node:assert";
-import crypto from "node:crypto";
-import { circuitIdLengthForProtocolVersion } from './circuit.ts'
-import { BytesReader, bufferFromUint, sha256 } from "./util.ts";
+import assert from 'node:assert';
+import crypto from 'node:crypto';
+import { circuitIdLengthForProtocolVersion } from './circuit.ts';
+import { BytesReader, bufferFromUint, sha256 } from './util.ts';
 
 //  PAYLOAD_LEN -- The longest allowable cell payload, in bytes. (509)
-const PAYLOAD_LEN = 509
-export const RELAY_PAYLOAD_LEN = PAYLOAD_LEN - 11
+const PAYLOAD_LEN = 509;
+export const RELAY_PAYLOAD_LEN = PAYLOAD_LEN - 11;
 
 // The 'Command' field of a fixed-length cell holds one of the following
 // values:
@@ -23,7 +23,7 @@ export const RELAY_PAYLOAD_LEN = PAYLOAD_LEN - 11
 // 11 -- CREATED2   (Extended CREATED cell)    (See Sec 5.1)
 // 12 -- PADDING_NEGOTIATE   (Padding negotiation)    (See Sec 7.2)
 
-// Variable-length command values are:  
+// Variable-length command values are:
 
 // 7 -- VERSIONS    (Negotiate proto version) (See Sec 4)
 // 128 -- VPADDING  (Variable-length padding) (See Sec 7.2)
@@ -72,12 +72,14 @@ const messageCellNames = {
   [MessageCellType.AUTH_CHALLENGE]: 'AUTH_CHALLENGE',
   [MessageCellType.AUTHENTICATE]: 'AUTHENTICATE',
   [MessageCellType.AUTHORIZE]: 'AUTHORIZE',
-}
+};
 
 // On a version 3 or
 // higher connection, variable-length cells are indicated by a command
 // byte equal to 7 ("VERSIONS"), or greater than or equal to 128.
-const variableLengthCells = Object.values(MessageCellType).filter((code: number) => code === 7 || code >= 123);
+const variableLengthCells = Object.values(MessageCellType).filter(
+  (code: number) => code === 7 || code >= 123
+);
 
 export enum AddressTypes {
   // [04] IPv4.
@@ -111,104 +113,104 @@ export enum LinkSpecifierTypes {
 export const HandshakeTypes = {
   TAP: 0x0000,
   NTOR: 0x0002,
-}
+};
 
 export type MessageCell = {
-  data: Buffer,
-  circId: Buffer,
-  command: MessageCellType,
-  length: number,
-  payloadBytes: Buffer,
-  message: any,
-  commandName: string,
-}
+  data: Buffer;
+  circId: Buffer;
+  command: MessageCellType;
+  length: number;
+  payloadBytes: Buffer;
+  message: any;
+  commandName: string;
+};
 
 export type CellVersions = {
-  versions: number[]
+  versions: number[];
 };
 
 export type Certificate = {
-  type: number,
-  body: Buffer,
-}
+  type: number;
+  body: Buffer;
+};
 
 export type CellCerts = {
-  certs: Certificate[]
+  certs: Certificate[];
 };
 
 export type CellAuthenticate = {
-  type: number,
-  auth: Buffer,
+  type: number;
+  auth: Buffer;
 };
 
 export type CellCreate2 = {
-  handshake: Create2ClientHandshake,
+  handshake: Create2ClientHandshake;
 };
 
 export type CellCreated2 = {
-  handshake: Create2ServerHandshake,
+  handshake: Create2ServerHandshake;
 };
 
 export type CellDestroy = {
-  reason: number,
+  reason: number;
 };
 
 export type CellAuthChallenge = {
-  challenge: Buffer,
-  methods: Array<number>,
+  challenge: Buffer;
+  methods: Array<number>;
 };
 
 export type CellNetInfo = {
-  time: number,
-  otherAddress: NetInfoAddress,
-  addresses: Array<NetInfoAddress>,
+  time: number;
+  otherAddress: NetInfoAddress;
+  addresses: Array<NetInfoAddress>;
 };
 
 export type CellRelay = {
-  relayCommand: number,
-  recognized?: Buffer,
-  streamId: number,
-  integrity?: Buffer,
-  data: Buffer,
-}
+  relayCommand: number;
+  recognized?: Buffer;
+  streamId: number;
+  integrity?: Buffer;
+  data: Buffer;
+};
 
 export type CellRelayUnparsed = {
-  payload: Buffer,
-}
+  payload: Buffer;
+};
 
 export type LinkSpecifier = {
-  type: LinkSpecifierTypes,
-  data: Buffer,
-}
+  type: LinkSpecifierTypes;
+  data: Buffer;
+};
 
 export type NetInfoAddress = {
-  type: AddressTypes,
-  address: string,
-}
+  type: AddressTypes;
+  address: string;
+};
 
 export type AddressAndPort = {
-  type: AddressTypes,
-  ip: string,
-  port: number,
-}
+  type: AddressTypes;
+  ip: string;
+  port: number;
+};
 
 export type Create2ClientHandshake = {
-  type: number,
-  data: Buffer,
-}
+  type: number;
+  data: Buffer;
+};
 
 export type Create2ServerHandshake = {
-  data: Buffer,
-}
+  data: Buffer;
+};
 
 const cellParsers = {
   [MessageCellType.VERSIONS]: (reader: BytesReader): CellVersions => {
-    const versions = []
+    const versions = [];
     for (let i = 0; i < reader.length; i += 2) {
-      const version = reader.readUIntBE(2)
-      versions.push(version)
+      const version = reader.readUIntBE(2);
+      versions.push(version);
     }
-    return { versions }
+    return { versions };
   },
   [MessageCellType.CERTS]: (reader: BytesReader): CellCerts => {
     // N: Number of certs in cell            [1 octet]
@@ -224,28 +226,28 @@ const cellParsers = {
     // 5: TLS link certificate, signed with ed25519 signing key.
     // 6: Ed25519 AUTHENTICATE cell key, signed with ed25519 signing key.
     // 7: Ed25519 identity, signed with RSA identity.
-    const certs = []
-    const numCerts = reader.readUIntBE(1)
+    const certs = [];
+    const numCerts = reader.readUIntBE(1);
     for (let i = 0; i < numCerts; i++) {
-      const type = reader.readUIntBE(1)
-      const certLength = reader.readUIntBE(2)
-      const body = reader.readBytes(certLength)
-      certs.push({ type, body })
+      const type = reader.readUIntBE(1);
+      const certLength = reader.readUIntBE(2);
+      const body = reader.readBytes(certLength);
+      certs.push({ type, body });
     }
-    return { certs }
+    return { certs };
   },
   [MessageCellType.AUTH_CHALLENGE]: (reader: BytesReader): CellAuthChallenge => {
     // Challenge [32 octets]
     // N_Methods [2 octets]
     // Methods   [2 * N_Methods octets]
-    const challenge = reader.readBytes(32)
-    const numMethods = reader.readUIntBE(2)
-    const methods = []
+    const challenge = reader.readBytes(32);
+    const numMethods = reader.readUIntBE(2);
+    const methods = [];
     for (let i = 0; i < numMethods; i++) {
-      const method = reader.readUIntBE(2)
-      methods.push(method)
+      const method = reader.readUIntBE(2);
+      methods.push(method);
     }
-    return { challenge, methods }
+    return { challenge, methods };
   },
   [MessageCellType.NETINFO]: (reader: BytesReader): CellNetInfo => {
     //   TIME       (Timestamp)                     [4 bytes]
@@ -265,12 +267,12 @@ const cellParsers = {
     //  [06] IPv6.
     // ALEN MUST be 4 when ATYPE is 0x04 (IPv4) and 16 when ATYPE is 0x06
     // (IPv6).
-    const time = reader.readUIntBE(4)
-    const otherAddress = readNetInfoAddress(reader)
+    const time = reader.readUIntBE(4);
+    const otherAddress = readNetInfoAddress(reader);
     const numMyAddresses = reader.readUIntBE(1);
     const addresses = [];
     for (let j = 0; j < numMyAddresses; j++) {
-      const address = readNetInfoAddress(reader)
+      const address = readNetInfoAddress(reader);
       if (address !== undefined) {
         addresses.push(address);
       }
@@ -281,10 +283,10 @@ const cellParsers = {
     // AuthType                              [2 octets]
     // AuthLen                               [2 octets]
     // Authentication                        [AuthLen octets]
-    const type = reader.readUIntBE(2)
-    const authLength = reader.readUIntBE(2)
-    const auth = reader.readBytes(authLength)
-    return { type, auth }
+    const type = reader.readUIntBE(2);
+    const authLength = reader.readUIntBE(2);
+    const auth = reader.readBytes(authLength);
+    return { type, auth };
   },
   [MessageCellType.DESTROY]: (reader: BytesReader): CellDestroy => {
     // The payload of a DESTROY and RELAY_TRUNCATED cell contains a single
@@ -312,38 +314,38 @@ const cellParsers = {
     // 10 -- TIMEOUT         (Circuit construction took too long)
     // 11 -- DESTROYED       (The circuit was destroyed w/o client TRUNCATE)
     // 12 -- NOSUCHSERVICE   (Request for unknown hidden service)
-    const reason = reader.readUIntBE(1)
-    return { reason }
+    const reason = reader.readUIntBE(1);
+    return { reason };
   },
   [MessageCellType.CREATED2]: (reader: BytesReader): CellCreated2 => {
     // HLEN      (Server Handshake Data Len) [2 bytes]
     // HDATA     (Server Handshake Data)     [HLEN bytes]
-    const handshakeLength = reader.readUIntBE(2)
-    const handshakeData = reader.readBytes(handshakeLength)
+    const handshakeLength = reader.readUIntBE(2);
+    const handshakeData = reader.readBytes(handshakeLength);
     const handshake = {
       data: handshakeData,
-    }
-    return { handshake }
+    };
+    return { handshake };
   },
   [MessageCellType.RELAY]: (reader: BytesReader): CellRelayUnparsed => {
     // we dont want to attempt to parse this here because its likely encrypted
-    const payload = reader.readRemainder()
-    return { payload }
-  }
-}
+    const payload = reader.readRemainder();
+    return { payload };
+  },
+};
 
-export const parseCreate2Cell = function(data: Buffer): CellCreated2 {
-  const reader = new BytesReader(data)
-  return cellParsers[MessageCellType.CREATED2](reader)
-}
+export const parseCreate2Cell = function (data: Buffer): CellCreated2 {
+  const reader = new BytesReader(data);
+  return cellParsers[MessageCellType.CREATED2](reader);
+};
 
 const cellSerializers = {
   [MessageCellType.VERSIONS]: ({ versions }: CellVersions) => {
-    const payloadBytes = Buffer.alloc(versions.length * 2)
+    const payloadBytes = Buffer.alloc(versions.length * 2);
     versions.forEach((version, i) => {
-      payloadBytes.writeUIntBE(version, i * 2, 2)
-    })
-    return payloadBytes
+      payloadBytes.writeUIntBE(version, i * 2, 2);
+    });
+    return payloadBytes;
   },
   [MessageCellType.CERTS]: ({ certs }: CellCerts) => {
     // N: Number of certs in cell            [1 octet]
@@ -354,34 +356,23 @@ const cellSerializers = {
     const payloadBytes = Buffer.concat([
       Buffer.from([certs.length]),
       ...certs.map(({ type, body }) => {
-        return Buffer.concat([
-          bufferFromUint(1, type),
-          bufferFromUint(2, body.length),
-          body,
-        ])
+        return Buffer.concat([bufferFromUint(1, type), bufferFromUint(2, body.length), body]);
       }),
-    ])
-    return payloadBytes
+    ]);
+    return payloadBytes;
   },
-  [MessageCellType.AUTHENTICATE]: ({
-    type,
-    auth,
-  }: CellAuthenticate) => {
+  [MessageCellType.AUTHENTICATE]: ({ type, auth }: CellAuthenticate) => {
     // AuthType                              [2 octets]
     // AuthLen                               [2 octets]
     // Authentication                        [AuthLen octets]
     const payloadBytes = Buffer.concat([
-        bufferFromUint(2, type),
-        bufferFromUint(2, auth.length),
-        auth,
-    ])
-    return payloadBytes
+      bufferFromUint(2, type),
+      bufferFromUint(2, auth.length),
+      auth,
+    ]);
+    return payloadBytes;
   },
-  [MessageCellType.NETINFO]: ({
-    time,
-    otherAddress,
-    addresses,
-  }: CellNetInfo) => {
+  [MessageCellType.NETINFO]: ({ time, otherAddress, addresses }: CellNetInfo) => {
     //   TIME       (Timestamp)                     [4 bytes]
     //   OTHERADDR  (Other OR's address)            [variable]
     //      ATYPE   (Address type)                  [1 byte]
@@ -405,10 +396,10 @@ const cellSerializers = {
       serializeNetInfoAddress(otherAddress),
       bufferFromUint(1, addresses.length),
       ...addresses.map((addressInfo) => {
-        return serializeNetInfoAddress(addressInfo)
-      }
-    )])
-    return payloadBytes
+        return serializeNetInfoAddress(addressInfo);
+      }),
+    ]);
+    return payloadBytes;
   },
   [MessageCellType.CREATE2]: ({ handshake }: CellCreate2) => {
     // HTYPE     (Client Handshake Type)     [2 bytes]
@@ -418,8 +409,8 @@ const cellSerializers = {
       bufferFromUint(2, handshake.type),
       bufferFromUint(2, handshake.data.length),
       handshake.data,
-    ])
-    return payloadBytes
+    ]);
+    return payloadBytes;
   },
   [MessageCellType.RELAY]: ({ relayCommand, streamId, integrity, data }: CellRelay): Buffer => {
     // Relay command           [1 byte]
@@ -430,10 +421,13 @@ const cellSerializers = {
     // Data                    [Length bytes]
     // Padding                 [PAYLOAD_LEN - 11 - Length bytes]
     if (integrity === undefined) {
-      integrity = Buffer.alloc(4)
+      integrity = Buffer.alloc(4);
     }
-    assert.equal(integrity.length, 4, 'integrity should be 4 bytes')
-    assert(data.length <= RELAY_PAYLOAD_LEN, `data should be less than ${RELAY_PAYLOAD_LEN} bytes, got ${data.length} bytes`)
+    assert.equal(integrity.length, 4, 'integrity should be 4 bytes');
+    assert(
+      data.length <= RELAY_PAYLOAD_LEN,
+      `data should be less than ${RELAY_PAYLOAD_LEN} bytes, got ${data.length} bytes`
+    );
     const payloadBytes = Buffer.concat([
       bufferFromUint(1, relayCommand),
       // When sending cells, the unencrypted 'recognized' MUST be set to zero.
@@ -447,30 +441,29 @@ const cellSerializers = {
       // Implementations SHOULD fill this field with four zero-valued bytes, followed by as many
       // random bytes as will fit.  (If there are fewer than 4 bytes for padding,
       // then they should all be filled with zero.
-      Buffer.alloc(PAYLOAD_LEN - 11 - data.length)
-    ])
-    return payloadBytes
-  }
+      Buffer.alloc(PAYLOAD_LEN - 11 - data.length),
+    ]);
+    return payloadBytes;
+  },
+};
 
-}
-
-export const serializeRelayCellPayload = cellSerializers[MessageCellType.RELAY]
+export const serializeRelayCellPayload = cellSerializers[MessageCellType.RELAY];
 
 // used when updating relay cell integrity after initialization
-export function setRelayCellIntegrity (relayCellPayload: Buffer, integrity: Buffer): void {
-  assert.equal(relayCellPayload.length, PAYLOAD_LEN, `payload should be ${PAYLOAD_LEN} bytes`)
-  assert.equal(integrity.length, 4, 'integrity should be 4 bytes')
-  const integrityOffset = 1 + 2 + 2
-  relayCellPayload.set(integrity, integrityOffset)
+export function setRelayCellIntegrity(relayCellPayload: Buffer, integrity: Buffer): void {
+  assert.equal(relayCellPayload.length, PAYLOAD_LEN, `payload should be ${PAYLOAD_LEN} bytes`);
+  assert.equal(integrity.length, 4, 'integrity should be 4 bytes');
+  const integrityOffset = 1 + 2 + 2;
+  relayCellPayload.set(integrity, integrityOffset);
 }
 
-export function checkRelayCellRecognized (relayCellPayload: Buffer) {
-  const relayCellOffset = 1
-  const recognizedField = relayCellPayload.readUint16BE(relayCellOffset)
-  return recognizedField === 0
+export function checkRelayCellRecognized(relayCellPayload: Buffer) {
+  const relayCellOffset = 1;
+  const recognizedField = relayCellPayload.readUint16BE(relayCellOffset);
+  return recognizedField === 0;
 }
 
-export function parseRelayCellPayload (relayCellPayload: Buffer): CellRelay {
+export function parseRelayCellPayload(relayCellPayload: Buffer): CellRelay {
   // Relay command           [1 byte]
   // 'Recognized'            [2 bytes]
   // StreamID                [2 bytes]
@@ -478,15 +471,15 @@ export function parseRelayCellPayload (relayCellPayload: Buffer): CellRelay {
   // Length                  [2 bytes]
   // Data                    [Length bytes]
   // Padding                 [PAYLOAD_LEN - 11 - Length bytes]
-  const reader = new BytesReader(relayCellPayload)
-  const relayCommand = reader.readUIntBE(1)
-  const recognized = reader.readBytes(2)
-  const streamId = reader.readUIntBE(2)
-  const integrity = reader.readBytes(4)
-  const length = reader.readUIntBE(2)
-  const data = reader.readBytes(length)
-  const _padding = reader.readBytes(PAYLOAD_LEN - 11 - length)
-  return { relayCommand, recognized, streamId, integrity, data }
+  const reader = new BytesReader(relayCellPayload);
+  const relayCommand = reader.readUIntBE(1);
+  const recognized = reader.readBytes(2);
+  const streamId = reader.readUIntBE(2);
+  const integrity = reader.readBytes(4);
+  const length = reader.readUIntBE(2);
+  const data = reader.readBytes(length);
+  const _padding = reader.readBytes(PAYLOAD_LEN - 11 - length);
+  return { relayCommand, recognized, streamId, integrity, data };
 }
 
 function serializeCell(commandCode: number, params: any, protocolVersion?: number) {
@@ -505,30 +498,31 @@ function serializeCell(commandCode: number, params: any, protocolVersion?: numbe
   //      Length                                [2 octets; big-endian integer]
   //      Payload (some commands MAY pad)       [Length bytes]
 
-  const cellSerializer = cellSerializers[commandCode]
+  const cellSerializer = cellSerializers[commandCode];
   if (cellSerializer === undefined) {
-    throw new Error(`Unable to serialize command code ${commandCode} (${getCommandName(commandCode)})`)
+    throw new Error(
+      `Unable to serialize command code ${commandCode} (${getCommandName(commandCode)})`
+    );
   }
-  let circuitId = params.circuitId
+  let circuitId = params.circuitId;
   // if circuitId is unspecified, fill in a circuitId of correct length
   if (!circuitId) {
-    const circuitLength = circuitIdLengthForProtocolVersion(protocolVersion)
+    const circuitLength = circuitIdLengthForProtocolVersion(protocolVersion);
     circuitId = Buffer.alloc(circuitLength);
   }
   const payloadBytes = cellSerializer(params);
-  return serializeCellWithPayload(circuitId, commandCode, payloadBytes)
+  return serializeCellWithPayload(circuitId, commandCode, payloadBytes);
 }
 
-export function serializeCellWithPayload (circuitId: Buffer, commandCode: number, payloadBytes: Buffer) {
-  const cellData = [
-    circuitId,
-    bufferFromUint(1, commandCode),
-  ];
+export function serializeCellWithPayload(
+  circuitId: Buffer,
+  commandCode: number,
+  payloadBytes: Buffer
+) {
+  const cellData = [circuitId, bufferFromUint(1, commandCode)];
   const isVariableLength = variableLengthCells.includes(commandCode);
   if (isVariableLength) {
-    cellData.push(
-      bufferFromUint(2, payloadBytes.length)
-    );
+    cellData.push(bufferFromUint(2, payloadBytes.length));
     cellData.push(payloadBytes);
   } else {
     cellData.push(payloadBytes);
@@ -540,7 +534,7 @@ export function serializeCellWithPayload (circuitId: Buffer, commandCode: number
   return Buffer.concat(cellData);
 }
 
-function* readCellsFromData (data: Buffer, getVersion: ()=>number): Generator<MessageCell> {
+function* readCellsFromData(data: Buffer, getVersion: () => number): Generator<MessageCell> {
   const { cell, extraData } = parseCell(data, getVersion());
   yield cell;
   if (extraData.length > 0) {
@@ -548,7 +542,10 @@ function* readCellsFromData (data: Buffer, getVersion: ()=>number): Generator<Me
   }
 }
 
-function parseCell (data: Buffer, version: number | undefined): { cell: MessageCell, extraData: Buffer } {
+function parseCell(
+  data: Buffer,
+  version: number | undefined
+): { cell: MessageCell; extraData: Buffer } {
   // On a version 1 connection, each cell contains the following
   // fields:
 
@@ -568,7 +565,7 @@ function parseCell (data: Buffer, version: number | undefined): { cell: MessageC
   let commandCode: number;
   let payloadBytes: Buffer;
   let extraData: Buffer;
-  let decodedCell: MessageCell
+  let decodedCell: MessageCell;
 
   try {
     const reader = new BytesReader(data);
@@ -604,146 +601,141 @@ function parseCell (data: Buffer, version: number | undefined): { cell: MessageC
     if (commandCode !== undefined) {
       message += ` (command code ${commandCode} = ${getCommandName(commandCode)})`;
     }
-    throw new Error(message, { cause: err })
+    throw new Error(message, { cause: err });
   }
-  
 }
 
-function getCommandName (commandCode: number): string {
-  const commandCodeHex = `0x${commandCode.toString(16)}`
-  return messageCellNames[commandCode] || `<UNKNOWN:${commandCode}|${commandCodeHex}>`
+function getCommandName(commandCode: number): string {
+  const commandCodeHex = `0x${commandCode.toString(16)}`;
+  return messageCellNames[commandCode] || `<UNKNOWN:${commandCode}|${commandCodeHex}>`;
 }
 
-function readNetInfoAddress (reader: BytesReader): NetInfoAddress {
+function readNetInfoAddress(reader: BytesReader): NetInfoAddress {
   //   ATYPE   (Address type)                  [1 byte]
   //   ALEN    (Address length)                [1 byte]
   //   AVAL    (Address value in NBO)          [ALEN bytes]
-  const type = reader.readUIntBE(1)
-  const length = reader.readUIntBE(1)
-  const addressBytes = reader.readBytes(length)
+  const type = reader.readUIntBE(1);
+  const length = reader.readUIntBE(1);
+  const addressBytes = reader.readBytes(length);
   const address = parseIpAddress(addressBytes, type);
   if (type === 4 && length === 4) {
-    return { address, type }
+    return { address, type };
   }
   if (type === 6 && length === 16) {
-    return { address, type }
+    return { address, type };
   }
-  throw new Error(`Invalid address type ${type} or length ${length}`)
+  throw new Error(`Invalid address type ${type} or length ${length}`);
 }
 
-function serializeNetInfoAddress (netInfoAddress: NetInfoAddress | undefined): Buffer {
+function serializeNetInfoAddress(netInfoAddress: NetInfoAddress | undefined): Buffer {
   if (!netInfoAddress) {
     // return empty
-    return Buffer.concat([
-      bufferFromUint(1, 0),
-      bufferFromUint(1, 4),
-      Buffer.alloc(4),
-    ])
+    return Buffer.concat([bufferFromUint(1, 0), bufferFromUint(1, 4), Buffer.alloc(4)]);
   }
   const { address, type } = netInfoAddress;
-  const length = type === AddressTypes.IPv4 ? 4 : 16
+  const length = type === AddressTypes.IPv4 ? 4 : 16;
   return Buffer.concat([
     bufferFromUint(1, type),
     bufferFromUint(1, length),
     ipAddressToBuffer(address, type),
-  ])
+  ]);
 }
 
-function parseIpAddress (address: Buffer, type: number): string {
+function parseIpAddress(address: Buffer, type: number): string {
   if (type === AddressTypes.IPv4) {
     return address.join('.');
   } else if (type === AddressTypes.IPv6) {
     return address.join(':');
   } else {
-    throw new Error(`Invalid address type ${type}`)
+    throw new Error(`Invalid address type ${type}`);
   }
 }
 
-function ipAddressToBuffer (ipAddress: string, type: number): Buffer {
+function ipAddressToBuffer(ipAddress: string, type: number): Buffer {
   if (type === AddressTypes.IPv4) {
     const parts = ipAddress.split('.');
     if (parts.length !== 4) {
-      throw new Error(`Invalid IP address ${ipAddress}`)
+      throw new Error(`Invalid IP address ${ipAddress}`);
     }
-    const bytes = parts.map(part => parseInt(part, 10));
+    const bytes = parts.map((part) => parseInt(part, 10));
     return Buffer.from(bytes);
   } else if (type === AddressTypes.IPv6) {
     const parts = ipAddress.split(':');
     if (parts.length !== 8) {
-      throw new Error(`Invalid IP address ${ipAddress}`)
+      throw new Error(`Invalid IP address ${ipAddress}`);
     }
-    const bytes = parts.map(part => parseInt(part, 16));
+    const bytes = parts.map((part) => parseInt(part, 16));
     return Buffer.from(bytes);
   } else {
-    throw new Error(`Invalid address type ${type}`)
+    throw new Error(`Invalid address type ${type}`);
   }
 }
 
-export function addressAndPortToBuffer (address: AddressAndPort): Buffer {
-  const portBuffer = Buffer.alloc(2)
-  portBuffer.writeUInt16BE(address.port)
-  return Buffer.concat([
-    ipAddressToBuffer(address.ip, address.type),
-    portBuffer,
-  ])
+export function addressAndPortToBuffer(address: AddressAndPort): Buffer {
+  const portBuffer = Buffer.alloc(2);
+  portBuffer.writeUInt16BE(address.port);
+  return Buffer.concat([ipAddressToBuffer(address.ip, address.type), portBuffer]);
 }
 
-function addressTypeToLinkSpecifierType (addressType: AddressTypes): LinkSpecifierTypes {
+function addressTypeToLinkSpecifierType(addressType: AddressTypes): LinkSpecifierTypes {
   if (addressType === AddressTypes.IPv4) {
-    return LinkSpecifierTypes.TlsOverTcpIPv4
+    return LinkSpecifierTypes.TlsOverTcpIPv4;
   } else if (addressType === AddressTypes.IPv6) {
-    return LinkSpecifierTypes.TlsOverTcpIPv6
+    return LinkSpecifierTypes.TlsOverTcpIPv6;
   } else {
-    throw new Error(`Unable to translate address of type ${addressType} to LinkSpecifier`)
+    throw new Error(`Unable to translate address of type ${addressType} to LinkSpecifier`);
   }
 }
 
-function linkSpecifierTypeToAddressType (linkSpecifierType: LinkSpecifierTypes): { type: AddressTypes, addressByteLength: number } {
+function linkSpecifierTypeToAddressType(linkSpecifierType: LinkSpecifierTypes): {
+  type: AddressTypes;
+  addressByteLength: number;
+} {
   if (linkSpecifierType === LinkSpecifierTypes.TlsOverTcpIPv4) {
     return {
       type: AddressTypes.IPv4,
       addressByteLength: 4,
-    }
+    };
   } else if (linkSpecifierType === LinkSpecifierTypes.TlsOverTcpIPv6) {
     return {
       type: AddressTypes.IPv6,
       addressByteLength: 16,
-    }
+    };
   } else {
-    throw new Error(`Unable to translate linkSpecifier of type ${linkSpecifierType} to address`)
+    throw new Error(`Unable to translate linkSpecifier of type ${linkSpecifierType} to address`);
   }
 }
 
-export function linkSpecifierToAddressAndPort (linkSpecifier: LinkSpecifier): AddressAndPort {
-  const portByteLength = 2
-  const { type, addressByteLength } = linkSpecifierTypeToAddressType(linkSpecifier.type)
-  assert.equal(linkSpecifier.data.length, addressByteLength + portByteLength)
-  const ip = parseIpAddress(linkSpecifier.data.subarray(0, addressByteLength), type)
-  const port = linkSpecifier.data.readUInt16BE(addressByteLength)
-  return { type, ip, port }
+export function linkSpecifierToAddressAndPort(linkSpecifier: LinkSpecifier): AddressAndPort {
+  const portByteLength = 2;
+  const { type, addressByteLength } = linkSpecifierTypeToAddressType(linkSpecifier.type);
+  assert.equal(linkSpecifier.data.length, addressByteLength + portByteLength);
+  const ip = parseIpAddress(linkSpecifier.data.subarray(0, addressByteLength), type);
+  const port = linkSpecifier.data.readUInt16BE(addressByteLength);
+  return { type, ip, port };
 }
 
-export function addressAndPortToLinkSpecifier (address: AddressAndPort): LinkSpecifier {
+export function addressAndPortToLinkSpecifier(address: AddressAndPort): LinkSpecifier {
   return {
     type: addressTypeToLinkSpecifierType(address.type),
     data: addressAndPortToBuffer(address),
-  }
+  };
 }
 
-export function chunkDataForRelayDataCells (data: Buffer): Array<Buffer> {
+export function chunkDataForRelayDataCells(data: Buffer): Array<Buffer> {
   if (data.length <= RELAY_PAYLOAD_LEN) {
-    return [data]
+    return [data];
   }
-  const chunks = []
-  const reader = new BytesReader(data)
+  const chunks = [];
+  const reader = new BytesReader(data);
   while (!reader.isExhausted()) {
-    const chunk = reader.readBytes(RELAY_PAYLOAD_LEN, { allowShorter: true })
-    chunks.push(chunk)
+    const chunk = reader.readBytes(RELAY_PAYLOAD_LEN, { allowShorter: true });
+    chunks.push(chunk);
   }
-  return chunks
+  return chunks;
 }
 
-function buildAuthenticateCell ({
+function buildAuthenticateCell({
   type,
   serverHandshakeDigestData,
   clientHandshakeDigestData,
@@ -751,14 +743,13 @@ function buildAuthenticateCell ({
   clientRsa1024Key,
   responderTlsLinkCert,
 }: {
-  type: number,
-  serverHandshakeDigestData: Array<Buffer>,
-  clientHandshakeDigestData: Array<Buffer>,
-  serverRsa1024Key: Buffer,
-  clientRsa1024Key: Buffer,
-  responderTlsLinkCert: Buffer,
+  type: number;
+  serverHandshakeDigestData: Array<Buffer>;
+  clientHandshakeDigestData: Array<Buffer>;
+  serverRsa1024Key: Buffer;
+  clientRsa1024Key: Buffer;
+  responderTlsLinkCert: Buffer;
 }) {
-
   // If AuthType is 1 (meaning "RSA-SHA256-TLSSecret"), then the
   // Authentication field of the AUTHENTICATE cell contains the following:
 
@@ -792,44 +783,24 @@ function buildAuthenticateCell ({
   //       section 0.3.)
   //        [variable length]
   if (type !== 1) {
-    throw new Error('Only type 1 AUTHENTICATE supported')
+    throw new Error('Only type 1 AUTHENTICATE supported');
   }
 
   const TYPE = Buffer.from('AUTH001', 'utf8');
   const CID = Buffer.from(sha256(clientRsa1024Key));
   const SID = Buffer.from(sha256(serverRsa1024Key));
-  const SLOG = Buffer.from(
-    sha256(
-      Buffer.concat(serverHandshakeDigestData)
-    )
-  );
-  const CLOG = Buffer.from(
-    sha256(
-      Buffer.concat(clientHandshakeDigestData)
-    )
-  );
+  const SLOG = Buffer.from(sha256(Buffer.concat(serverHandshakeDigestData)));
+  const CLOG = Buffer.from(sha256(Buffer.concat(clientHandshakeDigestData)));
   const SCERT = Buffer.from(sha256(responderTlsLinkCert));
   // TODO: hmac with tls master secret
-  const TLSSECRETS = Buffer.from([])
+  const TLSSECRETS = Buffer.from([]);
   const RAND = crypto.randomBytes(24);
-  const unsignedSection = Buffer.concat([
-    TYPE,
-    CID,
-    SID,
-    SLOG,
-    CLOG,
-    SCERT,
-    TLSSECRETS,
-    RAND,
-  ]);
+  const unsignedSection = Buffer.concat([TYPE, CID, SID, SLOG, CLOG, SCERT, TLSSECRETS, RAND]);
   // TODO: sign
   const unsignedSectionHash = Buffer.from(sha256(unsignedSection));
   const sig = Buffer.from([]);
-  const signedSection = Buffer.concat([
-    unsignedSection,
-    sig,
-  ]);
-  return signedSection
+  const signedSection = Buffer.concat([unsignedSection, sig]);
+  return signedSection;
 }
 
 export {

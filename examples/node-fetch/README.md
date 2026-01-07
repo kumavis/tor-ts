@@ -2,7 +2,6 @@
 
 Node fetch over tor. Uses `node-fetch` package to enable use of the tor `http.Agent`.
 
-
 ### note
 
 this demo seems to be flakey and does not always succeed.

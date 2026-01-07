@@ -1,23 +1,23 @@
-import http from 'http'
-import httpProxy from 'http-proxy'
-import { Circuit } from '../../src/index'
-import { getTorAgentForUrl, proxyCircuitStreamDuplex } from '../../src/node'
-import { connectRandomCircuit } from '../../src/build-circuit/mainnet'
+import http from 'http';
+import httpProxy from 'http-proxy';
+import { Circuit } from '../../src/index';
+import { getTorAgentForUrl, proxyCircuitStreamDuplex } from '../../src/node';
+import { connectRandomCircuit } from '../../src/build-circuit/mainnet';
 
-main()
+main();
 
-async function main () {
-  const circuit = await setupTor()
-  setupCircuitProxyServer(circuit)
+async function main() {
+  const circuit = await setupTor();
+  setupCircuitProxyServer(circuit);
 }
 
-async function setupTor () {
-  const circuit = await connectRandomCircuit()
-  console.log('circuit established')
-  return circuit
+async function setupTor() {
+  const circuit = await connectRandomCircuit();
+  console.log('circuit established');
+  return circuit;
 }
 
-function setupCircuitProxyServer (circuit: Circuit) {
+function setupCircuitProxyServer(circuit: Circuit) {
   const port = 1234;
   const proxy = new httpProxy.createProxyServer();
 
@@ -27,11 +27,11 @@ function setupCircuitProxyServer (circuit: Circuit) {
     const agent = getTorAgentForUrl(circuit, target);
     // forward request to target and back
     proxy.web(req, res, { target, agent });
-  }
+  };
 
   const proxyWsRequest = (req, socket, head) => {
     proxy.ws(req, socket, head);
-  }
+  };
 
   const proxyHttpsRequest = (req, res) => {
     const target = req.url;
@@ -48,15 +48,13 @@ function setupCircuitProxyServer (circuit: Circuit) {
 
     // manually respond with connect success
     res.write(
-      'HTTP/1.1 200 Connection Established\r\n' +
-      'Proxy-agent: Node.js-Proxy\r\n' +
-      '\r\n'
+      'HTTP/1.1 200 Connection Established\r\n' + 'Proxy-agent: Node.js-Proxy\r\n' + '\r\n'
     );
 
     process.on('SIGINT', () => {
       req.destroy();
     });
-  }
+  };
 
   // HTTP: Setup our proxy server to proxy standard HTTP proxy requests
   const proxyServer = http.createServer(proxyHttpRequest);
@@ -76,5 +74,4 @@ function setupCircuitProxyServer (circuit: Circuit) {
       process.exit(0);
     });
   });
-
 }

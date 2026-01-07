@@ -2,7 +2,12 @@ import fs from 'fs';
 import Onionoo from 'onionoo';
 import * as url from 'node:url';
 import type { PeerInfo } from '../circuit.ts';
-import { AddressTypes, LinkSpecifier, LinkSpecifierTypes, addressAndPortToLinkSpecifier } from '../messaging.ts';
+import {
+  AddressTypes,
+  LinkSpecifier,
+  LinkSpecifierTypes,
+  addressAndPortToLinkSpecifier,
+} from '../messaging.ts';
 const __dirname = url.fileURLToPath(new URL('.', import.meta.url));
 
 // get "consensus document"
@@ -51,7 +56,6 @@ const __dirname = url.fileURLToPath(new URL('.', import.meta.url));
 //   unreachable_or_addresses: [ '[::]:443' ]
 // },
 
-
 // main()
 
 // async function main () {
@@ -59,29 +63,29 @@ const __dirname = url.fileURLToPath(new URL('.', import.meta.url));
 //   await fs.promises.writeFile(__dirname + '/directory-authorities.json', JSON.stringify(relays, null, 2))
 // }
 
-export async function getRandomDirectoryAuthority () {
-  const data = await fs.promises.readFile(__dirname + '/directory-authorities.json', 'utf8')
-  const relays = JSON.parse(data)
-  const selected = relays[Math.floor(Math.random()*relays.length)]
+export async function getRandomDirectoryAuthority() {
+  const data = await fs.promises.readFile(__dirname + '/directory-authorities.json', 'utf8');
+  const relays = JSON.parse(data);
+  const selected = relays[Math.floor(Math.random() * relays.length)];
   return selected;
 }
 
-async function requestDirectoryAuthorities (opts = {}) {
-  return requestOnionData({ flags: ['Authority'], ...opts })
+async function requestDirectoryAuthorities(opts = {}) {
+  return requestOnionData({ flags: ['Authority'], ...opts });
 }
 
-async function requestOnionData ({ flags = [], ...opts } = {}) {
+async function requestOnionData({ flags = [], ...opts } = {}) {
   const onionoo = new Onionoo();
   const query = {
     limit: 30,
     running: true,
-    search: flags.map(flag => `flag:${flag}`).join(' '),
+    search: flags.map((flag) => `flag:${flag}`).join(' '),
     order: '-consensus_weight',
     ...opts,
   };
-  const response = await onionoo.details(query)
-  const { relays } = response.body
-  return relays
+  const response = await onionoo.details(query);
+  const { relays } = response.body;
+  return relays;
 }
 
 // perform fetch with retry and delay
@@ -101,45 +105,50 @@ const fetchWithRetry = async (url: string, opts: any = {}) => {
       if (retries > maxRetries) {
         throw err;
       }
-      await new Promise(resolve => setTimeout(resolve, retryDelay));
+      await new Promise((resolve) => setTimeout(resolve, retryDelay));
     }
   }
 };
 
 // this is "dangerous" because we're performing it over http
-export async function dangerouslyLookupOnionKey (peerIpPort: string, rsaIdDigest: Buffer) {
-  const url = `http://${peerIpPort}/tor/server/fp/${rsaIdDigest.toString('hex').toUpperCase()}`
-  const response = await fetchWithRetry(url)
+export async function dangerouslyLookupOnionKey(peerIpPort: string, rsaIdDigest: Buffer) {
+  const url = `http://${peerIpPort}/tor/server/fp/${rsaIdDigest.toString('hex').toUpperCase()}`;
+  const response = await fetchWithRetry(url);
   if (!response.ok) {
-    throw new Error(`Failed to query peer for onion key: ${response.status} ${response.statusText}`)
+    throw new Error(
+      `Failed to query peer for onion key: ${response.status} ${response.statusText}`
+    );
   }
-  const directoryRecord = await response.text()
+  const directoryRecord = await response.text();
   // console.log('fp lookup:', directoryRecord)
-  const ntorOnionKeyText = extractNtorOnionKey(directoryRecord)
+  const ntorOnionKeyText = extractNtorOnionKey(directoryRecord);
   // console.log('dangerouslyLookupOnionKey', ntorOnionKeyText)
-  const ntorOnionKey = Buffer.from(ntorOnionKeyText, 'base64')
-  return ntorOnionKey
+  const ntorOnionKey = Buffer.from(ntorOnionKeyText, 'base64');
+  return ntorOnionKey;
 }
 
-
-export async function downloadMicrodescFromDirectory (directoryServerIpPort: string): Promise<string> {
-  const url = `http://${directoryServerIpPort}/tor/status-vote/current/consensus-microdesc`
-  const response = await fetchWithRetry(url)
+export async function downloadMicrodescFromDirectory(
+  directoryServerIpPort: string
+): Promise<string> {
+  const url = `http://${directoryServerIpPort}/tor/status-vote/current/consensus-microdesc`;
+  const response = await fetchWithRetry(url);
   if (!response.ok) {
-    throw new Error(`Failed to query directory for microdesc: ${response.status} ${response.statusText}`)
+    throw new Error(
+      `Failed to query directory for microdesc: ${response.status} ${response.statusText}`
+    );
   }
-  const directoryRecord = await response.text()
+  const directoryRecord = await response.text();
   // console.log('microdesc lookup:', directoryRecord)
-  return directoryRecord
+  return directoryRecord;
 }
 
-function extractNtorOnionKey (directoryRecord: string): string {
+function extractNtorOnionKey(directoryRecord: string): string {
   // ntor-onion-key RrV6Ae3gauyxgdTiIYvcRqJepNrAa4r2Fh8s0JI02wA
-  const linePrefix = 'ntor-onion-key '
-  const line = directoryRecord.split('\n').find(line => line.startsWith(linePrefix))
-  if (!line) throw new Error('no ntor-onion-key line found')
-  const ntorOnionKey = line.slice(linePrefix.length)
-  return ntorOnionKey
+  const linePrefix = 'ntor-onion-key ';
+  const line = directoryRecord.split('\n').find((line) => line.startsWith(linePrefix));
+  if (!line) throw new Error('no ntor-onion-key line found');
+  const ntorOnionKey = line.slice(linePrefix.length);
+  return ntorOnionKey;
 }
 
 export type MicroDescNodeInfo = {
@@ -159,10 +168,10 @@ export type MicroDescNodeInfo = {
   bandwidthStats?: Record<string, number>;
 };
 
-export function parseRelaysFromMicroDesc (microDescContent: string): MicroDescNodeInfo[] {
+export function parseRelaysFromMicroDesc(microDescContent: string): MicroDescNodeInfo[] {
   const lines = microDescContent.split('\n');
   let relayInfo: MicroDescNodeInfo;
-  const relayInfos: MicroDescNodeInfo[] = []
+  const relayInfos: MicroDescNodeInfo[] = [];
 
   // r test002a AB+0S6hvSEnm7ifzqh3QaYOxsm0 2038-01-01 00:00:00 127.0.0.1 5002 7002
   // m BY6mSHVSthDKuKGu8aiGKhuGkwZqJqDLs9RxY99gKYs
@@ -172,19 +181,19 @@ export function parseRelaysFromMicroDesc (microDescContent: string): MicroDescNo
   // w Bandwidth=158 Unmeasured=1
 
   for (const line of lines) {
-    const tokens = line.split(' ')
+    const tokens = line.split(' ');
     if (tokens[0] === 'r') {
       const parts = line.split(' ');
       relayInfo = {
         nickname: parts[1],
         rsaIdDigest: Buffer.from(parts[2], 'base64'),
-        publication_date: new Date(parts[3] + " " + parts[4]),
+        publication_date: new Date(parts[3] + ' ' + parts[4]),
         ip_address: parts[5],
         onion_router_port: parseInt(parts[6]),
         directory_server_port: parseInt(parts[7]),
         protocols: {},
       };
-      relayInfos.push(relayInfo)
+      relayInfos.push(relayInfo);
     } else if (tokens[0] === 'm') {
       const parts = line.split(' ');
       relayInfo.mKey = Buffer.from(parts[1], 'base64');
@@ -203,7 +212,7 @@ export function parseRelaysFromMicroDesc (microDescContent: string): MicroDescNo
       });
     } else if (tokens[0] === 'w') {
       const parts = line.split(' ');
-      relayInfo.bandwidthStats = {}
+      relayInfo.bandwidthStats = {};
       // w Bandwidth=82000 Unmeasured=1
       parts.slice(1).forEach((token) => {
         const [type, value] = token.split('=');
@@ -216,14 +225,20 @@ export function parseRelaysFromMicroDesc (microDescContent: string): MicroDescNo
 }
 
 // this is "dangerous" because we're performing it over http
-export async function dangerouslyLookupPeerInfo (directoryServer: string, nodeInfo: MicroDescNodeInfo) {
-  const onionKey = await dangerouslyLookupOnionKey(directoryServer, nodeInfo.rsaIdDigest)
-  const peerInfo = microDescNodeInfoToPeerInfo(nodeInfo, onionKey)
-  return peerInfo
+export async function dangerouslyLookupPeerInfo(
+  directoryServer: string,
+  nodeInfo: MicroDescNodeInfo
+) {
+  const onionKey = await dangerouslyLookupOnionKey(directoryServer, nodeInfo.rsaIdDigest);
+  const peerInfo = microDescNodeInfoToPeerInfo(nodeInfo, onionKey);
+  return peerInfo;
 }
 
-export function microDescNodeInfoToPeerInfo (nodeInfo: MicroDescNodeInfo, onionKey: Buffer): PeerInfo {
-  const linkSpecifiers: Array<LinkSpecifier> = []
+export function microDescNodeInfoToPeerInfo(
+  nodeInfo: MicroDescNodeInfo,
+  onionKey: Buffer
+): PeerInfo {
+  const linkSpecifiers: Array<LinkSpecifier> = [];
   // For purposes of indistinguishability, implementations SHOULD send
   //  these link specifiers, if using them, in this order:
   // [00], [02], [03], [01].
@@ -238,15 +253,17 @@ export function microDescNodeInfoToPeerInfo (nodeInfo: MicroDescNodeInfo, onionK
   //       A 32-byte Ed25519 identity fingerprint. At most one may
   //       be listed.
 
-  linkSpecifiers.push(addressAndPortToLinkSpecifier({
-    type: AddressTypes.IPv4,
-    ip: nodeInfo.ip_address,
-    port: nodeInfo.onion_router_port,
-  }))
+  linkSpecifiers.push(
+    addressAndPortToLinkSpecifier({
+      type: AddressTypes.IPv4,
+      ip: nodeInfo.ip_address,
+      port: nodeInfo.onion_router_port,
+    })
+  );
   linkSpecifiers.push({
     type: LinkSpecifierTypes.LegacyId,
     data: nodeInfo.rsaIdDigest,
-  })
+  });
   // TODO: include ed25519 linkSpecifiers if available
   // Ed25519 identity keys are not required in EXTEND2 cells, so all zero
   //  keys SHOULD be accepted. If the extending relay knows the ed25519 key from
@@ -259,9 +276,8 @@ export function microDescNodeInfoToPeerInfo (nodeInfo: MicroDescNodeInfo, onionK
     onionKey,
     rsaIdDigest: nodeInfo.rsaIdDigest,
     linkSpecifiers,
-  }
+  };
 }
-
 
 // interface MicroDesc {
 //     networkStatusVersion: number;

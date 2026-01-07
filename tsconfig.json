@@ -10,10 +10,7 @@
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "moduleDetection": "force",
-    "typeRoots": [
-      "./node_modules/@types",
-      "./typings"
-    ]
+    "typeRoots": ["./node_modules/@types", "./typings"]
   },
   "include": ["src/**/*.ts"],
   "exclude": ["dist/**", "examples/**", "node_modules/**"]

@@ -5,15 +5,12 @@ import { createProfile, loadProfile, loadKeyInfo } from './profiles.ts';
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json');
 
-
 const program = new Command();
 
-program
-  .name('node-tor')
-  .description('CLI to node-tor')
-  .version(version);
+program.name('node-tor').description('CLI to node-tor').version(version);
 
-program.command('create')
+program
+  .command('create')
   .description('Create a profile')
   .option('-n, --name <string>', 'profile name', 'default')
   .option('-v, --version <string>', 'version', version)
@@ -61,16 +58,16 @@ program.command('create')
 //     await buildRelaysAndDirs(relayNodesResponse, keyInfo);
 //   });
 
-program.command('start')
+program
+  .command('start')
   .description('Start the tor node')
   .option('-n, --name <string>', 'profile name', 'default')
   .action((options: any) => {
     // const { routerConfig } = loadProfile(options.name)
     const { keyInfo } = loadKeyInfo(options.name);
-    
+
     console.log('starting Tor node');
-    console.log('TODO: start node (not yet implemented)', { keyInfo })
+    console.log('TODO: start node (not yet implemented)', { keyInfo });
   });
-  
 
 program.parse();

@@ -2,16 +2,9 @@ import assert from 'node:assert';
 import { x25519 } from '@noble/curves/ed25519';
 import { hmac } from '@noble/hashes/hmac';
 import { sha256 } from '@noble/hashes/sha256';
-import {
-  HandshakeTypes,
-} from './messaging.ts';
-import type {
-  Create2ClientHandshake,
-  Create2ServerHandshake,
-} from './messaging.ts';
-import {
-  BytesReader,
-} from './util.ts';
+import { HandshakeTypes } from './messaging.ts';
+import type { Create2ClientHandshake, Create2ServerHandshake } from './messaging.ts';
+import { BytesReader } from './util.ts';
 
 // The "ntor" handshake
 
@@ -84,7 +77,6 @@ import {
 //   into the keys needed for the Tor relay protocol, using the KDF
 //   described in 5.2.2 and the tag m_expand.
 
-
 // H(x,t) as HMAC_SHA256 with message x and key t.
 // H_LENGTH  = 32.
 // ID_LENGTH = 20.
@@ -103,11 +95,11 @@ import {
 const H_LENGTH = 32;
 const ID_LENGTH = 20;
 const G_LENGTH = 32;
-const PROTOID = "ntor-curve25519-sha256-1";
-const t_mac = PROTOID + ":mac";
-const t_key = PROTOID + ":key_extract";
-const t_verify = PROTOID + ":verify";
-const m_expand = PROTOID + ":key_expand";
+const PROTOID = 'ntor-curve25519-sha256-1';
+const t_mac = PROTOID + ':mac';
+const t_key = PROTOID + ':key_extract';
+const t_verify = PROTOID + ':verify';
+const m_expand = PROTOID + ':key_expand';
 
 export const NtorParams = {
   H_LENGTH,
@@ -118,28 +110,34 @@ export const NtorParams = {
   t_key,
   t_verify,
   m_expand,
-}
+};
 
 export type NtorClientHandshake = {
-  ownOnionKey: Buffer,
-  peerOnionKey: Buffer,
-  peerRsaIdDigest: Buffer,
-}
+  ownOnionKey: Buffer;
+  peerOnionKey: Buffer;
+  peerRsaIdDigest: Buffer;
+};
 
 export type NtorServerHandshake = {
-  serverNtorEphemeralKeyPublic: Buffer,
-  serverNtorAuth: Buffer,
-}
+  serverNtorEphemeralKeyPublic: Buffer;
+  serverNtorAuth: Buffer;
+};
 
-export function makeCreate2ClientHandshakeForNtor (handshake: NtorClientHandshake): Create2ClientHandshake {
+export function makeCreate2ClientHandshakeForNtor(
+  handshake: NtorClientHandshake
+): Create2ClientHandshake {
   const { ownOnionKey, peerOnionKey, peerRsaIdDigest } = handshake;
   // NODEID      Server identity digest  [ID_LENGTH bytes]
   // KEYID       KEYID(B)                [H_LENGTH bytes]
   // CLIENT_KP   X                       [G_LENGTH bytes]
-  assert.equal(peerRsaIdDigest.length, ID_LENGTH, 'peer id digest length is not expected length')
-  assert.equal(peerOnionKey.length, H_LENGTH, 'peer ntor onion pubkey length is not expected length')
-  assert.equal(ownOnionKey.length, G_LENGTH, 'own ntor onion pubkey length is not expected length')
-  
+  assert.equal(peerRsaIdDigest.length, ID_LENGTH, 'peer id digest length is not expected length');
+  assert.equal(
+    peerOnionKey.length,
+    H_LENGTH,
+    'peer ntor onion pubkey length is not expected length'
+  );
+  assert.equal(ownOnionKey.length, G_LENGTH, 'own ntor onion pubkey length is not expected length');
+
   return {
     type: HandshakeTypes.NTOR,
     data: Buffer.concat([
@@ -151,33 +149,39 @@ export function makeCreate2ClientHandshakeForNtor (handshake: NtorClientHandshak
       // should be own curve25519 pubkey
       ownOnionKey,
     ]),
-  }
+  };
 }
 
-export function parseCreate2ServerHandshakeForNtor (handshake: Create2ServerHandshake): NtorServerHandshake {
+export function parseCreate2ServerHandshakeForNtor(
+  handshake: Create2ServerHandshake
+): NtorServerHandshake {
   const handshakeData = handshake.data;
   // SERVER_KP   Y                       [G_LENGTH bytes]
   // AUTH        H(auth_input, t_mac)    [H_LENGTH bytes]
-  assert.equal(handshakeData.length, G_LENGTH + H_LENGTH, 'handshake length is not expected length')
+  assert.equal(
+    handshakeData.length,
+    G_LENGTH + H_LENGTH,
+    'handshake length is not expected length'
+  );
   const reader = new BytesReader(handshakeData);
   const serverNtorEphemeralKeyPublic = reader.readBytes(G_LENGTH);
   const serverNtorAuth = reader.readBytes(H_LENGTH);
-  return { serverNtorEphemeralKeyPublic, serverNtorAuth }
+  return { serverNtorEphemeralKeyPublic, serverNtorAuth };
 }
 
 //     H(x,t) as HMAC_SHA256 with message x and key t.
-function H (x: Buffer, t: Buffer): Buffer {
+function H(x: Buffer, t: Buffer): Buffer {
   return Buffer.from(hmac(sha256, t, x));
 }
 export { H as HmacSha256 };
 
 // EXP(a, b) = The ECDH algorithm for establishing a shared secret.
 // a is public, b is private
-function EXP (a: Buffer, b: Buffer): Buffer {
+function EXP(a: Buffer, b: Buffer): Buffer {
   return Buffer.from(x25519.getSharedSecret(b, a));
 }
 
-export function getKeySeedFromNtorServerHandshake ({
+export function getKeySeedFromNtorServerHandshake({
   clientNtorEphemeralKeyPrivate,
   clientNtorEphemeralKeyPublic,
   serverNtorEphemeralKeyPublic,
@@ -193,15 +197,7 @@ export function getKeySeedFromNtorServerHandshake ({
   const AUTH = serverNtorAuth;
 
   //     secret_input = EXP(Y,x) | EXP(B,x) | ID | B | X | Y | PROTOID
-  const secretInput = Buffer.concat([
-    EXP(Y, x),
-    EXP(B, x),
-    ID,
-    B,
-    X,
-    Y,
-    Buffer.from(PROTOID),
-  ]);
+  const secretInput = Buffer.concat([EXP(Y, x), EXP(B, x), ID, B, X, Y, Buffer.from(PROTOID)]);
   //     KEY_SEED = H(secret_input, t_key)
   const keySeed = H(secretInput, Buffer.from(t_key, 'utf-8'));
   //     verify = H(secret_input, t_verify)
@@ -219,7 +215,7 @@ export function getKeySeedFromNtorServerHandshake ({
   //   The client verifies that AUTH == H(auth_input, t_mac).
   const auth = H(authInput, Buffer.from(t_mac, 'utf-8'));
   assert.equal(auth.toString('hex'), AUTH.toString('hex'), 'ntor auth does not match');
-  
+
   return keySeed;
 }
 
@@ -246,7 +242,7 @@ export function getKeySeedFromNtorServerHandshake ({
 //    DIGEST_LEN bytes are taken as a nonce to use in the place of KH in the
 //    hidden service protocol.  Excess bytes from K are discarded.
 
-export function KDF_RFC5869 (keySeed: Buffer, keyLength: number): Buffer {
+export function KDF_RFC5869(keySeed: Buffer, keyLength: number): Buffer {
   const M_EXPAND = Buffer.from(m_expand, 'utf-8');
   const keyMaterial: Buffer<ArrayBufferLike> = Buffer.alloc(keyLength);
   let prevHmacResult: Buffer<ArrayBufferLike> = Buffer.alloc(0);
@@ -255,7 +251,7 @@ export function KDF_RFC5869 (keySeed: Buffer, keyLength: number): Buffer {
   for (let i = 0; i < iterationCount; i++) {
     // K_1     = H(m_expand | INT8(1) , KEY_SEED )
     // K_(i+1) = H(K_i | m_expand | INT8(i+1) , KEY_SEED )
-    iterationIndex.writeUint8(i+1, 0);
+    iterationIndex.writeUint8(i + 1, 0);
     const hmacResult = H(Buffer.concat([prevHmacResult, M_EXPAND, iterationIndex]), keySeed);
     hmacResult.copy(keyMaterial, i * H_LENGTH);
     prevHmacResult = hmacResult;

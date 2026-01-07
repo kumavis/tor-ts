@@ -1,4 +1,4 @@
-import { bufferFromUint } from './util.ts'
+import { bufferFromUint } from './util.ts';
 
 // The relay commands are:
 
@@ -64,9 +64,9 @@ const relayCellNames = {
   [RelayCell.BEGIN_DIR]: 'BEGIN_DIR',
   [RelayCell.EXTEND2]: 'EXTEND2',
   [RelayCell.EXTENDED2]: 'EXTENDED2',
-}
+};
 
-export function serializeExtend2 ({ linkSpecifiers, handshake }): Buffer {
+export function serializeExtend2({ linkSpecifiers, handshake }): Buffer {
   // NSPEC      (Number of link specifiers)     [1 byte]
   //   NSPEC times:
   //     LSTYPE (Link specifier type)           [1 byte]
@@ -77,17 +77,19 @@ export function serializeExtend2 ({ linkSpecifiers, handshake }): Buffer {
   // HDATA      (Client Handshake Data)         [HLEN bytes]
   const payloadBytes = Buffer.concat([
     bufferFromUint(1, linkSpecifiers.length),
-    Buffer.concat(linkSpecifiers.map(linkSpecifier => {
-      return Buffer.concat([
-        bufferFromUint(1, linkSpecifier.type),
-        bufferFromUint(1, linkSpecifier.data.length),
-        linkSpecifier.data,
-      ])
-    })),
+    Buffer.concat(
+      linkSpecifiers.map((linkSpecifier) => {
+        return Buffer.concat([
+          bufferFromUint(1, linkSpecifier.type),
+          bufferFromUint(1, linkSpecifier.data.length),
+          linkSpecifier.data,
+        ]);
+      })
+    ),
     bufferFromUint(2, handshake.type),
     bufferFromUint(2, handshake.data.length),
     handshake.data,
-  ])
+  ]);
   return payloadBytes;
 }
 
@@ -144,4 +146,4 @@ export const RelayEndReasonNames = {
   [RelayEndReasons.REASON_CONNRESET]: 'REASON_CONNRESET',
   [RelayEndReasons.REASON_TORPROTOCOL]: 'REASON_TORPROTOCOL',
   [RelayEndReasons.REASON_NOTDIRECTORY]: 'REASON_NOTDIRECTORY',
-}
+};

@@ -17,7 +17,7 @@
 //     this.server.on('connection', (socket) => {
 //       this.
 //       console.log('New client connected')
-      
+
 //       // When we receive data, we can also write data back to the client.
 //       socket.on('data', (data) => {
 //         console.log(`Received data: ${data}`)

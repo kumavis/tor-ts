@@ -1,11 +1,11 @@
-import type { PeerInfo } from '../circuit.ts'
+import type { PeerInfo } from '../circuit.ts';
 import {
   downloadMicrodescFromDirectory,
   parseRelaysFromMicroDesc,
   MicroDescNodeInfo,
   dangerouslyLookupPeerInfo,
-} from './directory.ts'
-import { pickRelayWithFlags } from './util.ts'
+} from './directory.ts';
+import { pickRelayWithFlags } from './util.ts';
 
 /* chutney testing instructions:
 
@@ -34,43 +34,46 @@ restart
 ```
 */
 
+export async function getStandardChutneyCircuitPath() {
+  const loopback = '127.0.0.1';
+  const directoryServer = `${loopback}:7000`;
+  const microDescContent = await downloadMicrodescFromDirectory(directoryServer);
+  const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
 
-export async function getStandardChutneyCircuitPath () {
-  const loopback = '127.0.0.1'
-  const directoryServer = `${loopback}:7000`
-  const microDescContent = await downloadMicrodescFromDirectory(directoryServer)
-  const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent)
+  const circuitPlan: Array<MicroDescNodeInfo> = [];
+  circuitPlan.push(microDescNodeInfos.find((nodeInfo) => nodeInfo.onion_router_port === 5004));
+  circuitPlan.push(microDescNodeInfos.find((nodeInfo) => nodeInfo.onion_router_port === 5001));
+  circuitPlan.push(microDescNodeInfos.find((nodeInfo) => nodeInfo.onion_router_port === 5000));
 
-  const circuitPlan: Array<MicroDescNodeInfo> = []
-  circuitPlan.push(microDescNodeInfos.find(nodeInfo => nodeInfo.onion_router_port === 5004))
-  circuitPlan.push(microDescNodeInfos.find(nodeInfo => nodeInfo.onion_router_port === 5001))
-  circuitPlan.push(microDescNodeInfos.find(nodeInfo => nodeInfo.onion_router_port === 5000))
-  
-  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(circuitPlan.map(async (relayInfo) => {
-    return await dangerouslyLookupPeerInfo(directoryServer, relayInfo)
-  }))
+  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(
+    circuitPlan.map(async (relayInfo) => {
+      return await dangerouslyLookupPeerInfo(directoryServer, relayInfo);
+    })
+  );
   // reverse so that gateway is first and exit is last
-  circuitPeerInfos.reverse()
+  circuitPeerInfos.reverse();
 
-  return circuitPeerInfos
+  return circuitPeerInfos;
 }
 
-export async function getRandomChutneyCircuitPath () {
-  const loopback = '127.0.0.1'
-  const directoryServer = `${loopback}:7000`
-  const microDescContent = await downloadMicrodescFromDirectory(directoryServer)
-  const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent)
+export async function getRandomChutneyCircuitPath() {
+  const loopback = '127.0.0.1';
+  const directoryServer = `${loopback}:7000`;
+  const microDescContent = await downloadMicrodescFromDirectory(directoryServer);
+  const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
 
-  const circuitPlan: Array<MicroDescNodeInfo> = []
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Exit'], circuitPlan))
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, [], circuitPlan))
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Guard'], circuitPlan))
-  
-  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(circuitPlan.map(async (relayInfo) => {
-    return await dangerouslyLookupPeerInfo(directoryServer, relayInfo)
-  }))
+  const circuitPlan: Array<MicroDescNodeInfo> = [];
+  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Exit'], circuitPlan));
+  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, [], circuitPlan));
+  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Guard'], circuitPlan));
+
+  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(
+    circuitPlan.map(async (relayInfo) => {
+      return await dangerouslyLookupPeerInfo(directoryServer, relayInfo);
+    })
+  );
   // reverse so that gateway is first and exit is last
-  circuitPeerInfos.reverse()
+  circuitPeerInfos.reverse();
 
-  return circuitPeerInfos
+  return circuitPeerInfos;
 }

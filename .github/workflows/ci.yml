@@ -2,7 +2,7 @@ name: CI
 
 on:
   push:
-    branches: ["**"]
+    branches: ['**']
   pull_request:
 
 jobs:
@@ -25,6 +25,9 @@ jobs:
 
       - name: Typecheck
         run: yarn typecheck
+
+      - name: Format check
+        run: yarn format:check
 
       - name: Test
         run: yarn test

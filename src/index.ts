@@ -10,9 +10,9 @@
 //   channel,
 // })
 
-export * as chutney from './build-circuit/chutney.ts'
+export * as chutney from './build-circuit/chutney.ts';
 // export * as messaging from './messaging'
 // export * as circuit from './circuit'
 // export * as channel from './channel'
-export { Circuit } from './circuit.ts'
-export { TlsChannelConnection } from './channel.ts'
+export { Circuit } from './circuit.ts';
+export { TlsChannelConnection } from './channel.ts';

@@ -14,12 +14,15 @@
     "@types/node": "^22.0.0",
     "ava": "^6.4.1",
     "pm2": "^6.0.14",
+    "prettier": "^3.7.4",
     "typescript": "^5.9.3"
   },
   "scripts": {
     "dev": "pm2 start --no-daemon scripts/dev.config.cjs",
     "test": "ava src/*.spec.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
     "test:dev": "pm2 start --no-daemon scripts/test-dev.config.cjs"
   },
   "ava": {
