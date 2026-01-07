@@ -1,4 +1,4 @@
-import { bufferFromUint } from './util'
+import { bufferFromUint } from './util.ts'
 
 // The relay commands are:
 

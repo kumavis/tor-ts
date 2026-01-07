@@ -1,7 +1,7 @@
 import crypto from 'node:crypto';
 import assert from 'node:assert';
-import type { CellCerts } from './messaging';
-import { BytesReader, sha256 } from './util';
+import type { CellCerts } from './messaging.ts';
+import { BytesReader, sha256 } from './util.ts';
 import * as ed from '@noble/ed25519';
 import { sha512 } from '@noble/hashes/sha512';
 

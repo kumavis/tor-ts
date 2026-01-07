@@ -2,13 +2,13 @@ import { EventEmitter } from 'node:events';
 import tls from 'node:tls';
 import {
   makeRandomServerName,
-} from './tls';
+} from './tls.ts';
 import {
   validateCertsCellForIdentities,
-} from './cert';
+} from './cert.ts';
 import type {
   RsaId,
-} from './cert';
+} from './cert.ts';
 import {
   MessageCells,
   serializeCommand,
@@ -16,16 +16,16 @@ import {
   AddressTypes,
   serializeCellWithPayload,
   linkSpecifierToAddressAndPort,
-} from './messaging';
+} from './messaging.ts';
 import type {
   MessageCell,
   AddressAndPort,
   CellVersions,
   CellNetInfo,
   NetInfoAddress,
-} from './messaging';
-import { sha256, sha1 } from './util'
-import { PeerInfo } from './circuit';
+} from './messaging.ts';
+import { sha256, sha1 } from './util.ts'
+import type { PeerInfo } from './circuit.ts';
 
 const defaultLinkSupportedVersions = [3, 4, 5];
 

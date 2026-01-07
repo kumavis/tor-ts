@@ -1,7 +1,7 @@
 import assert from "node:assert";
 import crypto from "node:crypto";
-import { circuitIdLengthForProtocolVersion } from './circuit'
-import { BytesReader, bufferFromUint, sha256 } from "./util";
+import { circuitIdLengthForProtocolVersion } from './circuit.ts'
+import { BytesReader, bufferFromUint, sha256 } from "./util.ts";
 
 //  PAYLOAD_LEN -- The longest allowable cell payload, in bytes. (509)
 const PAYLOAD_LEN = 509

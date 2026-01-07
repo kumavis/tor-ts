@@ -1,8 +1,12 @@
-import { Circuit, PeerInfo } from "../circuit"
-import { TlsChannelConnection } from "../channel"
-import { MicroDescNodeInfo, dangerouslyLookupPeerInfo, downloadMicrodescFromDirectory, parseRelaysFromMicroDesc } from "./directory"
-import { pickRelayWithFlags } from "./util"
-import mainnetDirectoryAuthorities from '../directory-authorities.json'
+import { Circuit } from "../circuit.ts"
+import type { PeerInfo } from "../circuit.ts"
+import { TlsChannelConnection } from "../channel.ts"
+import { MicroDescNodeInfo, dangerouslyLookupPeerInfo, downloadMicrodescFromDirectory, parseRelaysFromMicroDesc } from "./directory.ts"
+import { pickRelayWithFlags } from "./util.ts"
+import { createRequire } from 'node:module'
+
+const require = createRequire(import.meta.url)
+const mainnetDirectoryAuthorities = require('../directory-authorities.json')
 
 const getRandomDirectoryAuthority = () => {
   const randomIndex = Math.floor(Math.random() * mainnetDirectoryAuthorities.length);

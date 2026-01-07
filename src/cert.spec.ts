@@ -1,6 +1,6 @@
 import test from 'ava';
-import type { CellCerts } from './messaging';
-import { CertTypes, validateCertsCellForIdentities } from './cert';
+import type { CellCerts } from './messaging.ts';
+import { CertTypes, validateCertsCellForIdentities } from './cert.ts';
 
 const b = (s: string) => Buffer.from(s, 'hex')
 

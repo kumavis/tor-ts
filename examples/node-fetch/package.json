@@ -5,13 +5,11 @@
   "license": "MIT",
   "private": true,
   "scripts": {
-    "start": "tsx index.ts",
-    "dev": "pm2 start --name tor-example-node-fetch --watch=../../ --no-daemon --interpreter=tsx index.ts"
+    "start": "node --experimental-transform-types index.ts",
+    "dev": "pm2 start --name tor-example-node-fetch --watch=../../ --no-daemon --interpreter=node --node-args=--experimental-transform-types index.ts"
   },
   "dependencies": {
     "node-fetch": "^3.3.2"
   },
-  "devDependencies": {
-    "tsx": "^3.12.7"
-  }
+  "devDependencies": {}
 }

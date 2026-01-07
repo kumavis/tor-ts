@@ -1,5 +1,5 @@
-import { parseRelayCellPayload, readCellsFromData } from "./messaging"
-import { bufferFromUint } from "./util"
+import { parseRelayCellPayload, readCellsFromData } from "./messaging.ts"
+import { bufferFromUint } from "./util.ts"
 
 const h = (s: string) => Buffer.from(s, 'hex')
 

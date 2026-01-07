@@ -1,4 +1,4 @@
-import { MicroDescNodeInfo } from "./directory"
+import { MicroDescNodeInfo } from "./directory.ts"
 
 export function filterRelaysByFlags (relays: MicroDescNodeInfo[], flags: string[], ignoreList: MicroDescNodeInfo[] = []): MicroDescNodeInfo[] {
   const matchingRelays = relays.filter(relayInfo => {

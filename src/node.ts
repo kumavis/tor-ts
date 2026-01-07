@@ -3,7 +3,7 @@ import https from 'https'
 import tls from 'tls'
 import net from 'net'
 import url from 'url'
-import { Circuit, CircuitStream } from './circuit'
+import { Circuit, CircuitStream } from './circuit.ts'
 import { Readable, Writable, Duplex } from 'stream'
 
 // Node HTTP Agent https://nodejs.org/docs/latest-v20.x/api/http.html#class-httpagent

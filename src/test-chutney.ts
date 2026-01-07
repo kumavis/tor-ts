@@ -1,16 +1,16 @@
 import net from 'node:net'
-import { Circuit } from './circuit'
-import type { PeerInfo } from './circuit'
-import { TlsChannelConnection } from './channel';
+import { Circuit } from './circuit.ts'
+import type { PeerInfo } from './circuit.ts'
+import { TlsChannelConnection } from './channel.ts';
 import {
   linkSpecifierToAddressAndPort,
-} from './messaging'
+} from './messaging.ts'
 import {
   downloadMicrodescFromDirectory,
   parseRelaysFromMicroDesc,
   MicroDescNodeInfo,
   dangerouslyLookupPeerInfo,
-} from './build-circuit/directory'
+} from './build-circuit/directory.ts'
 
 
 

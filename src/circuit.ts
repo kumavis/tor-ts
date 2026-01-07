@@ -1,34 +1,39 @@
 import { x25519 } from '@noble/curves/ed25519';
-import { makeAes128CtrKey } from './aes'
+import { makeAes128CtrKey } from './aes.ts'
 import crypto from 'node:crypto';
 
-import { ChannelConnection } from "./channel";
+import { ChannelConnection } from "./channel.ts";
 import {
-  MessageCell,
   MessageCells as MessageCellType,
-  CellCreated2,
   serializeRelayCellPayload,
   setRelayCellIntegrity,
   checkRelayCellRecognized,
   parseRelayCellPayload,
   parseCreate2Cell,
   chunkDataForRelayDataCells,
-} from './messaging';
-import type { CellDestroy, CellRelay, CellRelayUnparsed, LinkSpecifier } from './messaging'
+} from './messaging.ts';
+import type {
+  MessageCell,
+  CellCreated2,
+  CellDestroy,
+  CellRelay,
+  CellRelayUnparsed,
+  LinkSpecifier
+} from './messaging.ts'
 import {
   makeCreate2ClientHandshakeForNtor,
   parseCreate2ServerHandshakeForNtor,
   getKeySeedFromNtorServerHandshake,
   KDF_RFC5869,
-  NtorServerHandshake,
-} from './ntor';
+} from './ntor.ts';
+import type { NtorServerHandshake } from './ntor.ts';
 import {
   RelayCell,
   RelayEndReasons,
   RelayEndReasonNames,
   serializeExtend2,
-} from './relay-cell'
-import { BytesReader, deferred } from './util';
+} from './relay-cell.ts'
+import { BytesReader, deferred } from './util.ts';
 import EventEmitter from 'node:events';
 import { ReadableStream, WritableStream } from 'stream/web';
 

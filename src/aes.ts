@@ -1,4 +1,4 @@
-import { Mutex } from "./util"
+import { Mutex } from "./util.ts"
 
 const blockLength = 16
 const keyParams = { name: 'AES-CTR', length: 128 }
@@ -20,7 +20,9 @@ export const makeAes128CtrKey = (key: Buffer) => {
   // prepending padding to the input and then removing from the beggining of
   // the output and not incrementing our counter for the partial block
   let internalOffset = 0
-  const iKeyP = crypto.subtle.importKey('raw', key, keyParams, false, ['encrypt', 'decrypt'])
+  // Copy to a Uint8Array backed by an ArrayBuffer (avoids SharedArrayBuffer typing issues)
+  const rawKey = Uint8Array.from(key)
+  const iKeyP = crypto.subtle.importKey('raw', rawKey, keyParams, false, ['encrypt', 'decrypt'])
   const mutex = new Mutex()
   
   const crypt = async (input: Buffer): Promise<Buffer> => {

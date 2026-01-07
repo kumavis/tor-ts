@@ -4,7 +4,8 @@ module.exports = {
     name: "tor-test-dev",
     script: "./node_modules/.bin/ava",
     args: ["--match='src/**/*.spec.ts'"],
-    interpreter: "tsx",
+    interpreter: "node",
+    node_args: ["--experimental-transform-types"],
     watch: true,
     autorestart: false,
   }]

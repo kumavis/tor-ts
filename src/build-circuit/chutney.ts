@@ -1,11 +1,11 @@
-import { PeerInfo } from '../circuit'
+import type { PeerInfo } from '../circuit.ts'
 import {
   downloadMicrodescFromDirectory,
   parseRelaysFromMicroDesc,
   MicroDescNodeInfo,
   dangerouslyLookupPeerInfo,
-} from './directory'
-import { pickRelayWithFlags } from './util'
+} from './directory.ts'
+import { pickRelayWithFlags } from './util.ts'
 
 /* chutney testing instructions:
 

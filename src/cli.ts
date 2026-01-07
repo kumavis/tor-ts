@@ -1,7 +1,9 @@
 import { Command } from 'commander';
-import { version } from '../package.json';
-import { createProfile, loadProfile, loadKeyInfo } from './profiles';
-import { testHandshake } from './channel';
+import { createRequire } from 'node:module';
+import { createProfile, loadProfile, loadKeyInfo } from './profiles.ts';
+
+const require = createRequire(import.meta.url);
+const { version } = require('../package.json');
 
 
 const program = new Command();
@@ -67,7 +69,7 @@ program.command('start')
     const { keyInfo } = loadKeyInfo(options.name);
     
     console.log('starting Tor node');
-    testHandshake({ keyInfo })
+    console.log('TODO: start node (not yet implemented)', { keyInfo })
   });
   
 

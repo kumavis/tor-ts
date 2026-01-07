@@ -4,14 +4,14 @@ import { hmac } from '@noble/hashes/hmac';
 import { sha256 } from '@noble/hashes/sha256';
 import {
   HandshakeTypes,
-} from './messaging';
+} from './messaging.ts';
 import type {
   Create2ClientHandshake,
   Create2ServerHandshake,
-} from './messaging';
+} from './messaging.ts';
 import {
   BytesReader,
-} from './util';
+} from './util.ts';
 
 // The "ntor" handshake
 
@@ -174,7 +174,7 @@ export { H as HmacSha256 };
 // EXP(a, b) = The ECDH algorithm for establishing a shared secret.
 // a is public, b is private
 function EXP (a: Buffer, b: Buffer): Buffer {
-  return x25519.getSharedSecret(b, a);
+  return Buffer.from(x25519.getSharedSecret(b, a));
 }
 
 export function getKeySeedFromNtorServerHandshake ({
@@ -248,9 +248,9 @@ export function getKeySeedFromNtorServerHandshake ({
 
 export function KDF_RFC5869 (keySeed: Buffer, keyLength: number): Buffer {
   const M_EXPAND = Buffer.from(m_expand, 'utf-8');
-  const keyMaterial = Buffer.alloc(keyLength);
-  let prevHmacResult = Buffer.alloc(0);
-  let iterationIndex = Buffer.alloc(1);
+  const keyMaterial: Buffer<ArrayBufferLike> = Buffer.alloc(keyLength);
+  let prevHmacResult: Buffer<ArrayBufferLike> = Buffer.alloc(0);
+  let iterationIndex: Buffer<ArrayBufferLike> = Buffer.alloc(1);
   const iterationCount = Math.ceil(keyLength / H_LENGTH);
   for (let i = 0; i < iterationCount; i++) {
     // K_1     = H(m_expand | INT8(1) , KEY_SEED )
