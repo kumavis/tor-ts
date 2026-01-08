@@ -304,4 +304,3 @@ async function dangerouslyLookupPeerInfo(
   const onionKey = await dangerouslyLookupOnionKey(directoryServer, nodeInfo.rsaIdDigest);
   return microDescNodeInfoToPeerInfo(nodeInfo, onionKey);
 }
-
