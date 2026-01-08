@@ -282,20 +282,19 @@ export const validateCertsCellForIdentities = (
   // might be caused by clock skew from failures that are definitely not
   // clock skew.)
 
+  // Take the identity key from the identity->signing cert
+  const identityKey = idSk.signedWith;
+  if (!identityKey) {
+    throw new Error(`Missing identity key in identity->signing cert`);
+  }
   const idSkSig = {
-    key: idSk.signedWith,
+    key: identityKey,
     signature: idSk.signature,
     text: idSk.text,
   };
   sigs.push(idSkSig);
   // check timeliness
   verifyTimeliness(idSk.expirationHours, now, clockSkew);
-
-  // Take the identity key from the identity->signing cert
-  const identityKey = idSk.signedWith;
-  if (!identityKey) {
-    throw new Error(`Missing identity key in identity->signing cert`);
-  }
   // Take the signing key from the identity->signing cert
   const signingKey = idSk.key;
   if (!signingKey) {
@@ -489,7 +488,7 @@ function keysMatch(keyA: Buffer, keyB: Buffer): boolean {
   return keyA === keyB || Buffer.prototype.equals.call(keyA, keyB);
 }
 
-export function logCerts(certsCell) {
+export function logCerts(certsCell: CellCerts) {
   const { certs } = certsCell;
   console.log('CERTS: got certs');
   for (const { type, body } of certs) {

@@ -70,7 +70,13 @@ async function _requestDirectoryAuthorities(opts = {}) {
   return requestOnionData({ flags: ['Authority'], ...opts });
 }
 
-async function requestOnionData({ flags = [], ...opts } = {}) {
+async function requestOnionData({
+  flags = [] as string[],
+  ...opts
+}: {
+  flags?: string[];
+  [key: string]: unknown;
+} = {}) {
   const onionoo = new Onionoo();
   const query = {
     limit: 30,
@@ -148,12 +154,12 @@ function extractNtorOnionKey(directoryRecord: string): string {
 }
 
 export type MicroDescNodeInfo = {
-  nickname?: string;
-  rsaIdDigest?: Buffer;
-  publication_date?: Date;
-  ip_address?: string;
-  onion_router_port?: number;
-  directory_server_port?: number;
+  nickname: string;
+  rsaIdDigest: Buffer;
+  publication_date: Date;
+  ip_address: string;
+  onion_router_port: number;
+  directory_server_port: number;
   // idk what this is
   mKey?: Buffer;
   flags?: string[];
@@ -166,7 +172,7 @@ export type MicroDescNodeInfo = {
 
 export function parseRelaysFromMicroDesc(microDescContent: string): MicroDescNodeInfo[] {
   const lines = microDescContent.split('\n');
-  let relayInfo: MicroDescNodeInfo;
+  let relayInfo: MicroDescNodeInfo | undefined;
   const relayInfos: MicroDescNodeInfo[] = [];
 
   // r test002a AB+0S6hvSEnm7ifzqh3QaYOxsm0 2038-01-01 00:00:00 127.0.0.1 5002 7002
@@ -180,39 +186,76 @@ export function parseRelaysFromMicroDesc(microDescContent: string): MicroDescNod
     const tokens = line.split(' ');
     if (tokens[0] === 'r') {
       const parts = line.split(' ');
-      relayInfo = {
-        nickname: parts[1],
-        rsaIdDigest: Buffer.from(parts[2], 'base64'),
-        publication_date: new Date(parts[3] + ' ' + parts[4]),
-        ip_address: parts[5],
-        onion_router_port: parseInt(parts[6]),
-        directory_server_port: parseInt(parts[7]),
+      if (parts.length < 8) {
+        continue;
+      }
+      const nickname = parts[1];
+      const rsaIdDigestBase64 = parts[2];
+      const publicationDate = parts[3];
+      const publicationTime = parts[4];
+      const ipAddress = parts[5];
+      const onionRouterPort = parts[6];
+      const directoryServerPort = parts[7];
+      if (
+        !nickname ||
+        !rsaIdDigestBase64 ||
+        !publicationDate ||
+        !publicationTime ||
+        !ipAddress ||
+        !onionRouterPort ||
+        !directoryServerPort
+      ) {
+        continue;
+      }
+      const created: MicroDescNodeInfo = {
+        nickname,
+        rsaIdDigest: Buffer.from(rsaIdDigestBase64, 'base64'),
+        publication_date: new Date(`${publicationDate} ${publicationTime}`),
+        ip_address: ipAddress,
+        onion_router_port: parseInt(onionRouterPort, 10),
+        directory_server_port: parseInt(directoryServerPort, 10),
         protocols: {},
       };
-      relayInfos.push(relayInfo);
+      relayInfos.push(created);
+      relayInfo = created;
     } else if (tokens[0] === 'm') {
+      if (!relayInfo) continue;
       const parts = line.split(' ');
-      relayInfo.mKey = Buffer.from(parts[1], 'base64');
+      const mKeyBase64 = parts[1];
+      if (!mKeyBase64) continue;
+      relayInfo.mKey = Buffer.from(mKeyBase64, 'base64');
     } else if (tokens[0] === 's') {
+      if (!relayInfo) continue;
       const parts = line.split(' ');
       relayInfo.flags = parts.slice(1);
     } else if (tokens[0] === 'v') {
+      if (!relayInfo) continue;
       const parts = line.split(' ');
-      relayInfo.version = parts[1];
+      const version = parts[1];
+      if (!version) continue;
+      relayInfo.version = version;
     } else if (tokens[0] === 'pr') {
+      if (!relayInfo) continue;
+      const currentRelayInfo = relayInfo;
       const parts = line.split(' ');
       const protocolStrings = parts.slice(1);
       protocolStrings.forEach((protocolString) => {
         const [protocol, versions] = protocolString.split('=');
-        relayInfo.protocols[protocol] = versions;
+        if (protocol && versions) {
+          currentRelayInfo.protocols[protocol] = versions;
+        }
       });
     } else if (tokens[0] === 'w') {
+      if (!relayInfo) continue;
+      const currentRelayInfo = relayInfo;
       const parts = line.split(' ');
-      relayInfo.bandwidthStats = {};
+      currentRelayInfo.bandwidthStats = {};
       // w Bandwidth=82000 Unmeasured=1
       parts.slice(1).forEach((token) => {
         const [type, value] = token.split('=');
-        relayInfo.bandwidthStats[type] = parseInt(value);
+        if (type && value) {
+          currentRelayInfo.bandwidthStats![type] = parseInt(value);
+        }
       });
     }
   }

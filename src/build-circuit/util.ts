@@ -6,7 +6,8 @@ export function filterRelaysByFlags(
   ignoreList: MicroDescNodeInfo[] = []
 ): MicroDescNodeInfo[] {
   const matchingRelays = relays.filter((relayInfo) => {
-    const flagMatches = flags.every((flag) => relayInfo.flags.includes(flag));
+    const relayFlags = relayInfo.flags ?? [];
+    const flagMatches = flags.every((flag) => relayFlags.includes(flag));
     if (!flagMatches) return false;
     const isIgnored = ignoreList.find((ignoredNodeInfo) => {
       return (
@@ -32,5 +33,11 @@ export function pickRelayWithFlags(
   }
   // console.log(`matching`, flags, matchingRelays)
   const randomIndex = Math.floor(Math.random() * matchingRelays.length);
-  return matchingRelays[randomIndex];
+  const picked = matchingRelays[randomIndex];
+  if (!picked) {
+    throw new Error(
+      `Failed to pick a relay (index=${randomIndex} length=${matchingRelays.length})`
+    );
+  }
+  return picked;
 }

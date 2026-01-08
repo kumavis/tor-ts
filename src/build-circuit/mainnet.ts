@@ -11,25 +11,37 @@ import { pickRelayWithFlags } from './util.ts';
 import { createRequire } from 'node:module';
 
 const require = createRequire(import.meta.url);
-const mainnetDirectoryAuthorities = require('../directory-authorities.json');
+const mainnetDirectoryAuthorities = require('../directory-authorities.json') as Array<{
+  dir_address?: string;
+}>;
 
 const getRandomDirectoryAuthority = () => {
   const randomIndex = Math.floor(Math.random() * mainnetDirectoryAuthorities.length);
-  return mainnetDirectoryAuthorities[randomIndex];
+  const selected = mainnetDirectoryAuthorities[randomIndex];
+  if (!selected) {
+    throw new Error('Failed to pick a directory authority');
+  }
+  return selected;
 };
 
 export async function getRandomCircuitPath() {
   // try directory services until successful
-  let directoryServer: string;
-  let microDescContent: string;
-  while (microDescContent === undefined) {
+  let directoryServer: string | undefined;
+  let microDescContent: string | undefined;
+  while (!microDescContent) {
     const directoryServerInfo = getRandomDirectoryAuthority();
+    if (!directoryServerInfo.dir_address) {
+      continue;
+    }
     directoryServer = directoryServerInfo.dir_address;
     try {
       microDescContent = await downloadMicrodescFromDirectory(directoryServer);
     } catch {
       // ignore error and attempt again
     }
+  }
+  if (!directoryServer) {
+    throw new Error('Failed to select a directory authority');
   }
   // console.log('microdesc nodeinfos downloaded from', directoryServer)
   // console.log('microdesc content:', microDescContent)
@@ -65,6 +77,9 @@ export async function getRandomCircuitPath() {
 export async function connectRandomCircuit() {
   const circuitPeerInfos = await getRandomCircuitPath();
   const gatewayPeerInfo = circuitPeerInfos[0];
+  if (!gatewayPeerInfo) {
+    throw new Error('Failed to build circuit path (no gateway peer)');
+  }
   const channel = new TlsChannelConnection();
   await channel.connectPeerInfo(gatewayPeerInfo);
   const circuit = new Circuit({

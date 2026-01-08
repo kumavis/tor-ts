@@ -75,19 +75,21 @@ export const deferred = <T>(): {
   return { promise, resolve: resolve!, reject: reject! };
 };
 
-export function Mutex() {
-  let current = Promise.resolve();
-  this.lock = (): Promise<() => void> => {
-    let _resolve: () => void;
+export class Mutex {
+  private current: Promise<void> = Promise.resolve();
+
+  lock(): Promise<() => void> {
+    let resolveLock!: () => void;
     const p = new Promise<void>((resolve) => {
-      _resolve = () => resolve();
+      resolveLock = resolve;
     });
-    // Caller gets a promise that resolves when the current outstanding
-    // lock resolves
-    const rv = current.then(() => _resolve);
-    // Don't allow the next request until the new promise is done
-    current = p;
-    // Return the new promise
-    return rv;
-  };
+
+    // Caller gets a promise that resolves when the current outstanding lock resolves.
+    const unlockP = this.current.then(() => resolveLock);
+
+    // Don't allow the next request until the new promise is done.
+    this.current = p;
+
+    return unlockP;
+  }
 }

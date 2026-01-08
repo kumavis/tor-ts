@@ -10,6 +10,13 @@
     "resolveJsonModule": true,
     "esModuleInterop": true,
     "moduleDetection": "force",
+    "strict": true,
+    "useUnknownInCatchVariables": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "forceConsistentCasingInFileNames": true,
     "typeRoots": ["./node_modules/@types", "./typings"]
   },
   "include": ["src/**/*.ts"],

@@ -29,11 +29,12 @@ export class CircuitHttpsAgent extends https.Agent {
   }
   createConnection(req: ClientRequestArgs): Duplex {
     const duplexStream = makeNodeDuplexStreamForCircuit(this.circuit, req);
+    const hostname = req.hostname ?? undefined;
     // re-apply TLS as per https://github.com/TooTallNate/proxy-agents/blob/d5cdaa1b774c699c75b543eb4b112290d261e321/packages/https-proxy-agent/src/index.ts#L144
     // TODO: need to pass all options in here?
     return tls.connect({
       socket: duplexStream,
-      servername: net.isIP(req.hostname) ? undefined : req.hostname,
+      servername: hostname && net.isIP(hostname) ? undefined : hostname,
     });
   }
 }
@@ -51,7 +52,11 @@ export class CircuitHttpAgent extends http.Agent {
 }
 
 export function makeNodeDuplexStreamForCircuit(circuit: Circuit, req: ClientRequestArgs): Duplex {
-  const urlDetails = url.parse(`//${req.hostname}:${req.port}`, false, true);
+  const hostname = req.hostname ?? undefined;
+  if (!hostname) {
+    throw new Error('request hostname is missing');
+  }
+  const urlDetails = url.parse(`//${hostname}:${req.port}`, false, true);
   const port = urlDetails.port ? Number.parseInt(urlDetails.port, 10) : 443;
   const target = `${urlDetails.hostname}:${port}`;
   const circuitStream = circuit.openStream(target);
@@ -127,11 +132,12 @@ export const circuitStreamToNodeDuplex = (circuitStream: CircuitStream): Duplex 
   });
   // read from circuitStream
   const reader = circuitStream.source.getReader();
-  reader.read().then(async ({ value, done }) => {
+  reader.read().then(async (result) => {
+    let { value, done } = result as ReadableStreamReadResult<Uint8Array>;
     while (!done) {
       nodeDuplexStream.push(value);
       console.log('reading value from circuitStream');
-      ({ done, value } = await reader.read());
+      ({ done, value } = (await reader.read()) as ReadableStreamReadResult<Uint8Array>);
     }
     console.log('done reading from circuitStream');
 
@@ -154,13 +160,14 @@ export const circuitStreamToNodeDuplex = (circuitStream: CircuitStream): Duplex 
 // utilities for working with Node.js streams
 
 // window.ReadableStream to Node.js Readable
-export const webRSToNodeRS = (rs) => {
+export const webRSToNodeRS = (rs: ReadableStream<Uint8Array>) => {
   const reader = rs.getReader();
   const out = new Readable();
-  reader.read().then(async ({ value, done }) => {
+  reader.read().then(async (result) => {
+    let { value, done } = result as ReadableStreamReadResult<Uint8Array>;
     while (!done) {
       out.push(value);
-      ({ done, value } = await reader.read());
+      ({ done, value } = (await reader.read()) as ReadableStreamReadResult<Uint8Array>);
     }
     out.push(null);
   });
@@ -168,11 +175,11 @@ export const webRSToNodeRS = (rs) => {
 };
 
 // window.WritableStream to Node.js Writable
-export const webWSToNodeWS = (ws) => {
+export const webWSToNodeWS = (ws: WritableStream<Uint8Array>) => {
   const writer = ws.getWriter();
   const out = new Writable();
   out._write = (chunk, encoding, callback) => {
-    writer.write(chunk);
+    writer.write(chunk as Uint8Array);
     callback();
   };
   out._final = (callback) => {

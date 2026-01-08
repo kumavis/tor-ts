@@ -188,6 +188,13 @@ export function getKeySeedFromNtorServerHandshake({
   serverNtorIdentityKeyPublic,
   serverRsaIdentityKeyDigest,
   serverNtorAuth,
+}: {
+  clientNtorEphemeralKeyPrivate: Buffer;
+  clientNtorEphemeralKeyPublic: Buffer;
+  serverNtorEphemeralKeyPublic: Buffer;
+  serverNtorIdentityKeyPublic: Buffer;
+  serverRsaIdentityKeyDigest: Buffer;
+  serverNtorAuth: Buffer;
 }) {
   const x = clientNtorEphemeralKeyPrivate;
   const X = clientNtorEphemeralKeyPublic;

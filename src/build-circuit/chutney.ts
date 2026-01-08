@@ -9,6 +9,18 @@ import {
 import type { MicroDescNodeInfo } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
 
+function mustFindMicroDescNodeInfo(
+  nodes: MicroDescNodeInfo[],
+  predicate: (node: MicroDescNodeInfo) => boolean,
+  description: string
+): MicroDescNodeInfo {
+  const found = nodes.find(predicate);
+  if (!found) {
+    throw new Error(`Failed to find chutney relay: ${description}`);
+  }
+  return found;
+}
+
 async function discoverDirectoryServerIpPort(): Promise<string> {
   if (process.env.CHUTNEY_DIRECTORY_SERVER) {
     return process.env.CHUTNEY_DIRECTORY_SERVER;
@@ -32,7 +44,9 @@ async function discoverDirectoryServerIpPort(): Promise<string> {
         }
         const match = torrc.match(/^DirPort\s+(\d+)\b/m);
         if (!match) continue;
-        const dirPort = Number.parseInt(match[1], 10);
+        const dirPortText = match[1];
+        if (!dirPortText) continue;
+        const dirPort = Number.parseInt(dirPortText, 10);
         if (!Number.isFinite(dirPort) || dirPort <= 0) continue;
         return `127.0.0.1:${dirPort}`;
       }
@@ -78,9 +92,27 @@ export async function getStandardChutneyCircuitPath() {
   const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
 
   const circuitPlan: Array<MicroDescNodeInfo> = [];
-  circuitPlan.push(microDescNodeInfos.find((nodeInfo) => nodeInfo.onion_router_port === 5004));
-  circuitPlan.push(microDescNodeInfos.find((nodeInfo) => nodeInfo.onion_router_port === 5001));
-  circuitPlan.push(microDescNodeInfos.find((nodeInfo) => nodeInfo.onion_router_port === 5000));
+  circuitPlan.push(
+    mustFindMicroDescNodeInfo(
+      microDescNodeInfos,
+      (n) => n.onion_router_port === 5004,
+      'orport 5004'
+    )
+  );
+  circuitPlan.push(
+    mustFindMicroDescNodeInfo(
+      microDescNodeInfos,
+      (n) => n.onion_router_port === 5001,
+      'orport 5001'
+    )
+  );
+  circuitPlan.push(
+    mustFindMicroDescNodeInfo(
+      microDescNodeInfos,
+      (n) => n.onion_router_port === 5000,
+      'orport 5000'
+    )
+  );
 
   const circuitPeerInfos: Array<PeerInfo> = await Promise.all(
     circuitPlan.map(async (relayInfo) => {
@@ -103,7 +135,7 @@ export async function getRandomChutneyCircuitPath() {
   const forcedExitRsaIdDigestHex = process.env.TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX?.toLowerCase();
   if (forcedExitRsaIdDigestHex) {
     const forcedExit = microDescNodeInfos.find((n) => {
-      const digestHex = n.rsaIdDigest?.toString('hex');
+      const digestHex = n.rsaIdDigest.toString('hex');
       return digestHex === forcedExitRsaIdDigestHex;
     });
     if (!forcedExit) {

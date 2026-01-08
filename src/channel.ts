@@ -115,7 +115,13 @@ export class ChannelConnection {
       //   Clients SHOULD send "0" as their timestamp, to
       //  avoid fingerprinting.
       time: 0,
-      otherAddress: nodejsPeerAddressToNetInfo(peerAddressInfo),
+      otherAddress: (() => {
+        const otherAddress = nodejsPeerAddressToNetInfo(peerAddressInfo);
+        if (!otherAddress) {
+          throw new Error('Missing peer address info for NETINFO');
+        }
+        return otherAddress;
+      })(),
       addresses: [],
     });
     this.state.handShakeInProgress = false;
@@ -192,7 +198,11 @@ export class ChannelConnection {
     return unsubscribe;
   }
   getProtocolVersion(): number {
-    return this.state.linkProtocolVersion;
+    const version = this.state.linkProtocolVersion;
+    if (version === undefined) {
+      throw new Error('Link protocol version is not yet negotiated');
+    }
+    return version;
   }
   // virtual - override
   sendData(_serializedCell: any) {
@@ -207,10 +217,11 @@ export class TlsChannelConnection extends ChannelConnection {
   socket?: tls.TLSSocket;
 
   async connectPeerInfo(gatewayPeerInfo: PeerInfo, additonalOptions?: { localPort: number }) {
-    return this.connect(
-      linkSpecifierToAddressAndPort(gatewayPeerInfo.linkSpecifiers[0]),
-      additonalOptions
-    );
+    const firstLinkSpecifier = gatewayPeerInfo.linkSpecifiers[0];
+    if (!firstLinkSpecifier) {
+      throw new Error('Missing link specifier for peer');
+    }
+    return this.connect(linkSpecifierToAddressAndPort(firstLinkSpecifier), additonalOptions);
   }
 
   async connect(server: AddressAndPort, additonalOptions?: { localPort: number }) {
@@ -289,8 +300,17 @@ export function nodejsPeerAddressToNetInfo(
   peerAddressInfo: NodejsPeerAddressInfo | undefined
 ): NetInfoAddress | undefined {
   if (!peerAddressInfo) return undefined;
+  const type =
+    peerAddressInfo.family === 'IPv4'
+      ? AddressTypes.IPv4
+      : peerAddressInfo.family === 'IPv6'
+        ? AddressTypes.IPv6
+        : undefined;
+  if (type === undefined) {
+    throw new Error(`Unknown peer address family: ${peerAddressInfo.family}`);
+  }
   return {
     address: peerAddressInfo.address,
-    type: AddressTypes[peerAddressInfo.family],
+    type,
   };
 }

@@ -53,7 +53,7 @@ enum MessageCellType {
   AUTHORIZE = 132,
 }
 
-const messageCellNames = {
+const messageCellNames: Record<number, string> = {
   [MessageCellType.PADDING]: 'PADDING',
   [MessageCellType.CREATE]: 'CREATE',
   [MessageCellType.CREATED]: 'CREATED',
@@ -77,9 +77,9 @@ const messageCellNames = {
 // On a version 3 or
 // higher connection, variable-length cells are indicated by a command
 // byte equal to 7 ("VERSIONS"), or greater than or equal to 128.
-const variableLengthCells = Object.values(MessageCellType).filter(
-  (code: number) => code === 7 || code >= 123
-);
+const variableLengthCells = Object.values(MessageCellType)
+  .filter((value): value is number => typeof value === 'number')
+  .filter((code) => code === MessageCellType.VERSIONS || code >= 128);
 
 export enum AddressTypes {
   // [04] IPv4.
@@ -203,7 +203,7 @@ export type Create2ServerHandshake = {
   data: Buffer;
 };
 
-const cellParsers = {
+const cellParsers: Record<number, (reader: BytesReader) => any> = {
   [MessageCellType.VERSIONS]: (reader: BytesReader): CellVersions => {
     const versions = [];
     for (let i = 0; i < reader.length; i += 2) {
@@ -336,10 +336,14 @@ const cellParsers = {
 
 export const parseCreate2Cell = function (data: Buffer): CellCreated2 {
   const reader = new BytesReader(data);
-  return cellParsers[MessageCellType.CREATED2](reader);
+  const parser = cellParsers[MessageCellType.CREATED2];
+  if (!parser) {
+    throw new Error('Missing CREATED2 parser');
+  }
+  return parser(reader) as CellCreated2;
 };
 
-const cellSerializers = {
+const cellSerializers: Record<number, (params: any) => Buffer> = {
   [MessageCellType.VERSIONS]: ({ versions }: CellVersions) => {
     const payloadBytes = Buffer.alloc(versions.length * 2);
     versions.forEach((version, i) => {
@@ -447,7 +451,13 @@ const cellSerializers = {
   },
 };
 
-export const serializeRelayCellPayload = cellSerializers[MessageCellType.RELAY];
+export function serializeRelayCellPayload(params: CellRelay): Buffer {
+  const serializer = cellSerializers[MessageCellType.RELAY];
+  if (!serializer) {
+    throw new Error('Missing RELAY serializer');
+  }
+  return serializer(params);
+}
 
 // used when updating relay cell integrity after initialization
 export function setRelayCellIntegrity(relayCellPayload: Buffer, integrity: Buffer): void {
@@ -534,7 +544,10 @@ export function serializeCellWithPayload(
   return Buffer.concat(cellData);
 }
 
-function* readCellsFromData(data: Buffer, getVersion: () => number): Generator<MessageCell> {
+function* readCellsFromData(
+  data: Buffer,
+  getVersion: () => number | undefined
+): Generator<MessageCell> {
   const { cell, extraData } = parseCell(data, getVersion());
   yield cell;
   if (extraData.length > 0) {
@@ -561,11 +574,11 @@ function parseCell(
   //      Length                                [2 octets; big-endian integer]
   //      Payload (some MessageCells MAY pad)       [Length bytes]
 
-  let circId: Buffer;
-  let commandCode: number;
-  let payloadBytes: Buffer;
-  let extraData: Buffer;
-  let decodedCell: MessageCell;
+  let circId: Buffer | undefined;
+  let commandCode: number | undefined;
+  let payloadBytes: Buffer | undefined;
+  let extraData: Buffer | undefined;
+  let decodedCell: MessageCell | undefined;
 
   try {
     const reader = new BytesReader(data);
@@ -581,20 +594,21 @@ function parseCell(
     extraData = reader.readRemainder();
     decodedCell = {
       data: data.slice(0, data.length - extraData.length),
-      circId,
-      command: commandCode,
+      circId: circId!,
+      command: commandCode!,
       length,
-      payloadBytes,
+      payloadBytes: payloadBytes!,
       message: undefined,
-      commandName: getCommandName(commandCode),
+      commandName: getCommandName(commandCode!),
     };
-    const commandParser = cellParsers[commandCode];
+    const commandParser = cellParsers[commandCode!];
     if (commandParser !== undefined) {
       decodedCell.message = commandParser(payloadReader);
     }
     return { cell: decodedCell, extraData };
   } catch (err) {
-    let message = `Error parsing cell: "${err.message}"`;
+    const errMessage = err instanceof Error ? err.message : String(err);
+    let message = `Error parsing cell: "${errMessage}"`;
     if (circId !== undefined) {
       message += ` (circuit id ${circId.toString('hex')})`;
     }

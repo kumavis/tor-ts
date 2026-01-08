@@ -1,4 +1,5 @@
 import { bufferFromUint } from './util.ts';
+import type { LinkSpecifier } from './messaging.ts';
 
 // The relay commands are:
 
@@ -66,7 +67,13 @@ const _relayCellNames = {
   [RelayCell.EXTENDED2]: 'EXTENDED2',
 };
 
-export function serializeExtend2({ linkSpecifiers, handshake }): Buffer {
+export function serializeExtend2({
+  linkSpecifiers,
+  handshake,
+}: {
+  linkSpecifiers: Array<LinkSpecifier>;
+  handshake: { type: number; data: Buffer };
+}): Buffer {
   // NSPEC      (Number of link specifiers)     [1 byte]
   //   NSPEC times:
   //     LSTYPE (Link specifier type)           [1 byte]
@@ -131,7 +138,7 @@ export enum RelayEndReasons {
   REASON_NOTDIRECTORY = 14,
 }
 
-export const RelayEndReasonNames = {
+export const RelayEndReasonNames: Record<number, string> = {
   [RelayEndReasons.REASON_MISC]: 'REASON_MISC',
   [RelayEndReasons.REASON_RESOLVEFAILED]: 'REASON_RESOLVEFAILED',
   [RelayEndReasons.REASON_CONNECTREFUSED]: 'REASON_CONNECTREFUSED',

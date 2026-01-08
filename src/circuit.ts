@@ -71,12 +71,12 @@ export type PeerInfo = {
 
 class Hop {
   isConnected = false;
-  peerInfo: PeerInfo;
+  peerInfo!: PeerInfo;
   handshakePromiseKit = deferred<void>();
-  cipherPair: CipherPair;
+  cipherPair!: CipherPair;
 
-  ntorEphemeralKeyPrivate: Buffer;
-  ntorEphemeralKeyPublic: Buffer;
+  ntorEphemeralKeyPrivate!: Buffer;
+  ntorEphemeralKeyPublic!: Buffer;
 
   async encryptForward(data: Buffer) {
     return Buffer.from(await this.cipherPair.forward.key.encrypt(data));
@@ -117,14 +117,18 @@ class Hop {
     this.handshakePromiseKit.resolve();
   }
   toString() {
-    const port = this.peerInfo.linkSpecifiers[0].data.subarray(4).readInt16BE();
+    const firstLinkSpecifier = this.peerInfo.linkSpecifiers[0];
+    if (!firstLinkSpecifier) {
+      return `hop:unknown`;
+    }
+    const port = firstLinkSpecifier.data.subarray(4).readInt16BE();
     return `hop:${port}`;
   }
 }
 
 export class CircuitStream extends EventEmitter {
-  streamId: number;
-  destination: string;
+  streamId!: number;
+  destination!: string;
   destroyed = false;
   connectionPromiseKit = deferred<void>();
   source: ReadableStream;
@@ -135,7 +139,7 @@ export class CircuitStream extends EventEmitter {
     this.source = source;
     this.sink = sink;
   }
-  write: (data: Buffer) => Promise<void>;
+  write!: (data: Buffer) => Promise<void>;
   close() {
     this.destroy();
   }
@@ -164,6 +168,9 @@ export class Circuit {
     // setup hops
     for (let i = 0; i < path.length; i++) {
       const relayPeerInfo = path[i];
+      if (!relayPeerInfo) {
+        throw new Error(`Missing peer info for hop index=${i}`);
+      }
       const relayedHop = new Hop();
       relayedHop.peerInfo = relayPeerInfo;
       this.hops.push(relayedHop);
@@ -179,10 +186,18 @@ export class Circuit {
   }
 
   get firstHop() {
-    return this.hops[0];
+    const hop = this.hops[0];
+    if (!hop) {
+      throw new Error('Circuit has no hops');
+    }
+    return hop;
   }
   get lastHop() {
-    return this.hops[this.hops.length - 1];
+    const hop = this.hops[this.hops.length - 1];
+    if (!hop) {
+      throw new Error('Circuit has no hops');
+    }
+    return hop;
   }
 
   async connect() {
@@ -270,7 +285,7 @@ export class Circuit {
   async receiveRelayMessage(relayMessage: CellRelayUnparsed) {
     // decrypt and identify target hop
     let currentPayload = relayMessage.payload;
-    let targetHop: Hop;
+    let targetHop: Hop | undefined;
     for (const hop of this.hops) {
       if (!hop.isConnected) continue;
       currentPayload = Buffer.from(await hop.decryptBackward(currentPayload));
@@ -297,21 +312,33 @@ export class Circuit {
         const handshake = parseCreate2ServerHandshakeForNtor(create2Cell.handshake);
         const targetHopIndex = this.hops.indexOf(targetHop);
         const nextHop = this.hops[targetHopIndex + 1];
+        if (!nextHop) {
+          throw new Error('Received EXTENDED2 but no next hop exists');
+        }
         nextHop.receiveCreated2Handshake(handshake);
         return;
       }
       case RelayCell.CONNECTED: {
+        if (!stream) {
+          throw new Error(`Got CONNECTED for unknown streamId=${streamId}`);
+        }
         stream.connectionPromiseKit.resolve();
         return;
       }
       case RelayCell.DATA: {
+        if (!stream) {
+          throw new Error(`Got DATA for unknown streamId=${streamId}`);
+        }
         console.log(`got ${data.length} bytes of data for stream ${streamId}`);
         // console.log(data.toString('hex'))
         stream.emit('data', data);
         return;
       }
       case RelayCell.END: {
-        const reason = data[0];
+        if (!stream) {
+          throw new Error(`Got END for unknown streamId=${streamId}`);
+        }
+        const reason = data[0] ?? 0;
         const reasonName = RelayEndReasonNames[reason] || `UNKNOWN_REASON_${reason}`;
         if (reason === RelayEndReasons.REASON_DONE) {
           // ended normally
@@ -412,7 +439,11 @@ function createRandomCircuitId(protocolVersion: number, isInitiator: boolean): B
   // connection MUST set its MSB to 1, and whichever node didn't initiate
   // the connection MUST set its MSB to 0.
   if (isInitiator && protocolVersion >= 4) {
-    randomId[0] |= 0x80;
+    const firstByte = randomId[0];
+    if (firstByte === undefined) {
+      throw new Error('random circuit id is empty');
+    }
+    randomId[0] = firstByte | 0x80;
   }
   return randomId;
 }

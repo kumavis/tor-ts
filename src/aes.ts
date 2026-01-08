@@ -3,7 +3,7 @@ import { Mutex } from './util.ts';
 const blockLength = 16;
 const keyParams = { name: 'AES-CTR', length: 128 };
 
-const incrementCounter = (counter, blockCount: number) => {
+const incrementCounter = (counter: Buffer, blockCount: number) => {
   const ivLength = counter.length;
   const numberLength = 6;
   const counterOffset = ivLength - numberLength;
