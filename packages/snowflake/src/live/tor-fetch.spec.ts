@@ -22,7 +22,7 @@ test.serial('snowflake live: build circuit + fetch ipify (optional)', async (t) 
   const authority = pickRandom(authorities);
   const directoryServer = `${authority.address}:${authority.dirPort ?? authority.orPort}`;
 
-  const microDescContent = await downloadMicrodescFromDirectory(directoryServer);
+  const microDescContent = await dangerouslyDownloadMicrodescFromDirectory(directoryServer);
   const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
 
   const channel = new SnowflakeTlsChannelConnection();
@@ -145,7 +145,7 @@ function pickRandom<T>(arr: readonly T[]): T {
   return arr[Math.floor(Math.random() * arr.length)]!;
 }
 
-const fetchWithRetry = async (url: string, opts: RequestInit = {}) => {
+const dangerouslyFetchWithRetry = async (url: string, opts: RequestInit = {}) => {
   const maxRetries = 3;
   const retryDelay = 500;
   let retries = 0;
@@ -164,9 +164,11 @@ const fetchWithRetry = async (url: string, opts: RequestInit = {}) => {
   }
 };
 
-async function downloadMicrodescFromDirectory(directoryServerIpPort: string): Promise<string> {
+async function dangerouslyDownloadMicrodescFromDirectory(
+  directoryServerIpPort: string
+): Promise<string> {
   const url = `http://${directoryServerIpPort}/tor/status-vote/current/consensus-microdesc`;
-  const response = await fetchWithRetry(url);
+  const response = await dangerouslyFetchWithRetry(url);
   return response.text();
 }
 
@@ -182,7 +184,7 @@ async function dangerouslyLookupOnionKeyByServerDescriptor(
   rsaIdDigest: Buffer
 ): Promise<Buffer> {
   const url = `http://${peerIpPort}/tor/server/fp/${rsaIdDigest.toString('hex').toUpperCase()}`;
-  const response = await fetchWithRetry(url);
+  const response = await dangerouslyFetchWithRetry(url);
   const directoryRecord = await response.text();
   const ntorOnionKeyText = extractNtorOnionKey(directoryRecord);
   return Buffer.from(ntorOnionKeyText, 'base64');
@@ -194,7 +196,7 @@ async function dangerouslyLookupOnionKeyByMicrodescDigest(
 ): Promise<Buffer> {
   // Dir-spec: /tor/micro/d/<hex-encoded microdesc digests...>
   const url = `http://${peerIpPort}/tor/micro/d/${microdescDigest.toString('hex').toUpperCase()}`;
-  const response = await fetchWithRetry(url);
+  const response = await dangerouslyFetchWithRetry(url);
   const microdescText = await response.text();
   const ntorOnionKeyText = extractNtorOnionKey(microdescText);
   return Buffer.from(ntorOnionKeyText, 'base64');

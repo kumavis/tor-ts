@@ -59,7 +59,7 @@ type MicroDescNodeInfo = {
   bandwidthStats?: Record<string, number>;
 };
 
-const fetchWithRetry = async (url: string, opts: RequestInit = {}) => {
+const dangerouslyFetchWithRetry = async (url: string, opts: RequestInit = {}) => {
   const maxRetries = 3;
   const retryDelay = 500;
   let retries = 0;
@@ -78,9 +78,11 @@ const fetchWithRetry = async (url: string, opts: RequestInit = {}) => {
   }
 };
 
-async function downloadMicrodescFromDirectory(directoryServerIpPort: string): Promise<string> {
+async function dangerouslyDownloadMicrodescFromDirectory(
+  directoryServerIpPort: string
+): Promise<string> {
   const url = `http://${directoryServerIpPort}/tor/status-vote/current/consensus-microdesc`;
-  const response = await fetchWithRetry(url);
+  const response = await dangerouslyFetchWithRetry(url);
   return response.text();
 }
 
@@ -93,7 +95,7 @@ function extractNtorOnionKey(directoryRecord: string): string {
 
 async function dangerouslyLookupOnionKey(peerIpPort: string, rsaIdDigest: Buffer): Promise<Buffer> {
   const url = `http://${peerIpPort}/tor/server/fp/${rsaIdDigest.toString('hex').toUpperCase()}`;
-  const response = await fetchWithRetry(url);
+  const response = await dangerouslyFetchWithRetry(url);
   const directoryRecord = await response.text();
   const ntorOnionKeyText = extractNtorOnionKey(directoryRecord);
   return Buffer.from(ntorOnionKeyText, 'base64');
@@ -243,7 +245,7 @@ export async function connectSnowflakeChutneyCircuit(opts: {
   expectedEntryOrPort?: number;
 }): Promise<Circuit> {
   const directoryServer = await discoverDirectoryServerIpPort();
-  const microDescContent = await downloadMicrodescFromDirectory(directoryServer);
+  const microDescContent = await dangerouslyDownloadMicrodescFromDirectory(directoryServer);
   const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
 
   const channel = new SnowflakeTlsChannelConnection();
