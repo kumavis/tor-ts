@@ -108,7 +108,7 @@ export TOR_TS_HS_HOSTNAME_PATH="${CHUTNEY_DATA_DIR}/hs_service/hostname"
 cat > "networks/${CHUTNEY_NETWORK}" <<EOF
 Authority = Node(tag="a", authority=1, relay=1)
 
-# Extra relays to make HS intro/rend circuits viable.
+# Extra relays to make HS intro/rend + descriptor upload circuits viable.
 Relay = Node(tag="m", relay=1)
 
 # Allow exiting to localhost for CI-only integration tests.
@@ -121,11 +121,12 @@ Client = Node(tag="c", client=1)
 
 HiddenService = Node(tag="h", client=1, extra_raw_torrc="""\
 EnforceDistinctSubnets 0
+UseEntryGuards 0
 HiddenServiceDir ${CHUTNEY_DATA_DIR}/hs_service
 HiddenServicePort 80 127.0.0.1:${TOR_TS_HS_TARGET_PORT}
 """)
 
-NODES = Authority.getN(4) + Relay.getN(3) + ExitRelay.getN(1) + Client.getN(1) + HiddenService.getN(1)
+NODES = Authority.getN(4) + Relay.getN(6) + ExitRelay.getN(1) + Client.getN(1) + HiddenService.getN(1)
 ConfigureNodes(NODES)
 EOF
 
