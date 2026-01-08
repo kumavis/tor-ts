@@ -1,6 +1,7 @@
 import http from 'node:http';
 import { once } from 'node:events';
 import fs from 'node:fs/promises';
+import type net from 'node:net';
 
 import { connectToHiddenServiceOverChutney } from '../src/hidden-service.ts';
 
@@ -45,6 +46,7 @@ async function main() {
     process.env.TOR_TS_HS_HOSTNAME_PATH ??
     `${process.env.CHUTNEY_DATA_DIR ?? ''}/hs_service/hostname`;
 
+  const openSockets = new Set<net.Socket>();
   const server = http.createServer((_req, res) => {
     const body = expectedBody;
     res.statusCode = 200;
@@ -53,6 +55,10 @@ async function main() {
     res.setHeader('content-length', Buffer.byteLength(body).toString());
     res.setHeader('connection', 'close');
     res.end(body);
+  });
+  server.on('connection', (socket) => {
+    openSockets.add(socket);
+    socket.on('close', () => openSockets.delete(socket));
   });
 
   try {
@@ -84,6 +90,7 @@ async function main() {
       overallTimeoutMs + 90_000,
       connectToHiddenServiceOverChutney({ onionAddress, port: 80, overallTimeoutMs })
     );
+    console.log('hs: connected, issuing HTTP request');
 
     const responseChunks: Buffer[] = [];
     stream.on('data', (data: Buffer) => {
@@ -116,6 +123,7 @@ async function main() {
       stream.write(Buffer.from(requestText, 'ascii'))
     );
     await withTimeout('read response', overallTimeoutMs, responseCompleteP);
+    console.log('hs: response received (content-length satisfied)');
 
     const responseText = Buffer.concat(responseChunks).toString('utf8');
     if (!responseText.includes('200')) {
@@ -125,11 +133,21 @@ async function main() {
       throw new Error(`Expected body "${expectedBody}" in response, got:\n${responseText}`);
     }
 
+    console.log('hs: assertions passed, tearing down');
     // Best-effort close to avoid waiting for remote END cells.
     stream.destroy();
     circuit.destroy();
   } finally {
-    server.close();
+    // Ensure the process doesn't hang on lingering keepalive connections.
+    for (const s of openSockets) s.destroy();
+    await withTimeout(
+      'close local http server',
+      10_000,
+      (async () => {
+        server.close();
+        await once(server, 'close');
+      })()
+    );
   }
 }
 
