@@ -4,10 +4,14 @@ import path from 'node:path';
 import {
   downloadMicrodescFromDirectory,
   parseRelaysFromMicroDesc,
+  dangerouslyLookupOnionKey,
   dangerouslyLookupPeerInfo,
 } from './directory.ts';
 import type { MicroDescNodeInfo } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
+import { SnowflakeTlsChannelConnection } from '../snowflake/channel.ts';
+import { LinkSpecifierTypes } from '../messaging.ts';
+import { Circuit } from '../circuit.ts';
 
 function mustFindMicroDescNodeInfo(
   nodes: MicroDescNodeInfo[],
@@ -160,4 +164,66 @@ export async function getRandomChutneyCircuitPath() {
   circuitPeerInfos.reverse();
 
   return circuitPeerInfos;
+}
+
+export async function connectSnowflakeChutneyCircuit(opts: {
+  relayUrl: string;
+  expectedEntryOrPort?: number;
+}): Promise<Circuit> {
+  const directoryServer = await discoverDirectoryServerIpPort();
+  const microDescContent = await downloadMicrodescFromDirectory(directoryServer);
+  const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
+
+  const channel = new SnowflakeTlsChannelConnection();
+  await channel.connect({ relayUrl: opts.relayUrl });
+
+  const entryRsaIdDigest = channel.peerIdentity?.rsaIdDigest;
+  if (!entryRsaIdDigest) throw new Error('snowflake channel has no peer identity');
+
+  const entryOnionKey = await dangerouslyLookupOnionKey(directoryServer, entryRsaIdDigest);
+  const entryPeerInfo: PeerInfo = {
+    onionKey: entryOnionKey,
+    rsaIdDigest: entryRsaIdDigest,
+    linkSpecifiers: [{ type: LinkSpecifierTypes.LegacyId, data: entryRsaIdDigest }],
+  };
+
+  // Optionally ensure the entry matches some known chutney ORPort, to avoid surprises.
+  if (opts.expectedEntryOrPort) {
+    const match = microDescNodeInfos.find((n) => n.rsaIdDigest.equals(entryRsaIdDigest));
+    if (match && match.onion_router_port !== opts.expectedEntryOrPort) {
+      throw new Error(
+        `snowflake entry ORPort mismatch: expected ${opts.expectedEntryOrPort} got ${match.onion_router_port}`
+      );
+    }
+  }
+
+  // Pick exit/middle excluding the entry fingerprint.
+  const ignoreEntry = [{ rsaIdDigest: entryRsaIdDigest } as MicroDescNodeInfo];
+
+  const forcedExitRsaIdDigestHex = process.env.TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX?.toLowerCase();
+  const exitNode =
+    forcedExitRsaIdDigestHex
+      ? (() => {
+          const forcedExit = microDescNodeInfos.find((n) => {
+            const digestHex = n.rsaIdDigest.toString('hex');
+            return digestHex === forcedExitRsaIdDigestHex;
+          });
+          if (!forcedExit) {
+            throw new Error(
+              `TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX=${forcedExitRsaIdDigestHex} not found in microdesc`
+            );
+          }
+          return forcedExit;
+        })()
+      : pickRelayWithFlags(microDescNodeInfos, ['Exit'], ignoreEntry);
+
+  const middleNode = pickRelayWithFlags(microDescNodeInfos, [], [exitNode, ...ignoreEntry]);
+
+  const middlePeerInfo = await dangerouslyLookupPeerInfo(directoryServer, middleNode);
+  const exitPeerInfo = await dangerouslyLookupPeerInfo(directoryServer, exitNode);
+
+  const path: PeerInfo[] = [entryPeerInfo, middlePeerInfo, exitPeerInfo];
+  const circuit = new Circuit({ path, channel });
+  await circuit.connect();
+  return circuit;
 }
