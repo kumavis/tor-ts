@@ -56,15 +56,20 @@ type HopClientHandshake =
   | { kind: 'fast'; x: Buffer }
   | { kind: 'ntor'; handshake: Create2ClientHandshake };
 
-type HopKey = {
+export type HopKey = {
   encrypt(message: Buffer): Promise<Uint8Array>;
   decrypt(message: Buffer): Promise<Uint8Array>;
 };
 
-interface Cipher {
+export interface Cipher {
   key: HopKey;
   digest: crypto.Hash;
 }
+
+export type CircuitCipherPair = {
+  forward: Cipher;
+  backward: Cipher;
+};
 
 class CipherPair {
   forward: Cipher;
@@ -171,6 +176,18 @@ class Hop {
   }
 }
 
+class VirtualHop extends Hop {
+  constructor(cipherPair: CipherPair) {
+    super();
+    this.cipherPair = cipherPair;
+    this.isConnected = true;
+    this.handshakePromiseKit.resolve();
+  }
+  toString() {
+    return 'hop:virtual';
+  }
+}
+
 export class CircuitStream extends EventEmitter {
   streamId!: number;
   destination!: string;
@@ -195,7 +212,7 @@ export class CircuitStream extends EventEmitter {
   }
 }
 
-export class Circuit {
+export class Circuit extends EventEmitter {
   channel: ChannelConnection;
   hops: Array<Hop> = [];
   unsubscribeFromChannel: (() => void) | undefined;
@@ -205,6 +222,7 @@ export class Circuit {
   streams: Array<CircuitStream> = [];
 
   constructor({ path, channel }: { path: Array<PeerInfo>; channel: ChannelConnection }) {
+    super();
     this.channel = channel;
     // select circuitId
     const protocolVersion = channel.getProtocolVersion();
@@ -377,6 +395,11 @@ export class Circuit {
     // parse and process relay message
     const relayCell = parseRelayCellPayload(currentPayload);
     const { streamId, relayCommand, data } = relayCell;
+
+    // Allow higher-level protocols (like onion services) to observe relay cells.
+    // Note: for performance, listeners should filter on relayCommand/streamId.
+    this.emit('relay', { streamId, relayCommand, data, targetHop });
+
     const stream =
       streamId === 0 ? undefined : this.streams.find((stream) => stream.streamId === streamId);
     switch (relayCommand) {
@@ -396,6 +419,14 @@ export class Circuit {
           throw new Error(`Got CONNECTED for unknown streamId=${streamId}`);
         }
         stream.connectionPromiseKit.resolve();
+        return;
+      }
+      case RelayCell.RENDEZVOUS_ESTABLISHED:
+      case RelayCell.RENDEZVOUS2:
+      case RelayCell.INTRODUCE_ACK:
+      case RelayCell.INTRO_ESTABLISHED: {
+        // Hidden service relay commands are handled by callers listening on
+        // the circuit's 'relay' event.
         return;
       }
       case RelayCell.DATA: {
@@ -456,6 +487,12 @@ export class Circuit {
     return stream;
   }
 
+  async openDirectoryStream(): Promise<CircuitStream> {
+    const stream = this.createStream('(dir)');
+    await this.performDirectoryStreamHandshake(stream);
+    return stream;
+  }
+
   openStream(destination: string): CircuitStream {
     const stream = this.createStream(destination);
     // kick off handshake, but dont wait for it
@@ -493,11 +530,31 @@ export class Circuit {
     await stream.connectionPromiseKit.promise;
   }
 
+  async performDirectoryStreamHandshake(stream: CircuitStream): Promise<void> {
+    const { streamId } = stream;
+    // tor-spec: RELAY_BEGIN_DIR has an empty body.
+    await this.sendRelayMessage({
+      streamId,
+      relayCommand: RelayCell.BEGIN_DIR,
+      data: Buffer.alloc(0),
+    });
+    await stream.connectionPromiseKit.promise;
+  }
+
   destroy() {
     if (this.unsubscribeFromChannel) {
       this.unsubscribeFromChannel();
     }
     this.channel.destroy();
+  }
+
+  /**
+   * Add an additional (virtual) hop at the end of this circuit.
+   * Used for protocols like onion-service rendezvous, where the rendezvous
+   * circuit gains an extra end-to-end crypto layer after a handshake.
+   */
+  addVirtualHop(cipherPair: CircuitCipherPair) {
+    this.hops.push(new VirtualHop(cipherPair as CipherPair));
   }
 }
 
