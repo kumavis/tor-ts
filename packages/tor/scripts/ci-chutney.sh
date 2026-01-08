@@ -33,13 +33,21 @@ CHUTNEY_REPO_URL="https://gitlab.torproject.org/tpo/core/chutney.git"
 CHUTNEY_COMMIT="fb0bff1ffad593314a2692aa0f1d65db6f0251c9"
 
 CHUTNEY_DIR="${CHUTNEY_DIR:-/tmp/chutney}"
-rm -rf "${CHUTNEY_DIR}"
-git clone "${CHUTNEY_REPO_URL}" "${CHUTNEY_DIR}"
-git -C "${CHUTNEY_DIR}" checkout "${CHUTNEY_COMMIT}"
+CHUTNEY_SKIP_INSTALL="${CHUTNEY_SKIP_INSTALL:-0}"
 
-# Patch chutney's torrc template to make localhost exits work reliably in CI.
-# (We keep the repo pinned above; this is an in-place CI-only patch.)
-python3 - <<'PY'
+if [ "${CHUTNEY_SKIP_INSTALL}" = "1" ]; then
+  if [ ! -d "${CHUTNEY_DIR}" ]; then
+    echo "CHUTNEY_SKIP_INSTALL=1 but CHUTNEY_DIR missing: ${CHUTNEY_DIR}"
+    exit 1
+  fi
+else
+  rm -rf "${CHUTNEY_DIR}"
+  git clone "${CHUTNEY_REPO_URL}" "${CHUTNEY_DIR}"
+  git -C "${CHUTNEY_DIR}" checkout "${CHUTNEY_COMMIT}"
+
+  # Patch chutney's torrc template to make localhost exits work reliably in CI.
+  # (We keep the repo pinned above; this is an in-place CI-only patch.)
+  python3 - <<'PY'
 from pathlib import Path
 
 torrc_py = Path("/tmp/chutney/lib/chutney/tor/torrc.py")
@@ -75,9 +83,10 @@ torrc_py.write_text(txt)
 print("patched", torrc_py)
 PY
 
-# Install chutney deps (declared in pyproject.toml) into user site-packages
-python3 -m pip install --user --upgrade pip
-python3 -m pip install --user -e "${CHUTNEY_DIR}"
+  # Install chutney deps (declared in pyproject.toml) into user site-packages
+  python3 -m pip install --user --upgrade pip
+  python3 -m pip install --user -e "${CHUTNEY_DIR}"
+fi
 
 export CHUTNEY_DATA_DIR="${CHUTNEY_DATA_DIR:-$(mktemp -d)}"
 export CHUTNEY_LISTEN_ADDRESS="${CHUTNEY_LISTEN_ADDRESS:-127.0.0.1}"
