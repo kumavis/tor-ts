@@ -8,8 +8,7 @@
     "@noble/ed25519": "^2.3.0",
     "@noble/hashes": "^1.8.0",
     "commander": "^14.0.2",
-    "onionoo": "^2.0.2",
-    "snowflake": "0.1.0"
+    "onionoo": "^2.0.2"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
@@ -20,8 +19,13 @@
   "exports": {
     ".": "./src/index.ts",
     "./node": "./src/node.ts",
+    "./channel": "./src/channel.ts",
+    "./circuit": "./src/circuit.ts",
+    "./messaging": "./src/messaging.ts",
     "./build-circuit/chutney": "./src/build-circuit/chutney.ts",
+    "./build-circuit/directory": "./src/build-circuit/directory.ts",
     "./build-circuit/mainnet": "./src/build-circuit/mainnet.ts",
+    "./build-circuit/util": "./src/build-circuit/util.ts",
     "./cli": "./src/cli.ts"
   },
   "scripts": {

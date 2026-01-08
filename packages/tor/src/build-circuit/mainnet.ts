@@ -1,9 +1,7 @@
 import { Circuit } from '../circuit.ts';
 import type { PeerInfo } from '../circuit.ts';
 import { TlsChannelConnection } from '../channel.ts';
-import { SnowflakeTlsChannelConnection } from '../transports/snowflake.ts';
 import {
-  dangerouslyLookupOnionKey,
   dangerouslyLookupPeerInfo,
   downloadMicrodescFromDirectory,
   parseRelaysFromMicroDesc,
@@ -11,7 +9,6 @@ import {
 import type { MicroDescNodeInfo } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
 import { createRequire } from 'node:module';
-import { LinkSpecifierTypes } from '../messaging.ts';
 
 const require = createRequire(import.meta.url);
 const mainnetDirectoryAuthorities = require('../directory-authorities.json') as Array<{
@@ -77,27 +74,6 @@ export async function getRandomCircuitPath() {
   return circuitPeerInfos;
 }
 
-async function getDirectoryMicrodesc() {
-  let directoryServer: string | undefined;
-  let microDescContent: string | undefined;
-  while (!microDescContent) {
-    const directoryServerInfo = getRandomDirectoryAuthority();
-    if (!directoryServerInfo.dir_address) continue;
-    directoryServer = directoryServerInfo.dir_address;
-    try {
-      microDescContent = await downloadMicrodescFromDirectory(directoryServer);
-    } catch {
-      // ignore and retry
-    }
-  }
-  if (!directoryServer) throw new Error('Failed to select a directory authority');
-  const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
-  if (microDescNodeInfos.length === 0) {
-    throw new Error(`No relays parsed from microdesc at ${directoryServer}`);
-  }
-  return { directoryServer, microDescNodeInfos };
-}
-
 export async function connectRandomCircuit() {
   const circuitPeerInfos = await getRandomCircuitPath();
   const gatewayPeerInfo = circuitPeerInfos[0];
@@ -110,45 +86,6 @@ export async function connectRandomCircuit() {
     path: circuitPeerInfos,
     channel,
   });
-  await circuit.connect();
-  return circuit;
-}
-
-export async function connectSnowflakeCircuit(
-  opts: {
-    relayUrl?: string;
-  } = {}
-) {
-  const { directoryServer, microDescNodeInfos } = await getDirectoryMicrodesc();
-
-  const channel = new SnowflakeTlsChannelConnection();
-  await channel.connect(opts.relayUrl ? { relayUrl: opts.relayUrl } : {});
-
-  const entryRsaIdDigest = channel.peerIdentity?.rsaIdDigest;
-  if (!entryRsaIdDigest) {
-    throw new Error('Snowflake channel has no peer identity (handshake incomplete?)');
-  }
-  const entryOnionKey = await dangerouslyLookupOnionKey(directoryServer, entryRsaIdDigest);
-  const entryPeerInfo: PeerInfo = {
-    onionKey: entryOnionKey,
-    rsaIdDigest: entryRsaIdDigest,
-    linkSpecifiers: [
-      {
-        type: LinkSpecifierTypes.LegacyId,
-        data: entryRsaIdDigest,
-      },
-    ],
-  };
-
-  // Pick middle+exit, excluding entry fingerprint.
-  const ignoreEntry = [{ rsaIdDigest: entryRsaIdDigest } as MicroDescNodeInfo];
-  const exitNode = pickRelayWithFlags(microDescNodeInfos, ['Exit'], ignoreEntry);
-  const middleNode = pickRelayWithFlags(microDescNodeInfos, [], [exitNode, ...ignoreEntry]);
-  const middlePeerInfo = await dangerouslyLookupPeerInfo(directoryServer, middleNode);
-  const exitPeerInfo = await dangerouslyLookupPeerInfo(directoryServer, exitNode);
-
-  const circuitPeerInfos: PeerInfo[] = [entryPeerInfo, middlePeerInfo, exitPeerInfo];
-  const circuit = new Circuit({ path: circuitPeerInfos, channel });
   await circuit.connect();
   return circuit;
 }

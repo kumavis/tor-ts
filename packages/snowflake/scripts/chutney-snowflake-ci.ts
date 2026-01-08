@@ -1,7 +1,7 @@
 import http from 'node:http';
 import { once } from 'node:events';
 
-import { connectSnowflakeChutneyCircuit } from '../src/build-circuit/chutney.ts';
+import { connectSnowflakeChutneyCircuit } from '../src/tor/chutney.ts';
 
 async function withTimeout<T>(label: string, ms: number, promise: Promise<T>): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;

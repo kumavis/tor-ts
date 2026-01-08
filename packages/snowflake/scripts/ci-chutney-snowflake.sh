@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
 
 if ! command -v git >/dev/null; then
   echo "git is required"
@@ -33,11 +33,9 @@ if ! command -v go >/dev/null; then
   exit 1
 fi
 
-# Build snowflake-server binary (managed server transport plugin)
 mkdir -p "${ROOT_DIR}/.bin"
 GOBIN="${ROOT_DIR}/.bin" go install gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2/server@latest
 
-# https://gitlab.torproject.org/tpo/core/chutney
 CHUTNEY_REPO_URL="https://gitlab.torproject.org/tpo/core/chutney.git"
 CHUTNEY_COMMIT="fb0bff1ffad593314a2692aa0f1d65db6f0251c9"
 
@@ -46,7 +44,6 @@ rm -rf "${CHUTNEY_DIR}"
 git clone "${CHUTNEY_REPO_URL}" "${CHUTNEY_DIR}"
 git -C "${CHUTNEY_DIR}" checkout "${CHUTNEY_COMMIT}"
 
-# Patch chutney's torrc template to make localhost exits work reliably.
 python3 - <<'PY'
 from pathlib import Path
 
@@ -83,7 +80,6 @@ torrc_py.write_text(txt)
 print("patched", torrc_py)
 PY
 
-# Install chutney deps into user site-packages
 python3 -m pip install --user --upgrade pip
 python3 -m pip install --user -e "${CHUTNEY_DIR}"
 
@@ -107,7 +103,6 @@ cd "${CHUTNEY_DIR}"
 
 CHUTNEY_NETWORK="${CHUTNEY_NETWORK:-tor-ts-basic-min-snowflake}"
 
-# Choose a fixed local ws relay port for the snowflake server PT.
 export TOR_TS_SNOWFLAKE_RELAY_URL="${TOR_TS_SNOWFLAKE_RELAY_URL:-ws://127.0.0.1:9900/}"
 
 cat > "networks/${CHUTNEY_NETWORK}" <<EOF
@@ -120,11 +115,9 @@ Sandbox 0
 ExitRelay 0
 ExtORPort auto
 ServerTransportListenAddr snowflake 127.0.0.1:9900
-# Log PT details to a per-node file for debugging.
 ServerTransportPlugin snowflake exec ${ROOT_DIR}/.bin/server --disable-tls --unsafe-logging --log ${CHUTNEY_DATA_DIR}/nodes/004b/snowflake-server.log
 """)
 
-# Allow exiting to localhost for CI-only integration tests.
 ExitRelay = Node(tag="r", relay=1, exit=1, extra_raw_torrc="""\
 ClientRejectInternalAddresses 0
 ClientDNSRejectInternalAddresses 0
@@ -157,5 +150,5 @@ echo "=== end torrc summary ==="
 echo ""
 
 cd "${ROOT_DIR}"
-timeout 3m node --experimental-transform-types "${ROOT_DIR}/scripts/chutney-snowflake-ci.ts"
+timeout 3m node --experimental-transform-types "${ROOT_DIR}/packages/snowflake/scripts/chutney-snowflake-ci.ts"
 

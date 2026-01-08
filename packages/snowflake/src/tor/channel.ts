@@ -1,17 +1,17 @@
+import crypto from 'node:crypto';
 import tls from 'node:tls';
 import type { TLSSocket } from 'node:tls';
-import { ChannelConnection, type NodejsPeerAddressInfo } from '../channel.ts';
-import { makeRandomServerName } from '../tls.ts';
-import { SnowflakeWsStack } from 'snowflake';
-import { SmuxStreamDuplex } from 'snowflake/smux';
+import { ChannelConnection } from 'tor/channel';
+import type { NodejsPeerAddressInfo } from 'tor/channel';
+import { SmuxStreamDuplex } from '../smux/duplex.ts';
+import { SnowflakeWsStack } from '../snowflake-ws-stack.ts';
 
 export type SnowflakeTlsChannelOptions = {
   relayUrl?: string;
 };
 
 /**
- * Tor-specific ChannelConnection that uses the `snowflake` workspace package
- * as its underlying carrier.
+ * Tor-specific ChannelConnection that uses Snowflake WS downlink as the carrier.
  */
 export class SnowflakeTlsChannelConnection extends ChannelConnection {
   private stack?: SnowflakeWsStack;
@@ -67,4 +67,9 @@ export class SnowflakeTlsChannelConnection extends ChannelConnection {
     this.tlsSocket?.destroy();
     void this.stack?.close();
   }
+}
+
+function makeRandomServerName(): string {
+  const hex = crypto.randomBytes(Math.floor(Math.random() * 20 + 4)).toString('hex');
+  return `www.${hex}.net`;
 }
