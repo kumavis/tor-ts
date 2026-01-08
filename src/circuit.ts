@@ -310,14 +310,19 @@ export class Circuit {
       }
       case RelayCell.END: {
         const reason = data[0];
-        const reasonName = RelayEndReasonNames[reason];
+        const reasonName = RelayEndReasonNames[reason] || `UNKNOWN_REASON_${reason}`;
         if (reason === RelayEndReasons.REASON_DONE) {
           // ended normally
           stream.close();
           return;
         }
-        console.warn(`Got ungraceful end for stream ${streamId} with reason ${reasonName}`);
-        stream.destroy(new Error(`stream ended: ${reason}`));
+        const payloadHex = data.toString('hex');
+        console.warn(
+          `Got ungraceful end for stream ${streamId} with reason ${reasonName} (payload 0x${payloadHex})`
+        );
+        stream.destroy(
+          new Error(`stream ended: ${reasonName} (${reason}) payload=0x${payloadHex}`)
+        );
         return;
       }
       default: {

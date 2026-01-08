@@ -6,9 +6,9 @@ import { linkSpecifierToAddressAndPort } from './messaging.ts';
 import {
   downloadMicrodescFromDirectory,
   parseRelaysFromMicroDesc,
-  MicroDescNodeInfo,
   dangerouslyLookupPeerInfo,
 } from './build-circuit/directory.ts';
+import type { MicroDescNodeInfo } from './build-circuit/directory.ts';
 
 async function getStandardChutneyCircuitPath() {
   const loopback = '127.0.0.1';

@@ -1,4 +1,4 @@
-import { MicroDescNodeInfo } from './directory.ts';
+import type { MicroDescNodeInfo } from './directory.ts';
 
 export function filterRelaysByFlags(
   relays: MicroDescNodeInfo[],

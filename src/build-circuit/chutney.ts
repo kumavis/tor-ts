@@ -1,11 +1,49 @@
 import type { PeerInfo } from '../circuit.ts';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import {
   downloadMicrodescFromDirectory,
   parseRelaysFromMicroDesc,
-  MicroDescNodeInfo,
   dangerouslyLookupPeerInfo,
 } from './directory.ts';
+import type { MicroDescNodeInfo } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
+
+async function discoverDirectoryServerIpPort(): Promise<string> {
+  if (process.env.CHUTNEY_DIRECTORY_SERVER) {
+    return process.env.CHUTNEY_DIRECTORY_SERVER;
+  }
+
+  const dataDir = process.env.CHUTNEY_DATA_DIR;
+  if (dataDir) {
+    // Chutney writes generated torrc files under: $CHUTNEY_DATA_DIR/nodes/<node>/torrc
+    // (nodes is usually a symlink to nodes.<timestamp>)
+    const nodesDir = path.join(dataDir, 'nodes');
+    try {
+      const entries = await fs.readdir(nodesDir, { withFileTypes: true });
+      for (const entry of entries) {
+        if (!entry.isDirectory()) continue;
+        const torrcPath = path.join(nodesDir, entry.name, 'torrc');
+        let torrc: string;
+        try {
+          torrc = await fs.readFile(torrcPath, 'utf8');
+        } catch {
+          continue;
+        }
+        const match = torrc.match(/^DirPort\s+(\d+)\b/m);
+        if (!match) continue;
+        const dirPort = Number.parseInt(match[1], 10);
+        if (!Number.isFinite(dirPort) || dirPort <= 0) continue;
+        return `127.0.0.1:${dirPort}`;
+      }
+    } catch {
+      // fall through to default
+    }
+  }
+
+  // Historical default for this repo's chutney scripts
+  return '127.0.0.1:7000';
+}
 
 /* chutney testing instructions:
 
@@ -35,8 +73,7 @@ restart
 */
 
 export async function getStandardChutneyCircuitPath() {
-  const loopback = '127.0.0.1';
-  const directoryServer = `${loopback}:7000`;
+  const directoryServer = await discoverDirectoryServerIpPort();
   const microDescContent = await downloadMicrodescFromDirectory(directoryServer);
   const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
 
@@ -57,13 +94,28 @@ export async function getStandardChutneyCircuitPath() {
 }
 
 export async function getRandomChutneyCircuitPath() {
-  const loopback = '127.0.0.1';
-  const directoryServer = `${loopback}:7000`;
+  const directoryServer = await discoverDirectoryServerIpPort();
   const microDescContent = await downloadMicrodescFromDirectory(directoryServer);
   const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
 
   const circuitPlan: Array<MicroDescNodeInfo> = [];
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Exit'], circuitPlan));
+
+  const forcedExitRsaIdDigestHex = process.env.TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX?.toLowerCase();
+  if (forcedExitRsaIdDigestHex) {
+    const forcedExit = microDescNodeInfos.find((n) => {
+      const digestHex = n.rsaIdDigest?.toString('hex');
+      return digestHex === forcedExitRsaIdDigestHex;
+    });
+    if (!forcedExit) {
+      throw new Error(
+        `TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX=${forcedExitRsaIdDigestHex} not found in microdesc`
+      );
+    }
+    circuitPlan.push(forcedExit);
+  } else {
+    circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Exit'], circuitPlan));
+  }
+
   circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, [], circuitPlan));
   circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Guard'], circuitPlan));
 

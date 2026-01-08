@@ -2,11 +2,11 @@ import { Circuit } from '../circuit.ts';
 import type { PeerInfo } from '../circuit.ts';
 import { TlsChannelConnection } from '../channel.ts';
 import {
-  MicroDescNodeInfo,
   dangerouslyLookupPeerInfo,
   downloadMicrodescFromDirectory,
   parseRelaysFromMicroDesc,
 } from './directory.ts';
+import type { MicroDescNodeInfo } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
 import { createRequire } from 'node:module';
 

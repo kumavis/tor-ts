@@ -31,3 +31,29 @@ jobs:
 
       - name: Test
         run: yarn test
+
+  chutney:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    needs: test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: yarn
+
+      - name: Install JS deps
+        run: yarn install --frozen-lockfile
+
+      - name: Install Tor + Python tooling
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y tor tor-geoipdb python3 python3-pip git
+
+      - name: Run Chutney integration test
+        run: bash scripts/ci-chutney.sh
