@@ -1,4 +1,6 @@
 import crypto from 'node:crypto';
+import fs from 'node:fs/promises';
+import path from 'node:path';
 import { x25519, ed25519 } from '@noble/curves/ed25519';
 import { sha3_256, shake256 } from '@noble/hashes/sha3';
 import { BytesReader } from './util.ts';
@@ -24,6 +26,33 @@ const S_KEY_LEN = 32; // AES-256 key
 const S_IV_LEN = 16; // AES block/iv length
 
 const RELAY_PAYLOAD_LEN = 509 - 11;
+
+async function tryReadChutneyEd25519IdentityKeyMap(): Promise<Map<string, Buffer> | undefined> {
+  const dataDir = process.env.CHUTNEY_DATA_DIR;
+  if (!dataDir) return undefined;
+  try {
+    const nodesDir = path.join(dataDir, 'nodes');
+    const entries = await fs.readdir(nodesDir, { withFileTypes: true });
+    const map = new Map<string, Buffer>();
+    for (const ent of entries) {
+      if (!ent.isDirectory()) continue;
+      const fpPath = path.join(nodesDir, ent.name, 'fingerprint-ed25519');
+      try {
+        const txt = await fs.readFile(fpPath, 'utf8');
+        const [nickname, b64] = txt.trim().split(/\s+/, 3);
+        if (!nickname || !b64) continue;
+        const key = Buffer.from(b64, 'base64');
+        if (key.length !== 32) continue;
+        map.set(nickname, key);
+      } catch {
+        // ignore missing files
+      }
+    }
+    return map;
+  } catch {
+    return undefined;
+  }
+}
 
 function sha3(...parts: Buffer[]): Buffer {
   return Buffer.from(sha3_256(Buffer.concat(parts)));
@@ -782,10 +811,16 @@ export async function connectToHiddenServiceOverChutney(params: {
   console.log('hs: looking up descriptor (directory stream)');
   // Spec-correct HSv3 descriptor location requires the HSDir hash ring, which
   // depends on each HSDir's ed25519 identity key (from its server descriptor).
+  const localEd25519ByNickname = await tryReadChutneyEd25519IdentityKeyMap();
   const hsdirCandidates = (
     await Promise.all(
       shuffleInPlace([...hsdirNodes]).map(async (n) => {
         try {
+          const localEd25519 = localEd25519ByNickname?.get(n.nickname);
+          if (localEd25519) {
+            const peerInfo = await dangerouslyLookupPeerInfo(directoryServer, n);
+            return { peerInfo, ed25519IdentityKey: localEd25519 } satisfies HsdirCandidate;
+          }
           const { peerInfo, ed25519IdentityKey } =
             await dangerouslyLookupPeerInfoWithEd25519IdentityKey(directoryServer, n);
           return { peerInfo, ed25519IdentityKey } satisfies HsdirCandidate;
@@ -826,12 +861,6 @@ export async function connectToHiddenServiceOverChutney(params: {
 
   const nReplicas = Math.min(16, Math.max(1, consensus.params['hsdir_n_replicas'] ?? 2));
   const spreadFetch = Math.min(128, Math.max(1, consensus.params['hsdir_spread_fetch'] ?? 3));
-  const spreadStore = Math.min(128, Math.max(1, consensus.params['hsdir_spread_store'] ?? 4));
-  // For the Chutney integration environment, querying only hsdir_spread_fetch nodes can be
-  // unnecessarily fragile; transient circuit failures or HSDir churn can cause 404s even
-  // when the descriptor exists elsewhere in the store set. Prefer the larger of
-  // {fetch,store} to reduce flakiness.
-  const spreadFetchEffective = Math.max(spreadFetch, spreadStore);
 
   while (!outerText && Date.now() <= deadline) {
     for (const periodNum of periodCandidates) {
@@ -860,7 +889,7 @@ export async function connectToHiddenServiceOverChutney(params: {
           periodLengthMinutes,
           periodNum,
           nReplicas,
-          spreadFetch: spreadFetchEffective,
+          spreadFetch,
           shuffleInPlace,
         });
 

@@ -58,6 +58,8 @@ async function main() {
   });
   server.on('connection', (socket) => {
     openSockets.add(socket);
+    // Don't keep the process alive because of keepalive sockets.
+    socket.unref();
     socket.on('close', () => openSockets.delete(socket));
   });
 
@@ -68,6 +70,8 @@ async function main() {
       (async () => {
         server.listen(targetPort, '127.0.0.1');
         await once(server, 'listening');
+        // Don't keep the process alive on server handle.
+        server.unref();
       })()
     );
 
@@ -140,14 +144,7 @@ async function main() {
   } finally {
     // Ensure the process doesn't hang on lingering keepalive connections.
     for (const s of openSockets) s.destroy();
-    await withTimeout(
-      'close local http server',
-      10_000,
-      (async () => {
-        server.close();
-        await once(server, 'close');
-      })()
-    );
+    server.close();
   }
 }
 
