@@ -133,6 +133,64 @@ EOF
 timeout 10m ./chutney bootstrap "${CHUTNEY_NETWORK}"
 ./chutney status "${CHUTNEY_NETWORK}"
 
+# If we plan to run the hidden-service test, wait until the hidden service has actually
+# uploaded its descriptor to HSDirs. The hostname file can exist before descriptor
+# upload is complete, which can cause flaky 404s when the client looks up /tor/hs/3/<z>.
+if [[ ",${TOR_TS_CHUTNEY_TESTS:-exit,hidden-service}," == *",hidden-service,"* ]]; then
+  echo ""
+  echo "Waiting for hidden service descriptor upload (to reduce flakiness)..."
+  python3 - <<'PY'
+import glob
+import os
+import time
+
+data_dir = os.environ.get("CHUTNEY_DATA_DIR", "")
+if not data_dir:
+    raise SystemExit("CHUTNEY_DATA_DIR is not set")
+
+hostname_path = os.environ.get("TOR_TS_HS_HOSTNAME_PATH", os.path.join(data_dir, "hs_service", "hostname"))
+hs_nodes = sorted(glob.glob(os.path.join(data_dir, "nodes", "*h")))
+if not hs_nodes:
+    raise SystemExit(f"Could not find hidden service node under {data_dir}/nodes/*h")
+
+hs_log = os.path.join(hs_nodes[0], "info.log")
+deadline = time.time() + 180  # seconds
+needle1 = "HS descriptor stored successfully."
+needle2 = "Uploading hidden service descriptor: finished with status 200"
+
+last_size = -1
+while time.time() <= deadline:
+    # Ensure hostname exists too (helps diagnostics)
+    if os.path.exists(hostname_path) and os.path.exists(hs_log):
+        try:
+            txt = open(hs_log, "r", encoding="utf-8", errors="replace").read()
+        except Exception:
+            txt = ""
+        if needle1 in txt or needle2 in txt:
+            print("Hidden service descriptor upload confirmed.")
+            raise SystemExit(0)
+        try:
+            sz = os.path.getsize(hs_log)
+        except OSError:
+            sz = -1
+        if sz != last_size:
+            last_size = sz
+    time.sleep(1)
+
+print("Timed out waiting for hidden service descriptor upload.")
+print(f"hostname_path={hostname_path}")
+print(f"hs_log={hs_log}")
+try:
+    tail = open(hs_log, "r", encoding="utf-8", errors="replace").read().splitlines()[-40:]
+    print("Last 40 lines of hs info.log:")
+    for line in tail:
+        print(line)
+except Exception as e:
+    print(f"Could not read hs log tail: {e}")
+raise SystemExit(1)
+PY
+fi
+
 # Force the integration test to use the real exit relay.
 # Chutney writes a hex fingerprint in nodes/*r/fingerprint; that's the SHA1 digest we use.
 TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX="$(awk '{print $2}' "${CHUTNEY_DATA_DIR}"/nodes/*r/fingerprint | head -n 1 | tr 'A-Z' 'a-z')"
