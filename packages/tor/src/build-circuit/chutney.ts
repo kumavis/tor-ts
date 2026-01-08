@@ -2,7 +2,7 @@ import type { PeerInfo } from '../circuit.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  downloadMicrodescFromDirectory,
+  dangerouslyDownloadMicrodescFromDirectory,
   parseRelaysFromMicroDesc,
   dangerouslyLookupPeerInfo,
 } from './directory.ts';
@@ -88,7 +88,7 @@ restart
 
 export async function getStandardChutneyCircuitPath() {
   const directoryServer = await discoverDirectoryServerIpPort();
-  const microDescContent = await downloadMicrodescFromDirectory(directoryServer);
+  const microDescContent = await dangerouslyDownloadMicrodescFromDirectory(directoryServer);
   const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
 
   const circuitPlan: Array<MicroDescNodeInfo> = [];
@@ -127,7 +127,7 @@ export async function getStandardChutneyCircuitPath() {
 
 export async function getRandomChutneyCircuitPath() {
   const directoryServer = await discoverDirectoryServerIpPort();
-  const microDescContent = await downloadMicrodescFromDirectory(directoryServer);
+  const microDescContent = await dangerouslyDownloadMicrodescFromDirectory(directoryServer);
   const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
 
   const circuitPlan: Array<MicroDescNodeInfo> = [];

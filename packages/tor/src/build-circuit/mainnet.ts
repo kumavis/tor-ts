@@ -3,7 +3,7 @@ import type { PeerInfo } from '../circuit.ts';
 import { TlsChannelConnection } from '../channel.ts';
 import {
   dangerouslyLookupPeerInfo,
-  downloadMicrodescFromDirectory,
+  dangerouslyDownloadMicrodescFromDirectory,
   parseRelaysFromMicroDesc,
 } from './directory.ts';
 import type { MicroDescNodeInfo } from './directory.ts';
@@ -35,7 +35,7 @@ export async function getRandomCircuitPath() {
     }
     directoryServer = directoryServerInfo.dir_address;
     try {
-      microDescContent = await downloadMicrodescFromDirectory(directoryServer);
+      microDescContent = await dangerouslyDownloadMicrodescFromDirectory(directoryServer);
     } catch {
       // ignore error and attempt again
     }
