@@ -9,7 +9,6 @@ import {
   dangerouslyDownloadMicrodescFromDirectory,
   dangerouslyLookupPeerInfo,
   parseRelaysFromMicroDesc,
-  type MicroDescNodeInfo,
 } from 'tor/build-circuit/directory';
 import { pickRelayWithFlags } from 'tor/build-circuit/util';
 import { getTorAgentForUrl } from 'tor/node';
