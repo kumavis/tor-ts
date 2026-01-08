@@ -46,9 +46,13 @@ async function main() {
     `${process.env.CHUTNEY_DATA_DIR ?? ''}/hs_service/hostname`;
 
   const server = http.createServer((_req, res) => {
+    const body = expectedBody;
     res.statusCode = 200;
     res.setHeader('content-type', 'text/plain');
-    res.end(expectedBody);
+    // Make response framing deterministic so the client doesn't need to wait for socket close.
+    res.setHeader('content-length', Buffer.byteLength(body).toString());
+    res.setHeader('connection', 'close');
+    res.end(body);
   });
 
   try {
@@ -85,12 +89,24 @@ async function main() {
     stream.on('data', (data: Buffer) => {
       responseChunks.push(Buffer.from(data));
     });
-    const streamEndedP = new Promise<void>((resolve, reject) => {
-      stream.once('end', (err?: Error) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
+    const responseCompleteP = (async () => {
+      const start = Date.now();
+      while (Date.now() - start < overallTimeoutMs) {
+        const buf = Buffer.concat(responseChunks);
+        const headerEnd = buf.indexOf('\r\n\r\n');
+        if (headerEnd !== -1) {
+          const headersText = buf.subarray(0, headerEnd).toString('utf8');
+          const m = headersText.match(/\r?\ncontent-length:\s*(\d+)\s*\r?\n/i);
+          if (m?.[1]) {
+            const contentLength = Number.parseInt(m[1], 10);
+            const bodyStart = headerEnd + 4;
+            if (buf.length >= bodyStart + contentLength) return;
+          }
+        }
+        await new Promise((r) => setTimeout(r, 25));
+      }
+      throw new Error('Timed out waiting for complete HTTP response (content-length)');
+    })();
 
     const requestText =
       `GET / HTTP/1.1\r\n` + `Host: ${onionAddress}\r\n` + `Connection: close\r\n` + `\r\n`;
@@ -99,7 +115,7 @@ async function main() {
       perStepTimeoutMs,
       stream.write(Buffer.from(requestText, 'ascii'))
     );
-    await withTimeout('read response', overallTimeoutMs, streamEndedP);
+    await withTimeout('read response', overallTimeoutMs, responseCompleteP);
 
     const responseText = Buffer.concat(responseChunks).toString('utf8');
     if (!responseText.includes('200')) {
@@ -109,6 +125,8 @@ async function main() {
       throw new Error(`Expected body "${expectedBody}" in response, got:\n${responseText}`);
     }
 
+    // Best-effort close to avoid waiting for remote END cells.
+    stream.destroy();
     circuit.destroy();
   } finally {
     server.close();
