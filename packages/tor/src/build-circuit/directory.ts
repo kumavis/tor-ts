@@ -153,6 +153,28 @@ function extractNtorOnionKey(directoryRecord: string): string {
   return ntorOnionKey;
 }
 
+function extractMasterKeyEd25519(directoryRecord: string): string {
+  // master-key-ed25519 g+QcBzNGERaiCl2KJbCyob0B8rlynPBSMlkJKprMzfU
+  const linePrefix = 'master-key-ed25519 ';
+  const line = directoryRecord.split('\n').find((line) => line.startsWith(linePrefix));
+  if (!line) throw new Error('no master-key-ed25519 line found');
+  return line.slice(linePrefix.length).trim();
+}
+
+async function downloadRelayServerDescriptor(
+  peerIpPort: string,
+  rsaIdDigest: Buffer
+): Promise<string> {
+  const url = `http://${peerIpPort}/tor/server/fp/${rsaIdDigest.toString('hex').toUpperCase()}`;
+  const response = await fetchWithRetry(url);
+  if (!response.ok) {
+    throw new Error(
+      `Failed to query peer for relay descriptor: ${response.status} ${response.statusText}`
+    );
+  }
+  return await response.text();
+}
+
 export type MicroDescNodeInfo = {
   nickname: string;
   rsaIdDigest: Buffer;
@@ -332,9 +354,29 @@ export async function dangerouslyLookupPeerInfo(
   directoryServer: string,
   nodeInfo: MicroDescNodeInfo
 ) {
-  const onionKey = await dangerouslyLookupOnionKey(directoryServer, nodeInfo.rsaIdDigest);
-  const peerInfo = microDescNodeInfoToPeerInfo(nodeInfo, onionKey);
+  const { peerInfo } = await dangerouslyLookupPeerInfoWithEd25519IdentityKey(
+    directoryServer,
+    nodeInfo
+  );
   return peerInfo;
+}
+
+export async function dangerouslyLookupPeerInfoWithEd25519IdentityKey(
+  directoryServer: string,
+  nodeInfo: MicroDescNodeInfo
+): Promise<{ peerInfo: PeerInfo; ed25519IdentityKey: Buffer }> {
+  const directoryRecord = await downloadRelayServerDescriptor(
+    directoryServer,
+    nodeInfo.rsaIdDigest
+  );
+  const ntorOnionKeyText = extractNtorOnionKey(directoryRecord);
+  const onionKey = Buffer.from(ntorOnionKeyText, 'base64');
+  const ed25519IdentityKey = Buffer.from(extractMasterKeyEd25519(directoryRecord), 'base64');
+  if (ed25519IdentityKey.length !== 32) {
+    throw new Error(`Expected 32-byte ed25519 identity, got ${ed25519IdentityKey.length}`);
+  }
+  const peerInfo = microDescNodeInfoToPeerInfo(nodeInfo, onionKey);
+  return { peerInfo, ed25519IdentityKey };
 }
 
 export function microDescNodeInfoToPeerInfo(

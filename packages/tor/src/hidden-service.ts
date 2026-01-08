@@ -12,7 +12,10 @@ import {
   getChutneyMicrodescConsensus,
   getRandomChutneyCircuitPathToTarget,
 } from './build-circuit/chutney.ts';
-import { dangerouslyLookupPeerInfo } from './build-circuit/directory.ts';
+import {
+  dangerouslyLookupPeerInfo,
+  dangerouslyLookupPeerInfoWithEd25519IdentityKey,
+} from './build-circuit/directory.ts';
 import { pickRelayWithFlags } from './build-circuit/util.ts';
 
 const HASH_LEN = 32; // SHA3-256
@@ -62,6 +65,107 @@ function aes256CtrXor(key: Buffer, iv: Buffer, data: Buffer): Buffer {
 
 function toBase64UrlNoPad(buf: Buffer): string {
   return buf.toString('base64').replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
+}
+
+function computeDisasterSrv(params: { periodLengthMinutes: bigint; periodNum: bigint }): Buffer {
+  // Tor-compatible disaster SRV (see tor hs_common.c compute_disaster_srv()):
+  // SHA3-256("shared-random-disaster" | INT_8(period_length) | INT_8(period_num))
+  const prefix = Buffer.from('shared-random-disaster', 'ascii');
+  return sha3(prefix, u64be(params.periodLengthMinutes), u64be(params.periodNum));
+}
+
+function hsBuildHsIndex(params: {
+  blindedPublicKey: Buffer;
+  replicanum: bigint;
+  periodLengthMinutes: bigint;
+  periodNum: bigint;
+}): Buffer {
+  // SHA3-256("store-at-idx" | blinded_public_key |
+  //          INT_8(replicanum) | INT_8(period_length) | INT_8(period_num))
+  const prefix = Buffer.from('store-at-idx', 'ascii');
+  return sha3(
+    prefix,
+    params.blindedPublicKey,
+    u64be(params.replicanum),
+    u64be(params.periodLengthMinutes),
+    u64be(params.periodNum)
+  );
+}
+
+function hsBuildHsdirIndex(params: {
+  ed25519IdentityKey: Buffer;
+  sharedRandomValue: Buffer;
+  periodLengthMinutes: bigint;
+  periodNum: bigint;
+}): Buffer {
+  // SHA3-256("node-idx" | node_identity |
+  //          shared_random_value | INT_8(period_num) | INT_8(period_length))
+  // Note order matches tor hs_build_hsdir_index().
+  const prefix = Buffer.from('node-idx', 'ascii');
+  return sha3(
+    prefix,
+    params.ed25519IdentityKey,
+    params.sharedRandomValue,
+    u64be(params.periodNum),
+    u64be(params.periodLengthMinutes)
+  );
+}
+
+type HsdirCandidate = {
+  peerInfo: PeerInfo;
+  ed25519IdentityKey: Buffer;
+};
+
+function selectHsdirsForFetch(params: {
+  hsdirs: HsdirCandidate[];
+  sharedRandomValue: Buffer;
+  blindedPublicKey: Buffer;
+  periodLengthMinutes: bigint;
+  periodNum: bigint;
+  nReplicas: number;
+  spreadFetch: number;
+  shuffleInPlace: <T>(arr: T[]) => T[];
+}): PeerInfo[] {
+  const ring = params.hsdirs
+    .map((h) => {
+      const idx = hsBuildHsdirIndex({
+        ed25519IdentityKey: h.ed25519IdentityKey,
+        sharedRandomValue: params.sharedRandomValue,
+        periodLengthMinutes: params.periodLengthMinutes,
+        periodNum: params.periodNum,
+      });
+      return { ...h, idx };
+    })
+    .sort((a, b) => Buffer.compare(a.idx, b.idx));
+
+  if (ring.length === 0) return [];
+
+  const selected = new Set<string>();
+  const out: PeerInfo[] = [];
+
+  for (let replica = 1; replica <= params.nReplicas; replica++) {
+    const hsIdx = hsBuildHsIndex({
+      blindedPublicKey: params.blindedPublicKey,
+      replicanum: BigInt(replica),
+      periodLengthMinutes: params.periodLengthMinutes,
+      periodNum: params.periodNum,
+    });
+
+    let start = ring.findIndex((x) => Buffer.compare(x.idx, hsIdx) > 0);
+    if (start === -1) start = 0;
+
+    let added = 0;
+    for (let step = 0; step < ring.length && added < params.spreadFetch; step++) {
+      const entry = ring[(start + step) % ring.length]!;
+      const key = entry.peerInfo.rsaIdDigest.toString('hex');
+      if (selected.has(key)) continue;
+      selected.add(key);
+      out.push(entry.peerInfo);
+      added++;
+    }
+  }
+
+  return params.shuffleInPlace(out);
 }
 
 function base32DecodeLowerNoPad(s: string): Buffer {
@@ -661,7 +765,12 @@ export async function connectToHiddenServiceOverChutney(params: {
 
   const { directoryServer, consensus } = await getChutneyMicrodescConsensus();
   const hsdirInterval = consensus.params['hsdir-interval'] ?? 1440;
-  const hsdirNodes = (consensus.relays ?? []).filter((r) => (r.flags ?? []).includes('HSDir'));
+  const hsdirNodes = (consensus.relays ?? []).filter((r) => {
+    if (!(r.flags ?? []).includes('HSDir')) return false;
+    const hsdirProto = r.protocols?.HSDir;
+    if (!hsdirProto) return false;
+    return hsdirProto.split(',').some((v) => v.includes('2'));
+  });
   if (hsdirNodes.length === 0) {
     throw new Error('No HSDir candidates found in consensus');
   }
@@ -671,23 +780,23 @@ export async function connectToHiddenServiceOverChutney(params: {
   }
 
   console.log('hs: looking up descriptor (directory stream)');
-  // Build PeerInfo objects for HSDir candidates (for directory streams over ORPort).
-  // In small testing networks (like Chutney), it is cheap and much less flaky to
-  // try *all* HSDirs rather than a prefix subset.
-  const shuffledHsdirNodes = shuffleInPlace([...hsdirNodes]);
-  const hsdirPeerInfos = (
+  // Spec-correct HSv3 descriptor location requires the HSDir hash ring, which
+  // depends on each HSDir's ed25519 identity key (from its server descriptor).
+  const hsdirCandidates = (
     await Promise.all(
-      shuffledHsdirNodes.map(async (n) => {
+      shuffleInPlace([...hsdirNodes]).map(async (n) => {
         try {
-          return await dangerouslyLookupPeerInfo(directoryServer, n);
+          const { peerInfo, ed25519IdentityKey } =
+            await dangerouslyLookupPeerInfoWithEd25519IdentityKey(directoryServer, n);
+          return { peerInfo, ed25519IdentityKey } satisfies HsdirCandidate;
         } catch {
           return undefined;
         }
       })
     )
-  ).filter((x): x is PeerInfo => Boolean(x));
-  if (hsdirPeerInfos.length === 0) {
-    throw new Error('Failed to build any HSDir PeerInfo entries');
+  ).filter((x): x is HsdirCandidate => Boolean(x));
+  if (hsdirCandidates.length === 0) {
+    throw new Error('Failed to build any HSDir candidates (peerinfo + ed25519 identity)');
   }
 
   const { publicIdentityKey } = parseOnionV3Address(params.onionAddress);
@@ -715,6 +824,9 @@ export async function connectToHiddenServiceOverChutney(params: {
   let blindedPublicKey: Buffer | undefined;
   let outerText: string | undefined;
 
+  const nReplicas = Math.min(16, Math.max(1, consensus.params['hsdir_n_replicas'] ?? 2));
+  const spreadFetch = Math.min(128, Math.max(1, consensus.params['hsdir_spread_fetch'] ?? 3));
+
   while (!outerText && Date.now() <= deadline) {
     for (const periodNum of periodCandidates) {
       blindedPublicKey = deriveBlindedPublicKey({
@@ -725,19 +837,41 @@ export async function connectToHiddenServiceOverChutney(params: {
       subcred = deriveSubcredential({ publicIdentityKey, blindedPublicKey });
       const z = toBase64UrlNoPad(blindedPublicKey);
 
-      const hsdirPeersThisRound = shuffleInPlace([...hsdirPeerInfos]);
-      for (const hsdirPeer of hsdirPeersThisRound) {
-        const timeLeftMs = deadline - Date.now();
-        if (timeLeftMs <= 0) break;
-        const got = await fetchHsDescriptorOverChutneyDirectoryStream(
-          hsdirPeer,
-          z,
-          Math.min(perHandshakeTimeoutMs, timeLeftMs)
-        );
-        if (got) {
-          outerText = got;
-          break;
+      // Tor always has a "current" and "previous" SRV concept. If either is missing
+      // from the consensus, Tor uses a derived "disaster" SRV instead. To reduce
+      // flakiness around SRV/TP boundaries in Chutney, try both.
+      const disasterSrv = computeDisasterSrv({ periodLengthMinutes, periodNum });
+      const srvValues: Buffer[] = [
+        consensus.sharedRandCurrentValue ?? disasterSrv,
+        consensus.sharedRandPreviousValue ?? disasterSrv,
+      ];
+
+      for (const srv of srvValues) {
+        const hsdirPeersThisRound = selectHsdirsForFetch({
+          hsdirs: hsdirCandidates,
+          sharedRandomValue: srv,
+          blindedPublicKey,
+          periodLengthMinutes,
+          periodNum,
+          nReplicas,
+          spreadFetch,
+          shuffleInPlace,
+        });
+
+        for (const hsdirPeer of hsdirPeersThisRound) {
+          const timeLeftMs = deadline - Date.now();
+          if (timeLeftMs <= 0) break;
+          const got = await fetchHsDescriptorOverChutneyDirectoryStream(
+            hsdirPeer,
+            z,
+            Math.min(perHandshakeTimeoutMs, timeLeftMs)
+          );
+          if (got) {
+            outerText = got;
+            break;
+          }
         }
+        if (outerText) break;
       }
       if (outerText) break;
     }
