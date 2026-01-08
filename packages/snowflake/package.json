@@ -23,6 +23,7 @@
   },
   "scripts": {
     "test": "ava src/*.spec.ts",
+    "test:live": "ava src/live/*.spec.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "ava": {

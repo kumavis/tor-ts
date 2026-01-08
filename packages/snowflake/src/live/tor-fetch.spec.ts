@@ -1,63 +1,119 @@
 import fs from 'node:fs/promises';
+import http from 'node:http';
+import https from 'node:https';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 
+import test from 'ava';
 import { Circuit } from 'tor/circuit';
 import type { PeerInfo } from 'tor/circuit';
 import { AddressTypes, LinkSpecifierTypes, addressAndPortToLinkSpecifier } from 'tor/messaging';
 import type { LinkSpecifier } from 'tor/messaging';
+import { getTorAgentForUrl } from 'tor/node';
 
-import { SnowflakeTlsChannelConnection } from './channel.ts';
+import { SnowflakeTlsChannelConnection } from '../tor-channel.ts';
 
-async function discoverDirectoryServerIpPort(): Promise<string> {
-  if (process.env.CHUTNEY_DIRECTORY_SERVER) {
-    return process.env.CHUTNEY_DIRECTORY_SERVER;
-  }
+type DirectoryAuthority = { address: string; orPort: number; dirPort?: number };
 
-  const dataDir = process.env.CHUTNEY_DATA_DIR;
-  if (dataDir) {
-    const nodesDir = path.join(dataDir, 'nodes');
-    try {
-      const entries = await fs.readdir(nodesDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const torrcPath = path.join(nodesDir, entry.name, 'torrc');
-        let torrc: string;
-        try {
-          torrc = await fs.readFile(torrcPath, 'utf8');
-        } catch {
-          continue;
-        }
-        const match = torrc.match(/^DirPort\s+(\d+)\b/m);
-        if (!match) continue;
-        const dirPortText = match[1];
-        if (!dirPortText) continue;
-        const dirPort = Number.parseInt(dirPortText, 10);
-        if (!Number.isFinite(dirPort) || dirPort <= 0) continue;
-        return `127.0.0.1:${dirPort}`;
+const liveTest = isLiveEnabled() ? test.serial : test.serial.skip;
+
+liveTest('snowflake live: build circuit + fetch ipify (optional)', async (t) => {
+  t.timeout(180_000);
+
+  const authorities = await loadDirectoryAuthoritiesFromTorPackage();
+  const authority = pickRandom(authorities);
+  const directoryServer = `${authority.address}:${authority.dirPort ?? authority.orPort}`;
+
+  const microDescContent = await downloadMicrodescFromDirectory(directoryServer);
+  const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
+
+  const channel = new SnowflakeTlsChannelConnection();
+  await channel.connect({ relayUrl: 'wss://snowflake.torproject.net/' });
+  t.teardown(() => channel.destroy());
+
+  const entryRsaIdDigest = channel.peerIdentity?.rsaIdDigest;
+  if (!entryRsaIdDigest) throw new Error('snowflake channel has no peer identity');
+
+  const entryOnionKey = await dangerouslyLookupOnionKey(directoryServer, entryRsaIdDigest);
+  const entryPeerInfo: PeerInfo = {
+    onionKey: entryOnionKey,
+    rsaIdDigest: entryRsaIdDigest,
+    linkSpecifiers: [{ type: LinkSpecifierTypes.LegacyId, data: entryRsaIdDigest }],
+  };
+
+  const ignoreEntry = [{ rsaIdDigest: entryRsaIdDigest } as MicroDescNodeInfo];
+  const exitNode = pickRelayWithFlags(microDescNodeInfos, ['Exit'], ignoreEntry);
+  const middleNode = pickRelayWithFlags(microDescNodeInfos, [], [exitNode, ...ignoreEntry]);
+
+  const middlePeerInfo = await dangerouslyLookupPeerInfo(directoryServer, middleNode);
+  const exitPeerInfo = await dangerouslyLookupPeerInfo(directoryServer, exitNode);
+
+  const circuit = new Circuit({ path: [entryPeerInfo, middlePeerInfo, exitPeerInfo], channel });
+  await circuit.connect();
+  t.teardown(() => circuit.destroy());
+
+  const url = new URL('https://api.ipify.org?format=json');
+  const agent = getTorAgentForUrl(circuit, url.toString());
+
+  const body = await new Promise<string>((resolve, reject) => {
+    const mod = url.protocol === 'https:' ? https : http;
+    const req = mod.request(
+      url,
+      {
+        method: 'GET',
+        headers: { accept: 'application/json' },
+        agent,
+      },
+      (res) => {
+        let s = '';
+        res.setEncoding('utf8');
+        res.on('data', (chunk) => (s += chunk));
+        res.on('end', () => resolve(s));
       }
-    } catch {
-      // fall through
-    }
-  }
+    );
+    req.on('error', reject);
+    req.end();
+  });
 
-  return '127.0.0.1:7000';
+  t.regex(body, /"ip"\\s*:\\s*"/);
+});
+
+function isLiveEnabled(): boolean {
+  const v = process.env.SNOWFLAKE_LIVE?.toLowerCase();
+  return v === '1' || v === 'true';
 }
 
-// Minimal directory helpers (copied from tor/build-circuit/directory.ts and util.ts) without Onionoo dependency.
+async function loadDirectoryAuthoritiesFromTorPackage(): Promise<DirectoryAuthority[]> {
+  // NOTE: This is test-only wiring inside this monorepo; not part of snowflake's runtime API.
+  const here = path.dirname(fileURLToPath(import.meta.url));
+  const authoritiesPath = path.resolve(here, '../../../tor/src/directory-authorities.json');
+  const text = await fs.readFile(authoritiesPath, 'utf8');
+  const json = JSON.parse(text) as unknown;
 
-type MicroDescNodeInfo = {
-  nickname: string;
-  rsaIdDigest: Buffer;
-  publication_date: Date;
-  ip_address: string;
-  onion_router_port: number;
-  directory_server_port: number;
-  mKey?: Buffer;
-  flags?: string[];
-  version?: string;
-  protocols: Record<string, string>;
-  bandwidthStats?: Record<string, number>;
-};
+  if (!Array.isArray(json)) throw new Error('unexpected directory-authorities.json shape');
+
+  const out: DirectoryAuthority[] = [];
+  for (const item of json) {
+    if (!item || typeof item !== 'object') continue;
+    const it = item as Record<string, unknown>;
+    if (typeof it.address !== 'string') continue;
+    if (typeof it.orPort !== 'number') continue;
+    const dirPort = typeof it.dirPort === 'number' ? it.dirPort : undefined;
+    out.push(
+      dirPort === undefined
+        ? { address: it.address, orPort: it.orPort }
+        : { address: it.address, orPort: it.orPort, dirPort }
+    );
+  }
+
+  if (out.length === 0) throw new Error('no directory authorities loaded');
+  return out;
+}
+
+function pickRandom<T>(arr: readonly T[]): T {
+  if (arr.length === 0) throw new Error('pickRandom: empty array');
+  return arr[Math.floor(Math.random() * arr.length)]!;
+}
 
 const fetchWithRetry = async (url: string, opts: RequestInit = {}) => {
   const maxRetries = 3;
@@ -86,7 +142,7 @@ async function downloadMicrodescFromDirectory(directoryServerIpPort: string): Pr
 
 function extractNtorOnionKey(directoryRecord: string): string {
   const linePrefix = 'ntor-onion-key ';
-  const line = directoryRecord.split('\n').find((l) => l.startsWith(linePrefix));
+  const line = directoryRecord.split('\\n').find((l) => l.startsWith(linePrefix));
   if (!line) throw new Error('no ntor-onion-key line found');
   return line.slice(linePrefix.length);
 }
@@ -99,8 +155,22 @@ async function dangerouslyLookupOnionKey(peerIpPort: string, rsaIdDigest: Buffer
   return Buffer.from(ntorOnionKeyText, 'base64');
 }
 
+type MicroDescNodeInfo = {
+  nickname: string;
+  rsaIdDigest: Buffer;
+  publication_date: Date;
+  ip_address: string;
+  onion_router_port: number;
+  directory_server_port: number;
+  mKey?: Buffer;
+  flags?: string[];
+  version?: string;
+  protocols: Record<string, string>;
+  bandwidthStats?: Record<string, number>;
+};
+
 function parseRelaysFromMicroDesc(microDescContent: string): MicroDescNodeInfo[] {
-  const lines = microDescContent.split('\n');
+  const lines = microDescContent.split('\\n');
   let relayInfo: MicroDescNodeInfo | undefined;
   const relayInfos: MicroDescNodeInfo[] = [];
 
@@ -236,62 +306,4 @@ async function dangerouslyLookupPeerInfo(
 ): Promise<PeerInfo> {
   const onionKey = await dangerouslyLookupOnionKey(directoryServer, nodeInfo.rsaIdDigest);
   return microDescNodeInfoToPeerInfo(nodeInfo, onionKey);
-}
-
-export async function connectSnowflakeChutneyCircuit(opts: {
-  relayUrl: string;
-  expectedEntryOrPort?: number;
-}): Promise<Circuit> {
-  const directoryServer = await discoverDirectoryServerIpPort();
-  const microDescContent = await downloadMicrodescFromDirectory(directoryServer);
-  const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
-
-  const channel = new SnowflakeTlsChannelConnection();
-  await channel.connect({ relayUrl: opts.relayUrl });
-
-  const entryRsaIdDigest = channel.peerIdentity?.rsaIdDigest;
-  if (!entryRsaIdDigest) throw new Error('snowflake channel has no peer identity');
-
-  const entryOnionKey = await dangerouslyLookupOnionKey(directoryServer, entryRsaIdDigest);
-  const entryPeerInfo: PeerInfo = {
-    onionKey: entryOnionKey,
-    rsaIdDigest: entryRsaIdDigest,
-    linkSpecifiers: [{ type: LinkSpecifierTypes.LegacyId, data: entryRsaIdDigest }],
-  };
-
-  if (opts.expectedEntryOrPort) {
-    const match = microDescNodeInfos.find((n) => n.rsaIdDigest.equals(entryRsaIdDigest));
-    if (match && match.onion_router_port !== opts.expectedEntryOrPort) {
-      throw new Error(
-        `snowflake entry ORPort mismatch: expected ${opts.expectedEntryOrPort} got ${match.onion_router_port}`
-      );
-    }
-  }
-
-  const ignoreEntry = [{ rsaIdDigest: entryRsaIdDigest } as MicroDescNodeInfo];
-
-  const forcedExitRsaIdDigestHex = process.env.TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX?.toLowerCase();
-  const exitNode = forcedExitRsaIdDigestHex
-    ? (() => {
-        const forcedExit = microDescNodeInfos.find((n) => {
-          const digestHex = n.rsaIdDigest.toString('hex');
-          return digestHex === forcedExitRsaIdDigestHex;
-        });
-        if (!forcedExit) {
-          throw new Error(
-            `TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX=${forcedExitRsaIdDigestHex} not found in microdesc`
-          );
-        }
-        return forcedExit;
-      })()
-    : pickRelayWithFlags(microDescNodeInfos, ['Exit'], ignoreEntry);
-
-  const middleNode = pickRelayWithFlags(microDescNodeInfos, [], [exitNode, ...ignoreEntry]);
-  const middlePeerInfo = await dangerouslyLookupPeerInfo(directoryServer, middleNode);
-  const exitPeerInfo = await dangerouslyLookupPeerInfo(directoryServer, exitNode);
-
-  const pathInfos: PeerInfo[] = [entryPeerInfo, middlePeerInfo, exitPeerInfo];
-  const circuit = new Circuit({ path: pathInfos, channel });
-  await circuit.connect();
-  return circuit;
 }
