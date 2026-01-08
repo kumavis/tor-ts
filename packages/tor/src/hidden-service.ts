@@ -350,7 +350,16 @@ function parseSecondLayerPlaintext(text: string): HiddenServiceDescriptor {
   return { introPoints };
 }
 
-export async function lookupHiddenServiceDescriptor(params: {
+/**
+ * WARNING: This function fetches the hidden service descriptor using a direct (non-Tor) HTTP request
+ * to HSDir `ip:dirPort` via Node’s global `fetch()`.
+ *
+ * This is **not** privacy-preserving under Tor’s anonymity assumptions, and it is also incomplete
+ * (many real HSDirs have `DirPort 0`, so this approach won’t work reliably on mainnet).
+ *
+ * Prefer fetching via a directory stream (BEGIN_DIR / RELAY_BEGIN_DIR) over a circuit to the HSDir.
+ */
+export async function dangerouslyLookupHiddenServiceDescriptor(params: {
   onionAddress: string;
   hsdirCandidates: Array<{ ip: string; dirPort: number }>;
   validAfter: Date;
@@ -439,6 +448,11 @@ export async function lookupHiddenServiceDescriptor(params: {
   const descriptor = parseSecondLayerPlaintext(secondPlain.toString('utf8'));
   return { blindedPublicKey, subcred, descriptor };
 }
+
+/**
+ * @deprecated Use `dangerouslyLookupHiddenServiceDescriptor` (the previous name implied Tor-style safety).
+ */
+export const lookupHiddenServiceDescriptor = dangerouslyLookupHiddenServiceDescriptor;
 
 type HsNtorClientState = {
   x: Buffer;
