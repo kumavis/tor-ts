@@ -10,8 +10,19 @@ type OnionooDetailsResponse = {
   relays: Array<DirectoryAuthority>;
 };
 
+type DangerouslyFetchWithRetryOptions = RequestInit & {
+  timeoutMs?: number;
+  maxRetries?: number;
+  retryDelayMs?: number;
+};
+
+const onionooCache = {
+  relays: [] as Array<DirectoryAuthority>,
+  expiresAtMs: 0,
+};
+
 export async function getRandomDirectoryAuthority(): Promise<DirectoryAuthority> {
-  const response = await dangerouslyFetchOnionooDetails({
+  const response = await dangerouslyFetchOnionooDetailsWithCache({
     limit: '30',
     running: 'true',
     search: 'flag:Authority',
@@ -30,42 +41,68 @@ export async function getRandomDirectoryAuthority(): Promise<DirectoryAuthority>
   return selected;
 }
 
-async function dangerouslyFetchOnionooDetails(
+async function dangerouslyFetchOnionooDetailsWithCache(
   query: Record<string, string>
 ): Promise<OnionooDetailsResponse> {
+  const now = Date.now();
+  if (onionooCache.expiresAtMs > now && onionooCache.relays.length > 0) {
+    return { relays: onionooCache.relays };
+  }
+
   const u = new URL('https://onionoo.torproject.org/details');
   u.search = new URLSearchParams(query).toString();
   const res = await dangerouslyFetchWithRetry(u.toString(), {
-    headers: { accept: 'application/json' },
+    timeoutMs: 12_000,
+    maxRetries: 5,
+    retryDelayMs: 750,
+    headers: {
+      accept: 'application/json',
+      // Identify as a script without leaking a stable, unique identifier.
+      'user-agent': 'tor-ts (build-circuit)',
+    },
   });
   const json = (await res.json()) as unknown;
   if (!json || typeof json !== 'object') throw new Error('Onionoo response was not an object');
   const obj = json as Record<string, unknown>;
-  return {
-    relays: Array.isArray(obj.relays) ? (obj.relays as Array<DirectoryAuthority>) : [],
-  };
+
+  const relays = Array.isArray(obj.relays) ? (obj.relays as Array<DirectoryAuthority>) : [];
+  onionooCache.relays = relays;
+  onionooCache.expiresAtMs = now + 5 * 60_000;
+  return { relays };
 }
 
 // perform fetch with retry and delay
-const dangerouslyFetchWithRetry = async (url: string, opts: any = {}) => {
-  const maxRetries = 3;
-  const retryDelay = 500;
-  let retries = 0;
-  while (true) {
+const dangerouslyFetchWithRetry = async (
+  url: string,
+  opts: DangerouslyFetchWithRetryOptions = {}
+) => {
+  const maxRetries = opts.maxRetries ?? 3;
+  const retryDelayMs = opts.retryDelayMs ?? 500;
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    timeout.unref?.();
+
     try {
-      const response = await fetch(url, opts);
+      const { timeoutMs: _t, maxRetries: _m, retryDelayMs: _r, ...fetchOpts } = opts;
+      const response = await fetch(url, { ...fetchOpts, signal: controller.signal });
       if (!response.ok) {
-        throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
+        throw new Error(`Fetch failed for ${url}: ${response.status} ${response.statusText}`);
       }
       return response;
     } catch (err) {
-      retries++;
-      if (retries > maxRetries) {
-        throw err;
-      }
-      await new Promise((resolve) => setTimeout(resolve, retryDelay));
+      lastErr = err;
+      if (attempt >= maxRetries) break;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    } finally {
+      clearTimeout(timeout);
     }
   }
+
+  throw lastErr instanceof Error ? lastErr : new Error(`Fetch failed for ${url}`);
 };
 
 // this is "dangerous" because we're performing it over http

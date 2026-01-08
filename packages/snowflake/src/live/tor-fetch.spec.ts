@@ -63,7 +63,7 @@ test.serial('snowflake live: build circuit + fetch example.com (optional)', asyn
       url,
       {
         method: 'GET',
-        headers: { accept: 'application/json' },
+        headers: { accept: 'text/html' },
         agent,
       },
       (res) => {
@@ -73,6 +73,9 @@ test.serial('snowflake live: build circuit + fetch example.com (optional)', asyn
         res.on('end', () => resolve(s));
       }
     );
+    req.setTimeout(30_000, () => {
+      req.destroy(new Error('request timeout'));
+    });
     req.on('error', reject);
     req.end();
   });

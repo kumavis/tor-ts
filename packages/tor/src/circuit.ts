@@ -36,6 +36,22 @@ import { ReadableStream, WritableStream } from 'stream/web';
 const KEY_LEN = 16;
 const HASH_LEN = 20;
 
+const DestroyReasonNames: Record<number, string> = {
+  0: 'NONE',
+  1: 'PROTOCOL',
+  2: 'INTERNAL',
+  3: 'REQUESTED',
+  4: 'HIBERNATING',
+  5: 'RESOURCELIMIT',
+  6: 'CONNECTFAILED',
+  7: 'OR_IDENTITY',
+  8: 'CHANNEL_CLOSED',
+  9: 'FINISHED',
+  10: 'TIMEOUT',
+  11: 'DESTROYED',
+  12: 'NOSUCHSERVICE',
+};
+
 type HopClientHandshake =
   | { kind: 'fast'; x: Buffer }
   | { kind: 'ntor'; handshake: Create2ClientHandshake };
@@ -182,7 +198,7 @@ export class CircuitStream extends EventEmitter {
 export class Circuit {
   channel: ChannelConnection;
   hops: Array<Hop> = [];
-  unsubscribeFromChannel?: () => void;
+  unsubscribeFromChannel: (() => void) | undefined;
   circuitId: Buffer;
   relayMessageCount = 0;
   lastStreamId = 0;
@@ -314,11 +330,24 @@ export class Circuit {
       }
       case MessageCellType.DESTROY: {
         const destroyMessage = message.message as CellDestroy;
-        console.warn('! got destroy', destroyMessage);
-        const err = new Error(`circuit destroyed: ${destroyMessage.reason}`);
+        const reason = destroyMessage.reason;
+        const reasonName = DestroyReasonNames[reason] ?? `UNKNOWN_${reason}`;
+        const err = new Error(`circuit destroyed: ${reasonName} (${reason})`);
+        console.warn('! got destroy', { reason, reasonName });
+        // Reject any in-flight hop handshakes so circuit.connect() cannot hang.
+        for (const hop of this.hops) {
+          if (!hop.isConnected) {
+            hop.handshakePromiseKit.reject(err);
+          }
+        }
         this.streams.forEach((stream) => {
           stream.destroy(err);
         });
+        // Stop listening for any additional cells on this circuit.
+        if (this.unsubscribeFromChannel) {
+          this.unsubscribeFromChannel();
+          this.unsubscribeFromChannel = undefined;
+        }
         break;
       }
       default:
