@@ -4,13 +4,13 @@ import https from 'node:https';
 import test from 'ava';
 import { Circuit } from 'tor/circuit';
 import type { PeerInfo } from 'tor/circuit';
-import { getRandomDirectoryAuthority } from 'tor/build-circuit/directory';
 import {
+  getRandomDirectoryAuthority,
   dangerouslyDownloadMicrodescFromDirectory,
   dangerouslyLookupPeerInfo,
   parseRelaysFromMicroDesc,
+  type MicroDescNodeInfo,
 } from 'tor/build-circuit/directory';
-import type { MicroDescNodeInfo } from 'tor/build-circuit/directory';
 import { pickRelayWithFlags } from 'tor/build-circuit/util';
 import { getTorAgentForUrl } from 'tor/node';
 

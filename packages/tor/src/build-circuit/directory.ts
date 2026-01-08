@@ -1,4 +1,3 @@
-import fs from 'node:fs/promises';
 import type { PeerInfo } from '../circuit.ts';
 import { AddressTypes, LinkSpecifierTypes, addressAndPortToLinkSpecifier } from '../messaging.ts';
 import type { LinkSpecifier } from '../messaging.ts';
@@ -7,20 +6,44 @@ export type DirectoryAuthority = {
   dir_address?: string;
 };
 
+type OnionooDetailsResponse = {
+  relays: Array<DirectoryAuthority>;
+};
+
 export async function getRandomDirectoryAuthority(): Promise<DirectoryAuthority> {
-  const authoritiesPath = new URL('../directory-authorities.json', import.meta.url);
-  const data = await fs.readFile(authoritiesPath, 'utf8');
-  const relays = JSON.parse(data) as unknown;
-  if (!Array.isArray(relays) || relays.length === 0) {
-    throw new Error('directory-authorities.json did not contain an array');
+  const response = await dangerouslyFetchOnionooDetails({
+    limit: '30',
+    running: 'true',
+    search: 'flag:Authority',
+    order: '-consensus_weight',
+  });
+
+  const candidates = response.relays.filter(
+    (r) => typeof r.dir_address === 'string' && r.dir_address.length > 0
+  );
+  if (candidates.length === 0) {
+    throw new Error('No directory authorities returned from Onionoo (missing dir_address)');
   }
-  const selected = relays[Math.floor(Math.random() * relays.length)] as
-    | DirectoryAuthority
-    | undefined;
-  if (!selected) {
-    throw new Error('Failed to select a directory authority');
-  }
+
+  const selected = candidates[Math.floor(Math.random() * candidates.length)];
+  if (!selected) throw new Error('Failed to select a directory authority');
   return selected;
+}
+
+async function dangerouslyFetchOnionooDetails(
+  query: Record<string, string>
+): Promise<OnionooDetailsResponse> {
+  const u = new URL('https://onionoo.torproject.org/details');
+  u.search = new URLSearchParams(query).toString();
+  const res = await dangerouslyFetchWithRetry(u.toString(), {
+    headers: { accept: 'application/json' },
+  });
+  const json = (await res.json()) as unknown;
+  if (!json || typeof json !== 'object') throw new Error('Onionoo response was not an object');
+  const obj = json as Record<string, unknown>;
+  return {
+    relays: Array.isArray(obj.relays) ? (obj.relays as Array<DirectoryAuthority>) : [],
+  };
 }
 
 // perform fetch with retry and delay

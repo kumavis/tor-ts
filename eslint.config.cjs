@@ -13,7 +13,6 @@ module.exports = [
       '**/dist/**',
       '**/coverage/**',
       'consensus/**',
-      'packages/tor/src/directory-authorities.json',
       'eslint.config.cjs',
     ],
   },
