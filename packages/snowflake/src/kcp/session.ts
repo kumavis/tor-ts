@@ -28,6 +28,7 @@ export class MinimalKcpSession {
 
   private sendSn = 0;
   private recvNext = 0;
+  // kept for future retransmission work
   private unacked = new Map<number, KcpSegment>();
 
   private readonly rx = new ByteQueue();

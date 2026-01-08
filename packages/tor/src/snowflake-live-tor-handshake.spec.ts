@@ -1,5 +1,5 @@
 import test from 'ava';
-import { SnowflakeTlsChannelConnection } from './snowflake/channel.ts';
+import { SnowflakeTlsChannelConnection } from './transports/snowflake.ts';
 
 test.serial(
   'snowflake live: complete Tor link handshake over ws downlink (optional)',

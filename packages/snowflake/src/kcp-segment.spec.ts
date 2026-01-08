@@ -4,7 +4,7 @@ import {
   encodeKcpSegment,
   KCP_CMD,
   KCP_HEADER_SIZE,
-} from './snowflake/kcp/segment.ts';
+} from './kcp/segment.ts';
 
 test('kcp segment: encode/decode roundtrip', (t) => {
   const seg = {

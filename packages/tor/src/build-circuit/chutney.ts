@@ -9,7 +9,7 @@ import {
 } from './directory.ts';
 import type { MicroDescNodeInfo } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
-import { SnowflakeTlsChannelConnection } from '../snowflake/channel.ts';
+import { SnowflakeTlsChannelConnection } from '../transports/snowflake.ts';
 import { LinkSpecifierTypes } from '../messaging.ts';
 import { Circuit } from '../circuit.ts';
 

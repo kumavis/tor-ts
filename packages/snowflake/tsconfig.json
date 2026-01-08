@@ -1,0 +1,24 @@
+{
+  "compilerOptions": {
+    "target": "es2022",
+    "module": "nodenext",
+    "moduleResolution": "nodenext",
+    "lib": ["es2022", "dom"],
+    "outDir": "dist",
+    "rootDir": "src",
+    "allowImportingTsExtensions": true,
+    "resolveJsonModule": true,
+    "esModuleInterop": true,
+    "moduleDetection": "force",
+    "strict": true,
+    "useUnknownInCatchVariables": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
+    "forceConsistentCasingInFileNames": true,
+    "types": ["node"]
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["dist/**", "node_modules/**"]
+}

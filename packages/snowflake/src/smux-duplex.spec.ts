@@ -1,8 +1,8 @@
 import test from 'ava';
 import { once } from 'node:events';
-import { MinimalKcpSession } from './snowflake/kcp/session.ts';
-import { SmuxSession } from './snowflake/smux/session.ts';
-import { SmuxStreamDuplex } from './snowflake/smux/duplex.ts';
+import { MinimalKcpSession } from './kcp/session.ts';
+import { SmuxSession } from './smux/session.ts';
+import { SmuxStreamDuplex } from './smux/duplex.ts';
 
 test('smux duplex: adapts SmuxStream to node Duplex', async (t) => {
   const now = () => 123;
@@ -32,7 +32,6 @@ test('smux duplex: adapts SmuxStream to node Duplex', async (t) => {
   const [chunk] = (await once(d2, 'data')) as [Buffer];
   t.deepEqual(new Uint8Array(chunk), new Uint8Array([1, 2, 3, 4]));
 
-  // Start readable side so it can observe FIN/end.
   d1.resume();
   d2.end();
   await once(d1, 'end');

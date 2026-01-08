@@ -19,8 +19,8 @@
   },
   "scripts": {
     "dev": "yarn workspace tor dev",
-    "test": "yarn workspace tor test",
-    "typecheck": "yarn workspace tor typecheck",
+    "test": "yarn workspace tor test && yarn workspace snowflake test",
+    "typecheck": "yarn workspace tor typecheck && yarn workspace snowflake typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --ext .ts,.js,.cjs",

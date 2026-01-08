@@ -9,11 +9,10 @@
     "@noble/hashes": "^1.8.0",
     "commander": "^14.0.2",
     "onionoo": "^2.0.2",
-    "ws": "^8.19.0"
+    "snowflake": "0.1.0"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "@types/ws": "^8.18.1",
     "ava": "^6.4.1",
     "pm2": "^6.0.14",
     "typescript": "^5.9.3"

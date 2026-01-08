@@ -2,9 +2,9 @@ import test from 'ava';
 import { once } from 'node:events';
 import { WebSocketServer } from 'ws';
 import type WebSocket from 'ws';
-import { SnowflakeWsDownlink } from './snowflake/ws-downlink.ts';
-import { TURBOTUNNEL_TOKEN } from './snowflake/turbotunnel.ts';
-import { EncapsulationDecoder, encodeEncapsulatedData } from './snowflake/encapsulation.ts';
+import { SnowflakeWsDownlink } from './ws-downlink.ts';
+import { TURBOTUNNEL_TOKEN } from './turbotunnel.ts';
+import { EncapsulationDecoder, encodeEncapsulatedData } from './encapsulation.ts';
 
 function rawDataToUint8Array(data: WebSocket.RawData): Uint8Array {
   if (typeof data === 'string') return new TextEncoder().encode(data);
@@ -75,20 +75,4 @@ test('snowflake ws downlink: sends turbotunnel preamble then encapsulated packet
 
   client.close();
   wss.close();
-});
-
-test.serial('snowflake ws downlink: optional live relay connect', async (t) => {
-  if (!process.env.SNOWFLAKE_LIVE) {
-    t.pass();
-    return;
-  }
-  const client = new SnowflakeWsDownlink({ url: 'wss://snowflake.torproject.net/' });
-  await client.connect();
-  // If the server immediately closes for protocol reasons, we’ll see 'close' quickly.
-  const race = await Promise.race([
-    once(client, 'close').then(() => 'close'),
-    new Promise<'open-stable'>((resolve) => setTimeout(() => resolve('open-stable'), 500)),
-  ]);
-  client.close();
-  t.is(race, 'open-stable');
 });

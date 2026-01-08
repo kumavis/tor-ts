@@ -1,5 +1,5 @@
 import test from 'ava';
-import { MinimalKcpSession } from './snowflake/kcp/session.ts';
+import { MinimalKcpSession } from './kcp/session.ts';
 
 test('minimal kcp session: transfers stream bytes over packet sink/source', async (t) => {
   const now = () => 123;
@@ -8,7 +8,6 @@ test('minimal kcp session: transfers stream bytes over packet sink/source', asyn
   const a = new MinimalKcpSession({ conv, now, mss: 3 });
   const b = new MinimalKcpSession({ conv, now, mss: 3 });
 
-  // Wire them together with a synchronous "carrier".
   a.attachSink((pkt) => {
     b.inputPacket(pkt);
   });

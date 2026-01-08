@@ -16,5 +16,4 @@ export * as chutney from './build-circuit/chutney.ts';
 // export * as channel from './channel'
 export { Circuit } from './circuit.ts';
 export { TlsChannelConnection } from './channel.ts';
-export { SnowflakeWsStack } from './snowflake/snowflake-ws-stack.ts';
-export { SnowflakeTlsChannelConnection } from './snowflake/channel.ts';
+export { SnowflakeTlsChannelConnection } from './transports/snowflake.ts';

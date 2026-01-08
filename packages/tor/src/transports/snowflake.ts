@@ -2,13 +2,17 @@ import tls from 'node:tls';
 import type { TLSSocket } from 'node:tls';
 import { ChannelConnection, type NodejsPeerAddressInfo } from '../channel.ts';
 import { makeRandomServerName } from '../tls.ts';
-import { SnowflakeWsStack } from './snowflake-ws-stack.ts';
-import { SmuxStreamDuplex } from './smux/duplex.ts';
+import { SnowflakeWsStack } from 'snowflake';
+import { SmuxStreamDuplex } from 'snowflake/smux';
 
 export type SnowflakeTlsChannelOptions = {
   relayUrl?: string;
 };
 
+/**
+ * Tor-specific ChannelConnection that uses the `snowflake` workspace package
+ * as its underlying carrier.
+ */
 export class SnowflakeTlsChannelConnection extends ChannelConnection {
   private stack?: SnowflakeWsStack;
   private tlsSocket?: TLSSocket;
@@ -20,7 +24,7 @@ export class SnowflakeTlsChannelConnection extends ChannelConnection {
     this.stack = stack;
     await stack.connect();
 
-    const smuxStream = await stack.openTorStream();
+    const smuxStream = await stack.openStream();
     const streamDuplex = new SmuxStreamDuplex(smuxStream);
 
     const socket = tls.connect({

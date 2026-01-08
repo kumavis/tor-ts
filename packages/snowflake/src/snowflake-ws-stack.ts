@@ -46,13 +46,12 @@ export class SnowflakeWsStack {
     this.downlink.on('error', (err) => this.smux.emit('error', err));
   }
 
-  async openTorStream(): Promise<SmuxStream> {
+  async openStream(): Promise<SmuxStream> {
     return await this.smux.openStream();
   }
 
   async close(): Promise<void> {
     this.downlink.close();
-    // Give loops a tick to settle.
     await Promise.race([once(this.smux, 'close'), new Promise((r) => setTimeout(r, 10))]);
   }
 }

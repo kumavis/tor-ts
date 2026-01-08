@@ -1,7 +1,7 @@
 import { Circuit } from '../circuit.ts';
 import type { PeerInfo } from '../circuit.ts';
 import { TlsChannelConnection } from '../channel.ts';
-import { SnowflakeTlsChannelConnection } from '../snowflake/channel.ts';
+import { SnowflakeTlsChannelConnection } from '../transports/snowflake.ts';
 import {
   dangerouslyLookupOnionKey,
   dangerouslyLookupPeerInfo,

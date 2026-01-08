@@ -3,7 +3,7 @@ import {
   EncapsulationDecoder,
   EncapsulationTooLongError,
   encodeEncapsulatedData,
-} from './snowflake/encapsulation.ts';
+} from './encapsulation.ts';
 
 function u8(...bytes: number[]): Uint8Array {
   return Uint8Array.from(bytes);

@@ -1,6 +1,6 @@
 import test from 'ava';
-import { MinimalKcpSession } from './snowflake/kcp/session.ts';
-import { SmuxSession } from './snowflake/smux/session.ts';
+import { MinimalKcpSession } from './kcp/session.ts';
+import { SmuxSession } from './smux/session.ts';
 
 test('smux v2: client opens stream and sends data', async (t) => {
   const now = () => 123;
@@ -34,7 +34,6 @@ test('smux v2: client opens stream and sends data', async (t) => {
   const got = await s2.readExactly(5);
   t.deepEqual(got, Uint8Array.from([1, 2, 3, 4, 5]));
 
-  // And reverse direction
   s2.write(Uint8Array.from([9, 8, 7]));
   const got2 = await s1.readExactly(3);
   t.deepEqual(got2, Uint8Array.from([9, 8, 7]));
