@@ -9,6 +9,7 @@
     "dev": "pm2 start --name tor-example-http-proxy --watch=../../ --no-daemon --interpreter=node --node-args=--experimental-transform-types index.ts"
   },
   "dependencies": {
+    "tor": "^0.1.0",
     "http-proxy": "^1.18.1"
   },
   "devDependencies": {}

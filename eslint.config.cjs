@@ -13,7 +13,7 @@ module.exports = [
       '**/dist/**',
       '**/coverage/**',
       'consensus/**',
-      'src/directory-authorities.json',
+      'packages/tor/src/directory-authorities.json',
       'eslint.config.cjs',
     ],
   },
@@ -51,7 +51,7 @@ module.exports = [
     settings: {
       'import/resolver': {
         typescript: {
-          project: './tsconfig.json',
+          project: './packages/tor/tsconfig.json',
         },
       },
     },

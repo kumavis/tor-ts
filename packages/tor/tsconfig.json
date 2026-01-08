@@ -17,8 +17,8 @@
     "noFallthroughCasesInSwitch": true,
     "noImplicitReturns": true,
     "forceConsistentCasingInFileNames": true,
-    "typeRoots": ["./node_modules/@types", "./typings"]
+    "types": ["node"]
   },
-  "include": ["src/**/*.ts"],
+  "include": ["src/**/*.ts", "typings/**/*.d.ts"],
   "exclude": ["dist/**", "examples/**", "node_modules/**"]
 }

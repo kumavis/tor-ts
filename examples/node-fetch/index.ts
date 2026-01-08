@@ -1,5 +1,5 @@
-import { connectRandomCircuit } from '../../src/build-circuit/mainnet.ts';
-import { getTorAgentForUrl } from '../../src/node.ts';
+import { connectRandomCircuit } from 'tor/build-circuit/mainnet';
+import { getTorAgentForUrl } from 'tor/node';
 
 import fetch from 'node-fetch';
 

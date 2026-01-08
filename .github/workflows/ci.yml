@@ -62,4 +62,4 @@ jobs:
           sudo apt-get install -y tor tor-geoipdb python3 python3-pip git
 
       - name: Run Chutney integration test
-        run: bash scripts/ci-chutney.sh
+        run: bash packages/tor/scripts/ci-chutney.sh

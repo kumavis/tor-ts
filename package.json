@@ -1,49 +1,31 @@
 {
-  "name": "tor",
+  "private": true,
+  "name": "tor-ts-workspace",
   "version": "0.1.0",
   "license": "MIT",
-  "private": true,
-  "type": "module",
   "workspaces": [
+    "packages/*",
     "examples/*"
   ],
-  "dependencies": {
-    "@noble/curves": "^1.9.7",
-    "@noble/ed25519": "^2.3.0",
-    "@noble/hashes": "^1.8.0",
-    "commander": "^14.0.2",
-    "onionoo": "^2.0.2"
-  },
   "devDependencies": {
-    "@types/node": "^22.0.0",
     "@typescript-eslint/eslint-plugin": "^8",
     "@typescript-eslint/parser": "^8",
-    "ava": "^6.4.1",
     "eslint": "^9",
     "eslint-config-prettier": "^9",
     "eslint-import-resolver-typescript": "^3",
     "eslint-plugin-import": "^2",
-    "pm2": "^6.0.14",
     "prettier": "^3.7.4",
     "typescript": "^5.9.3"
   },
   "scripts": {
-    "dev": "pm2 start --no-daemon scripts/dev.config.cjs",
-    "test": "ava src/*.spec.ts",
-    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "dev": "yarn workspace tor dev",
+    "test": "yarn workspace tor test",
+    "typecheck": "yarn workspace tor typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --ext .ts,.js,.cjs",
     "lint:fix": "yarn lint --fix",
-    "import:check": "node --experimental-transform-types scripts/import-check.ts",
-    "test:dev": "pm2 start --no-daemon scripts/test-dev.config.cjs"
-  },
-  "ava": {
-    "extensions": {
-      "ts": "module"
-    },
-    "nodeArguments": [
-      "--experimental-transform-types"
-    ]
+    "import:check": "yarn workspace tor import:check",
+    "test:dev": "yarn workspace tor test:dev"
   }
 }
