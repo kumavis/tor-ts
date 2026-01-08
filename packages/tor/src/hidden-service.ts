@@ -906,7 +906,14 @@ async function fetchHsDescriptorOverChutneyDirectoryStream(
 
     const resp = Buffer.concat(chunks).toString('utf8');
     if (!resp.startsWith('HTTP/')) return undefined;
-    if (!resp.includes(' 200 ')) return undefined;
+    if (!resp.includes(' 200 ')) {
+      if (process.env.TOR_TS_DEBUG_HS_DIR === '1') {
+        const statusLine = resp.split(/\r?\n/, 1)[0] ?? '(missing status line)';
+        // Keep this intentionally short; CI logs can be extremely noisy here.
+        console.warn(`hs: hsdir non-200 response (${resp.length} bytes): ${statusLine}`);
+      }
+      return undefined;
+    }
     const split = resp.split('\r\n\r\n');
     if (split.length < 2) return undefined;
     return split.slice(1).join('\r\n\r\n');
