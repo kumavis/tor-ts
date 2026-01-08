@@ -61,17 +61,5 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y tor tor-geoipdb python3 python3-pip git
 
-      - name: Run Chutney integration test (optional on PRs)
-        env:
-          TOR_TS_CHUTNEY_OPTIONAL: ${{ github.event_name == 'pull_request' }}
-        run: |
-          set +e
-          bash packages/tor/scripts/ci-chutney.sh
-          status=$?
-
-          if [ "$TOR_TS_CHUTNEY_OPTIONAL" = "true" ] && [ $status -ne 0 ]; then
-            echo "::warning::Chutney integration test failed (exit code $status). This is non-blocking on pull requests."
-            exit 0
-          fi
-
-          exit $status
+      - name: Run Chutney integration test
+        run: bash packages/tor/scripts/ci-chutney.sh
