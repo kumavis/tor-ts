@@ -636,6 +636,16 @@ export async function connectToHiddenServiceOverChutney(params: {
   port: number;
   overallTimeoutMs?: number;
 }): Promise<{ circuit: Circuit; stream: CircuitStream }> {
+  function shuffleInPlace<T>(arr: T[]): T[] {
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = crypto.randomInt(i + 1);
+      const tmp = arr[i]!;
+      arr[i] = arr[j]!;
+      arr[j] = tmp;
+    }
+    return arr;
+  }
+
   const overallTimeoutMs = params.overallTimeoutMs ?? 120_000;
   const descriptorTimeoutMs = Math.min(overallTimeoutMs, 6 * 60_000);
   const perHandshakeTimeoutMs = Math.min(overallTimeoutMs, 120_000);
@@ -653,10 +663,12 @@ export async function connectToHiddenServiceOverChutney(params: {
 
   console.log('hs: looking up descriptor (directory stream)');
   // Build PeerInfo objects for HSDir candidates (for directory streams over ORPort).
-  // Limit how many we try to keep runtimes sane.
+  // In small testing networks (like Chutney), it is cheap and much less flaky to
+  // try *all* HSDirs rather than a prefix subset.
+  const shuffledHsdirNodes = shuffleInPlace([...hsdirNodes]);
   const hsdirPeerInfos = (
     await Promise.all(
-      hsdirNodes.slice(0, 8).map(async (n) => {
+      shuffledHsdirNodes.map(async (n) => {
         try {
           return await dangerouslyLookupPeerInfo(directoryServer, n);
         } catch {
@@ -702,11 +714,14 @@ export async function connectToHiddenServiceOverChutney(params: {
       subcred = deriveSubcredential({ publicIdentityKey, blindedPublicKey });
       const z = toBase64UrlNoPad(blindedPublicKey);
 
-      for (const hsdirPeer of hsdirPeerInfos) {
+      const hsdirPeersThisRound = shuffleInPlace([...hsdirPeerInfos]);
+      for (const hsdirPeer of hsdirPeersThisRound) {
+        const timeLeftMs = deadline - Date.now();
+        if (timeLeftMs <= 0) break;
         const got = await fetchHsDescriptorOverChutneyDirectoryStream(
           hsdirPeer,
           z,
-          perHandshakeTimeoutMs
+          Math.min(perHandshakeTimeoutMs, timeLeftMs)
         );
         if (got) {
           outerText = got;
