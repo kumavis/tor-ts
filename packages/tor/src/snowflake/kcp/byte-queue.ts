@@ -2,6 +2,7 @@ export class ByteQueue {
   private chunks: Uint8Array[] = [];
   private size = 0;
   private waiters: Array<() => void> = [];
+  private closed = false;
 
   push(chunk: Uint8Array): void {
     if (chunk.byteLength === 0) return;
@@ -16,8 +17,16 @@ export class ByteQueue {
     return this.size;
   }
 
+  close(): void {
+    this.closed = true;
+    const waiters = this.waiters;
+    this.waiters = [];
+    for (const w of waiters) w();
+  }
+
   async waitForAtLeast(n: number): Promise<void> {
     if (this.size >= n) return;
+    if (this.closed) throw new Error('EOF');
     await new Promise<void>((resolve) => {
       this.waiters.push(resolve);
     });

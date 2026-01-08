@@ -159,8 +159,7 @@ export class SmuxStream {
 
   onFin(): void {
     this.fin = true;
-    // wake any waiters
-    this.rx.push(new Uint8Array(0));
+    this.rx.close();
   }
 
   onUpd(consumed: number, window: number): void {
