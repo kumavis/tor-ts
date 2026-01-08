@@ -2,7 +2,11 @@
   "name": "tor",
   "version": "0.1.0",
   "license": "MIT",
+  "private": true,
   "type": "module",
+  "workspaces": [
+    "examples/*"
+  ],
   "dependencies": {
     "@noble/curves": "^1.9.7",
     "@noble/ed25519": "^2.3.0",
