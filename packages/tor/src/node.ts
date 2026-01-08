@@ -1,10 +1,11 @@
-import http, { ClientRequestArgs } from 'http';
-import https from 'https';
-import tls from 'tls';
-import net from 'net';
-import url from 'url';
+import http from 'node:http';
+import type { ClientRequestArgs } from 'node:http';
+import https from 'node:https';
+import tls from 'node:tls';
+import net from 'node:net';
+import url from 'node:url';
 import { Circuit, CircuitStream } from './circuit.ts';
-import { Readable, Writable, Duplex } from 'stream';
+import { Readable, Writable, Duplex } from 'node:stream';
 
 // Node HTTP Agent https://nodejs.org/docs/latest-v20.x/api/http.html#class-httpagent
 export const getTorAgentForUrl = (
