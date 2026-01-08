@@ -26,6 +26,9 @@ jobs:
       - name: Typecheck
         run: yarn typecheck
 
+      - name: Node TS import check
+        run: yarn import:check
+
       - name: Format check
         run: yarn format:check
 

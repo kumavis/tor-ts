@@ -35,6 +35,7 @@
     "format:check": "prettier --check .",
     "lint": "eslint . --ext .ts,.js,.cjs",
     "lint:fix": "yarn lint --fix",
+    "import:check": "node --experimental-transform-types scripts/import-check.ts",
     "test:dev": "pm2 start --no-daemon scripts/test-dev.config.cjs"
   },
   "ava": {
