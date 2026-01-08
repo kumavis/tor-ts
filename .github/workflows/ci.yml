@@ -61,5 +61,10 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y tor tor-geoipdb python3 python3-pip git
 
+      - name: Install Chutney (clone + pip deps)
+        run: bash packages/tor/scripts/ci-chutney-install.sh
+
       - name: Run Chutney integration test
+        env:
+          CHUTNEY_SKIP_INSTALL: '1'
         run: bash packages/tor/scripts/ci-chutney.sh

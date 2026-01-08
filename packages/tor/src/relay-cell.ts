@@ -47,6 +47,17 @@ export enum RelayCell {
   BEGIN_DIR = 13,
   EXTEND2 = 14,
   EXTENDED2 = 15,
+
+  // Hidden service relay commands (rend-spec-v3.txt)
+  ESTABLISH_INTRO = 32,
+  ESTABLISH_RENDEZVOUS = 33,
+  INTRODUCE1 = 34,
+  INTRODUCE2 = 35,
+  RENDEZVOUS1 = 36,
+  RENDEZVOUS2 = 37,
+  INTRO_ESTABLISHED = 38,
+  RENDEZVOUS_ESTABLISHED = 39,
+  INTRODUCE_ACK = 40,
 }
 
 const _relayCellNames = {
@@ -65,6 +76,16 @@ const _relayCellNames = {
   [RelayCell.BEGIN_DIR]: 'BEGIN_DIR',
   [RelayCell.EXTEND2]: 'EXTEND2',
   [RelayCell.EXTENDED2]: 'EXTENDED2',
+
+  [RelayCell.ESTABLISH_INTRO]: 'ESTABLISH_INTRO',
+  [RelayCell.ESTABLISH_RENDEZVOUS]: 'ESTABLISH_RENDEZVOUS',
+  [RelayCell.INTRODUCE1]: 'INTRODUCE1',
+  [RelayCell.INTRODUCE2]: 'INTRODUCE2',
+  [RelayCell.RENDEZVOUS1]: 'RENDEZVOUS1',
+  [RelayCell.RENDEZVOUS2]: 'RENDEZVOUS2',
+  [RelayCell.INTRO_ESTABLISHED]: 'INTRO_ESTABLISHED',
+  [RelayCell.RENDEZVOUS_ESTABLISHED]: 'RENDEZVOUS_ESTABLISHED',
+  [RelayCell.INTRODUCE_ACK]: 'INTRODUCE_ACK',
 };
 
 export function serializeExtend2({

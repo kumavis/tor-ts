@@ -470,7 +470,12 @@ export function setRelayCellIntegrity(relayCellPayload: Buffer, integrity: Buffe
 export function checkRelayCellRecognized(relayCellPayload: Buffer) {
   const relayCellOffset = 1;
   const recognizedField = relayCellPayload.readUint16BE(relayCellOffset);
-  return recognizedField === 0;
+  if (recognizedField !== 0) return false;
+  // Extra sanity: avoid treating garbage as "recognized" and then crashing when parsing.
+  // RELAY payload: 1 (cmd) + 2 (recognized) + 2 (streamId) + 4 (digest) + 2 (len) = 11 bytes header.
+  const lengthOffset = 1 + 2 + 2 + 4;
+  const length = relayCellPayload.readUInt16BE(lengthOffset);
+  return length <= PAYLOAD_LEN - 11;
 }
 
 export function parseRelayCellPayload(relayCellPayload: Buffer): CellRelay {
