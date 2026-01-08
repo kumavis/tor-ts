@@ -236,6 +236,7 @@ for t in "${TESTS[@]}"; do
       echo ""
       echo "=== running chutney integration test: hidden-service ==="
       timeout 10m node --experimental-transform-types "${ROOT_DIR}/scripts/chutney-hidden-service-ci.ts"
+      echo "=== chutney integration test: hidden-service finished at $(date -Is) ==="
       ;;
     *)
       echo "Unknown TOR_TS_CHUTNEY_TESTS entry: ${t}"

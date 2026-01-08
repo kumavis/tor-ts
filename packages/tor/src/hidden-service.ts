@@ -826,6 +826,12 @@ export async function connectToHiddenServiceOverChutney(params: {
 
   const nReplicas = Math.min(16, Math.max(1, consensus.params['hsdir_n_replicas'] ?? 2));
   const spreadFetch = Math.min(128, Math.max(1, consensus.params['hsdir_spread_fetch'] ?? 3));
+  const spreadStore = Math.min(128, Math.max(1, consensus.params['hsdir_spread_store'] ?? 4));
+  // For the Chutney integration environment, querying only hsdir_spread_fetch nodes can be
+  // unnecessarily fragile; transient circuit failures or HSDir churn can cause 404s even
+  // when the descriptor exists elsewhere in the store set. Prefer the larger of
+  // {fetch,store} to reduce flakiness.
+  const spreadFetchEffective = Math.max(spreadFetch, spreadStore);
 
   while (!outerText && Date.now() <= deadline) {
     for (const periodNum of periodCandidates) {
@@ -854,7 +860,7 @@ export async function connectToHiddenServiceOverChutney(params: {
           periodLengthMinutes,
           periodNum,
           nReplicas,
-          spreadFetch,
+          spreadFetch: spreadFetchEffective,
           shuffleInPlace,
         });
 
