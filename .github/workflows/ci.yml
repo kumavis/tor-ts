@@ -66,5 +66,5 @@ jobs:
 
       - name: Run Chutney integration test
         env:
-          CHUTNEY_SKIP_INSTALL: "1"
+          CHUTNEY_SKIP_INSTALL: '1'
         run: bash packages/tor/scripts/ci-chutney.sh
