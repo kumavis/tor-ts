@@ -693,13 +693,15 @@ export async function connectToHiddenServiceOverChutney(params: {
   const { publicIdentityKey } = parseOnionV3Address(params.onionAddress);
   const timeArgs: Parameters<typeof computeTimePeriod>[0] = { validAfter: consensus.validAfter };
   if (consensus.freshUntil) timeArgs.freshUntil = consensus.freshUntil;
-  // Chutney/testing networks often use extremely short voting intervals; Tor derives the
-  // HS time period length from the voting interval in that case.
+  // On mainnet, hsdir-interval == derived (votingIntervalSec * 24)/60 because the voting interval is 1h.
+  // On testing networks (including Chutney), Tor ignores hsdir-interval and derives the period length from
+  // the voting interval, which is typically much shorter than 1h. To match Tor behavior across both cases,
+  // only pass hsdir-interval when it matches the derived value; otherwise let computeTimePeriod derive it.
   const votingIntervalSec = consensus.freshUntil
     ? Math.floor((consensus.freshUntil.getTime() - consensus.validAfter.getTime()) / 1000)
     : 3600;
-  const looksLikeTestingNetwork = votingIntervalSec > 0 && votingIntervalSec < 60;
-  if (!looksLikeTestingNetwork) {
+  const derivedPeriodMinutes = Math.max(1, Math.floor((votingIntervalSec * 24) / 60));
+  if (hsdirInterval === derivedPeriodMinutes) {
     timeArgs.hsdirIntervalMinutes = hsdirInterval;
   }
   const { periodNum: basePeriodNum, periodLengthMinutes } = computeTimePeriod(timeArgs);
