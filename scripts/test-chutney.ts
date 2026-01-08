@@ -1,14 +1,15 @@
 import net from 'node:net';
-import { Circuit } from './circuit.ts';
-import type { PeerInfo } from './circuit.ts';
-import { TlsChannelConnection } from './channel.ts';
-import { linkSpecifierToAddressAndPort } from './messaging.ts';
+
+import { Circuit } from '../src/circuit.ts';
+import type { PeerInfo } from '../src/circuit.ts';
+import { TlsChannelConnection } from '../src/channel.ts';
+import { linkSpecifierToAddressAndPort } from '../src/messaging.ts';
 import {
   downloadMicrodescFromDirectory,
   parseRelaysFromMicroDesc,
   dangerouslyLookupPeerInfo,
-} from './build-circuit/directory.ts';
-import type { MicroDescNodeInfo } from './build-circuit/directory.ts';
+} from '../src/build-circuit/directory.ts';
+import type { MicroDescNodeInfo } from '../src/build-circuit/directory.ts';
 
 async function getStandardChutneyCircuitPath() {
   const loopback = '127.0.0.1';
@@ -38,12 +39,6 @@ const circuitPeerInfos = await getStandardChutneyCircuitPath();
 const gatewayPeerInfo = circuitPeerInfos[0];
 const gatewayAddress = linkSpecifierToAddressAndPort(gatewayPeerInfo.linkSpecifiers[0]);
 
-// console.log(circuitPeerInfos.map(info => {
-//   const addressAndPort = linkSpecifierToAddressAndPort(info.linkSpecifiers[0])
-//   return `${addressAndPort.ip}:${addressAndPort.port}`
-// }).join('\n'))
-// console.log(gatewayPeerInfo, gatewayAddress)
-
 const channel = new TlsChannelConnection();
 await channel.connect(gatewayAddress);
 const circuit = new Circuit({
@@ -52,8 +47,6 @@ const circuit = new Circuit({
 });
 await circuit.connect();
 console.log('circuit established');
-// await circuit.open('localhost:5000')
-// console.log('connection established')
 
 const port = 1234;
 const server = net.createServer();
@@ -63,7 +56,6 @@ server.listen(port, () => {
 server.on('connection', async (socket) => {
   console.log('New client connected');
   const circuitStream = await circuit.open('kumavis.me:80');
-  // const circuitStream = await circuit.open('kumavis.me:443')
   console.log('connection established');
 
   circuitStream.on('data', (data) => {
@@ -92,5 +84,3 @@ server.on('connection', async (socket) => {
     console.log('Client disconnected');
   });
 });
-
-// circuit.sendRequest()
