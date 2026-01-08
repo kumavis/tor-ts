@@ -109,7 +109,7 @@ export const circuitStreamToNodeDuplex = (circuitStream: CircuitStream): Duplex 
   // write into circuitStream
   const writer = circuitStream.sink.getWriter();
   const nodeDuplexStream = new Duplex({
-    read(size) {
+    read(_size) {
       // no means of triggering read
     },
     write(chunk, encoding, callback) {

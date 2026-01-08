@@ -243,15 +243,17 @@ export class Circuit {
 
   receiveMessage(message: MessageCell) {
     switch (message.command) {
-      case MessageCellType.RELAY:
+      case MessageCellType.RELAY: {
         this.receiveRelayMessage(message.message as CellRelayUnparsed);
         break;
-      case MessageCellType.CREATED2:
+      }
+      case MessageCellType.CREATED2: {
         const created2Message = message.message as CellCreated2;
         const serverHandshake = parseCreate2ServerHandshakeForNtor(created2Message.handshake);
         this.firstHop.receiveCreated2Handshake(serverHandshake);
         break;
-      case MessageCellType.DESTROY:
+      }
+      case MessageCellType.DESTROY: {
         const destroyMessage = message.message as CellDestroy;
         console.warn('! got destroy', destroyMessage);
         const err = new Error(`circuit destroyed: ${destroyMessage.reason}`);
@@ -259,6 +261,7 @@ export class Circuit {
           stream.destroy(err);
         });
         break;
+      }
       default:
         throw new Error(`Circuit received unknown message type: ${message.command}`);
     }
@@ -274,7 +277,6 @@ export class Circuit {
       const looksRecognized = checkRelayCellRecognized(currentPayload);
       if (looksRecognized) {
         targetHop = hop;
-        const targetHopIndex = this.hops.indexOf(targetHop);
         // TODO: check digest
         // TODO: update backward digest
         break;

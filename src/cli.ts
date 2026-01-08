@@ -1,6 +1,6 @@
 import { Command } from 'commander';
 import { createRequire } from 'node:module';
-import { createProfile, loadProfile, loadKeyInfo } from './profiles.ts';
+import { createProfile, loadKeyInfo } from './profiles.ts';
 
 const require = createRequire(import.meta.url);
 const { version } = require('../package.json');

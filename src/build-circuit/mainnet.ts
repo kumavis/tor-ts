@@ -27,7 +27,7 @@ export async function getRandomCircuitPath() {
     directoryServer = directoryServerInfo.dir_address;
     try {
       microDescContent = await downloadMicrodescFromDirectory(directoryServer);
-    } catch (_err) {
+    } catch {
       // ignore error and attempt again
     }
   }

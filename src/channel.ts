@@ -176,7 +176,11 @@ export class ChannelConnection {
   receiveEvents(eventNames: Array<string>): Promise<any[]> {
     return receiveEvents(eventNames, this.incommingCommands);
   }
-  subscribeCircuit(circuitId: Buffer, eventName: string, handler: Function): () => void {
+  subscribeCircuit(
+    circuitId: Buffer,
+    eventName: string,
+    handler: (message: MessageCell) => void
+  ): () => void {
     const listener = (message: MessageCell) => {
       if (!circuitId.equals(message.circId)) return;
       handler(message);

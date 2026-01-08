@@ -48,7 +48,7 @@ export enum RelayCell {
   EXTENDED2 = 15,
 }
 
-const relayCellNames = {
+const _relayCellNames = {
   [RelayCell.BEGIN]: 'BEGIN',
   [RelayCell.DATA]: 'DATA',
   [RelayCell.END]: 'END',

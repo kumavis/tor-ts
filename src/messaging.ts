@@ -735,7 +735,7 @@ export function chunkDataForRelayDataCells(data: Buffer): Array<Buffer> {
   return chunks;
 }
 
-function buildAuthenticateCell({
+function _buildAuthenticateCell({
   type,
   serverHandshakeDigestData,
   clientHandshakeDigestData,
@@ -797,7 +797,7 @@ function buildAuthenticateCell({
   const RAND = crypto.randomBytes(24);
   const unsignedSection = Buffer.concat([TYPE, CID, SID, SLOG, CLOG, SCERT, TLSSECRETS, RAND]);
   // TODO: sign
-  const unsignedSectionHash = Buffer.from(sha256(unsignedSection));
+  const _unsignedSectionHash = Buffer.from(sha256(unsignedSection));
   const sig = Buffer.from([]);
   const signedSection = Buffer.concat([unsignedSection, sig]);
   return signedSection;

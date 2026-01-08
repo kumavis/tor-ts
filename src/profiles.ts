@@ -45,22 +45,19 @@ export const createProfile = function (routerConfig: Profile['routerConfig']) {
   const { OR_name } = routerConfig;
   const pathd = pathForProfileName(OR_name);
   fs.mkdirSync(pathd, { recursive: true });
-  let privkey;
   try {
-    privkey = fs.readFileSync(`${pathd}priv-key.pem`);
-  } catch (e) {
+    fs.readFileSync(`${pathd}priv-key.pem`);
+  } catch {
     child_process.execSync(`openssl genrsa -out ${pathd}priv-key.pem 1024`);
     child_process.execSync(`openssl rsa -in ${pathd}priv-key.pem -pubout > ${pathd}pub-key.pem`);
     child_process.execSync(
       `openssl rsa -in ${pathd}priv-key.pem -out ${pathd}pub-key-rsa.pem -outform PEM -RSAPublicKey_out`
     );
-    privkey = fs.readFileSync(`${pathd}priv-key.pem`);
   }
 
-  let privid;
   try {
-    privid = fs.readFileSync(`${pathd}priv-id-key.pem`);
-  } catch (err) {
+    fs.readFileSync(`${pathd}priv-id-key.pem`);
+  } catch {
     child_process.execSync(`openssl genrsa -out ${pathd}priv-id-key.pem 1024`);
     child_process.execSync(
       `openssl rsa -in ${pathd}priv-id-key.pem -pubout > ${pathd}pub-id-key.pem`
@@ -68,7 +65,6 @@ export const createProfile = function (routerConfig: Profile['routerConfig']) {
     child_process.execSync(
       `openssl rsa -in ${pathd}priv-id-key.pem -out ${pathd}pub-id-key-rsa.pem -outform PEM -RSAPublicKey_out`
     );
-    privid = fs.readFileSync(`${pathd}priv-id-key.pem`);
   }
 
   const profile = { routerConfig };

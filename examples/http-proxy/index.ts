@@ -1,8 +1,8 @@
 import http from 'http';
 import httpProxy from 'http-proxy';
-import { Circuit } from '../../src/index';
-import { getTorAgentForUrl, proxyCircuitStreamDuplex } from '../../src/node';
-import { connectRandomCircuit } from '../../src/build-circuit/mainnet';
+import { Circuit } from '../../src/index.ts';
+import { getTorAgentForUrl, proxyCircuitStreamDuplex } from '../../src/node.ts';
+import { connectRandomCircuit } from '../../src/build-circuit/mainnet.ts';
 
 main();
 

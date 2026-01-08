@@ -66,7 +66,7 @@ export async function getRandomDirectoryAuthority() {
   return selected;
 }
 
-async function requestDirectoryAuthorities(opts = {}) {
+async function _requestDirectoryAuthorities(opts = {}) {
   return requestOnionData({ flags: ['Authority'], ...opts });
 }
 
