@@ -92,4 +92,3 @@ test.serial('snowflake ws downlink: optional live relay connect', async (t) => {
   client.close();
   t.is(race, 'open-stable');
 });
-

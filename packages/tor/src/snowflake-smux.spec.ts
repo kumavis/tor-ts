@@ -39,4 +39,3 @@ test('smux v2: client opens stream and sends data', async (t) => {
   const got2 = await s1.readExactly(3);
   t.deepEqual(got2, Uint8Array.from([9, 8, 7]));
 });
-

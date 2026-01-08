@@ -1,5 +1,10 @@
 import test from 'ava';
-import { decodeKcpSegmentsFromPacket, encodeKcpSegment, KCP_CMD, KCP_HEADER_SIZE } from './snowflake/kcp/segment.ts';
+import {
+  decodeKcpSegmentsFromPacket,
+  encodeKcpSegment,
+  KCP_CMD,
+  KCP_HEADER_SIZE,
+} from './snowflake/kcp/segment.ts';
 
 test('kcp segment: encode/decode roundtrip', (t) => {
   const seg = {
@@ -63,4 +68,3 @@ test('kcp segment: decode handles multiple concatenated segments in one packet',
 test('kcp segment: decode throws on short packet', (t) => {
   t.throws(() => decodeKcpSegmentsFromPacket(new Uint8Array(KCP_HEADER_SIZE - 1)));
 });
-

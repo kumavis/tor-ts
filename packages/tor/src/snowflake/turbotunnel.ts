@@ -4,9 +4,7 @@ import crypto from 'node:crypto';
 // gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2/common/turbotunnel
 
 // Randomly generated magic prefix used to opt into turbotunnel mode.
-export const TURBOTUNNEL_TOKEN = Uint8Array.from([
-  0x12, 0x93, 0x60, 0x5d, 0x27, 0x81, 0x75, 0xf5,
-]);
+export const TURBOTUNNEL_TOKEN = Uint8Array.from([0x12, 0x93, 0x60, 0x5d, 0x27, 0x81, 0x75, 0xf5]);
 
 export type ClientId = Uint8Array; // 8 bytes
 
@@ -23,4 +21,3 @@ export function buildTurbotunnelPreamble(clientId: ClientId): Uint8Array {
   out.set(clientId, TURBOTUNNEL_TOKEN.byteLength);
   return out;
 }
-

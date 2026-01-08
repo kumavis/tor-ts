@@ -24,4 +24,3 @@ test('minimal kcp session: transfers stream bytes over packet sink/source', asyn
   const r2 = await a.readExactly(4);
   t.deepEqual(r2, Uint8Array.from([9, 8, 7, 6]));
 });
-

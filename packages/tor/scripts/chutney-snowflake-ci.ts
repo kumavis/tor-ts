@@ -70,7 +70,11 @@ async function main() {
     const requestText =
       `GET / HTTP/1.1\r\n` + `Host: 127.0.0.1:${port}\r\n` + `Connection: close\r\n` + `\r\n`;
 
-    await withTimeout('write request', perStepTimeoutMs, stream.write(Buffer.from(requestText, 'ascii')));
+    await withTimeout(
+      'write request',
+      perStepTimeoutMs,
+      stream.write(Buffer.from(requestText, 'ascii'))
+    );
     await withTimeout('read response', overallTimeoutMs, streamEndedP);
 
     const responseText = Buffer.concat(responseChunks).toString('utf8');
@@ -94,4 +98,3 @@ main().catch((err) => {
   console.error(err);
   process.exitCode = 1;
 });
-

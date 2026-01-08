@@ -76,4 +76,3 @@ export function decodeKcpSegmentsFromPacket(pkt: Uint8Array): KcpSegment[] {
   }
   return out;
 }
-

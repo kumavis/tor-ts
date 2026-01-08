@@ -56,4 +56,3 @@ export class SnowflakeWsStack {
     await Promise.race([once(this.smux, 'close'), new Promise((r) => setTimeout(r, 10))]);
   }
 }
-

@@ -38,4 +38,3 @@ test('smux duplex: adapts SmuxStream to node Duplex', async (t) => {
   await once(d1, 'end');
   t.pass();
 });
-

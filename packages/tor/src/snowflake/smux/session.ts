@@ -216,4 +216,3 @@ export class SmuxStream {
     this.sess.writeFrame(SMUX_CMD.UPD, this.sid, payload);
   }
 }
-

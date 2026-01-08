@@ -64,4 +64,3 @@ export class SnowflakeTlsChannelConnection extends ChannelConnection {
     void this.stack?.close();
   }
 }
-

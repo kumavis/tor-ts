@@ -54,4 +54,3 @@ test('encapsulation: decoder throws on >3-byte prefix', (t) => {
   dec.push(u8(0xc0, 0x80, 0x80, 0x00));
   t.throws(() => dec.popData(), { instanceOf: EncapsulationTooLongError });
 });
-

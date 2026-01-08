@@ -151,21 +151,16 @@ export class EncapsulationDecoder {
 function dataPrefixForLength(n: number): Uint8Array {
   // Mirrors snowflake/common/encapsulation/dataPrefixForLength.
   // 1 byte: 0b10xxxxxx where xxxxxx = n
-  if (((n >> 0) & 0x3f) === (n >> 0)) {
+  if (((n >> 0) & 0x3f) === n >> 0) {
     return Uint8Array.of(0x80 | ((n >> 0) & 0x3f));
   }
   // 2 bytes: 0b11xxxxxx 0yyyyyyy where xxxxxx yyyyyyy = n
-  if (((n >> 7) & 0x3f) === (n >> 7)) {
+  if (((n >> 7) & 0x3f) === n >> 7) {
     return Uint8Array.of(0xc0 | ((n >> 7) & 0x3f), (n >> 0) & 0x7f);
   }
   // 3 bytes: 0b11xxxxxx 1yyyyyyy 0zzzzzzz where concatenation = n
-  if (((n >> 14) & 0x3f) === (n >> 14)) {
-    return Uint8Array.of(
-      0xc0 | ((n >> 14) & 0x3f),
-      0x80 | ((n >> 7) & 0x7f),
-      (n >> 0) & 0x7f
-    );
+  if (((n >> 14) & 0x3f) === n >> 14) {
+    return Uint8Array.of(0xc0 | ((n >> 14) & 0x3f), 0x80 | ((n >> 7) & 0x7f), (n >> 0) & 0x7f);
   }
   throw new EncapsulationTooLongError();
 }
-

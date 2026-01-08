@@ -18,4 +18,3 @@ test.serial('snowflake live: open smux stream over ws downlink (optional)', asyn
   await stack.close();
   t.pass();
 });
-

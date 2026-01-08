@@ -114,9 +114,11 @@ export async function connectRandomCircuit() {
   return circuit;
 }
 
-export async function connectSnowflakeCircuit(opts: {
-  relayUrl?: string;
-} = {}) {
+export async function connectSnowflakeCircuit(
+  opts: {
+    relayUrl?: string;
+  } = {}
+) {
   const { directoryServer, microDescNodeInfos } = await getDirectoryMicrodesc();
 
   const channel = new SnowflakeTlsChannelConnection();

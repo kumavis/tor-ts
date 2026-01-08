@@ -49,7 +49,7 @@ export class MinimalKcpSession {
   inputPacket(pkt: Uint8Array): void {
     const segs = decodeKcpSegmentsFromPacket(pkt);
     for (const seg of segs) {
-      if ((seg.conv >>> 0) !== this.conv) continue;
+      if (seg.conv >>> 0 !== this.conv) continue;
       switch (seg.cmd) {
         case KCP_CMD.ACK:
           // ACK a single serial.
@@ -120,12 +120,12 @@ export class MinimalKcpSession {
   private onPush(seg: KcpSegment): void {
     // In a reliable in-order carrier, we mostly see seg.sn == recvNext.
     const sn = seg.sn >>> 0;
-    if (sn < (this.recvNext >>> 0)) {
+    if (sn < this.recvNext >>> 0) {
       // duplicate; still ACK it
       this.sendAck(seg);
       return;
     }
-    if (sn !== (this.recvNext >>> 0)) {
+    if (sn !== this.recvNext >>> 0) {
       // Out-of-order. Minimal implementation: ignore data but still ACK to avoid stalling.
       this.sendAck(seg);
       return;
@@ -167,4 +167,3 @@ export class MinimalKcpSession {
     this.sink(encodeKcpSegment(wins));
   }
 }
-

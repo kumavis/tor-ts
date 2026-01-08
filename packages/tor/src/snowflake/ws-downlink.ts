@@ -87,4 +87,3 @@ function rawDataToUint8Array(data: WebSocket.RawData): Uint8Array {
   // Buffer
   return Uint8Array.from(data);
 }
-

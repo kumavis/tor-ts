@@ -66,4 +66,3 @@ export function decodeUpdPayload(p: Uint8Array): { consumed: number; window: num
   const window = view.getUint32(4, true);
   return { consumed, window };
 }
-

@@ -201,21 +201,20 @@ export async function connectSnowflakeChutneyCircuit(opts: {
   const ignoreEntry = [{ rsaIdDigest: entryRsaIdDigest } as MicroDescNodeInfo];
 
   const forcedExitRsaIdDigestHex = process.env.TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX?.toLowerCase();
-  const exitNode =
-    forcedExitRsaIdDigestHex
-      ? (() => {
-          const forcedExit = microDescNodeInfos.find((n) => {
-            const digestHex = n.rsaIdDigest.toString('hex');
-            return digestHex === forcedExitRsaIdDigestHex;
-          });
-          if (!forcedExit) {
-            throw new Error(
-              `TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX=${forcedExitRsaIdDigestHex} not found in microdesc`
-            );
-          }
-          return forcedExit;
-        })()
-      : pickRelayWithFlags(microDescNodeInfos, ['Exit'], ignoreEntry);
+  const exitNode = forcedExitRsaIdDigestHex
+    ? (() => {
+        const forcedExit = microDescNodeInfos.find((n) => {
+          const digestHex = n.rsaIdDigest.toString('hex');
+          return digestHex === forcedExitRsaIdDigestHex;
+        });
+        if (!forcedExit) {
+          throw new Error(
+            `TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX=${forcedExitRsaIdDigestHex} not found in microdesc`
+          );
+        }
+        return forcedExit;
+      })()
+    : pickRelayWithFlags(microDescNodeInfos, ['Exit'], ignoreEntry);
 
   const middleNode = pickRelayWithFlags(microDescNodeInfos, [], [exitNode, ...ignoreEntry]);
 

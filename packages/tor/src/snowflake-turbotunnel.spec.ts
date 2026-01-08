@@ -1,5 +1,9 @@
 import test from 'ava';
-import { TURBOTUNNEL_TOKEN, buildTurbotunnelPreamble, newClientId } from './snowflake/turbotunnel.ts';
+import {
+  TURBOTUNNEL_TOKEN,
+  buildTurbotunnelPreamble,
+  newClientId,
+} from './snowflake/turbotunnel.ts';
 
 test('turbotunnel: token is 8 bytes', (t) => {
   t.is(TURBOTUNNEL_TOKEN.byteLength, 8);
@@ -21,4 +25,3 @@ test('turbotunnel: buildTurbotunnelPreamble concatenates token and clientId', (t
 test('turbotunnel: buildTurbotunnelPreamble rejects wrong clientId length', (t) => {
   t.throws(() => buildTurbotunnelPreamble(new Uint8Array(7)));
 });
-

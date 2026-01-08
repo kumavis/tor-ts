@@ -87,4 +87,3 @@ export class SmuxStreamDuplex extends Duplex {
     }
   }
 }
-

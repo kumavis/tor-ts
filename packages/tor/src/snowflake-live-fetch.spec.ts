@@ -26,4 +26,3 @@ test.serial('snowflake live: build circuit and fetch ipify (optional)', async (t
   circuit.destroy();
   t.truthy(body.trim().length > 0);
 });
-
