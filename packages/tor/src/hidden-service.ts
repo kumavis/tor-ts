@@ -449,11 +449,6 @@ export async function dangerouslyLookupHiddenServiceDescriptor(params: {
   return { blindedPublicKey, subcred, descriptor };
 }
 
-/**
- * @deprecated Use `dangerouslyLookupHiddenServiceDescriptor` (the previous name implied Tor-style safety).
- */
-export const lookupHiddenServiceDescriptor = dangerouslyLookupHiddenServiceDescriptor;
-
 type HsNtorClientState = {
   x: Buffer;
   X: Buffer;
