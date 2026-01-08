@@ -84,6 +84,7 @@ export CHUTNEY_LISTEN_ADDRESS="${CHUTNEY_LISTEN_ADDRESS:-127.0.0.1}"
 export CHUTNEY_DISABLE_IPV6="${CHUTNEY_DISABLE_IPV6:-1}"
 export CHUTNEY_DNS_CONF="${CHUTNEY_DNS_CONF:-/dev/null}"
 export TOR_TS_TEST_PORT="${TOR_TS_TEST_PORT:-4747}"
+export TOR_TS_HS_TARGET_PORT="${TOR_TS_HS_TARGET_PORT:-4748}"
 
 cleanup() {
   cd "${CHUTNEY_DIR}" || exit 0
@@ -101,8 +102,14 @@ cd "${CHUTNEY_DIR}"
 # Create a CI-only network config that allows exiting to localhost.
 # This avoids REASON_EXITPOLICY when testing e2e against a local HTTP server.
 CHUTNEY_NETWORK="${CHUTNEY_NETWORK:-tor-ts-basic-min}"
-cat > "networks/${CHUTNEY_NETWORK}" <<'EOF'
+mkdir -p "${CHUTNEY_DATA_DIR}/hs_service"
+export TOR_TS_HS_HOSTNAME_PATH="${CHUTNEY_DATA_DIR}/hs_service/hostname"
+
+cat > "networks/${CHUTNEY_NETWORK}" <<EOF
 Authority = Node(tag="a", authority=1, relay=1)
+
+# Extra relays to make HS intro/rend circuits viable.
+Relay = Node(tag="m", relay=1)
 
 # Allow exiting to localhost for CI-only integration tests.
 ExitRelay = Node(tag="r", relay=1, exit=1, extra_raw_torrc="""\
@@ -112,7 +119,13 @@ ClientDNSRejectInternalAddresses 0
 
 Client = Node(tag="c", client=1)
 
-NODES = Authority.getN(4) + ExitRelay.getN(1) + Client.getN(1)
+HiddenService = Node(tag="h", client=1, extra_raw_torrc="""\
+EnforceDistinctSubnets 0
+HiddenServiceDir ${CHUTNEY_DATA_DIR}/hs_service
+HiddenServicePort 80 127.0.0.1:${TOR_TS_HS_TARGET_PORT}
+""")
+
+NODES = Authority.getN(4) + Relay.getN(3) + ExitRelay.getN(1) + Client.getN(1) + HiddenService.getN(1)
 ConfigureNodes(NODES)
 EOF
 
@@ -130,6 +143,8 @@ echo "=== chutney torrc summary (debug) ==="
 echo "CHUTNEY_DATA_DIR=${CHUTNEY_DATA_DIR}"
 echo "TOR_TS_TEST_PORT=${TOR_TS_TEST_PORT}"
 echo "TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX=${TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX}"
+echo "TOR_TS_HS_TARGET_PORT=${TOR_TS_HS_TARGET_PORT}"
+echo "TOR_TS_HS_HOSTNAME_PATH=${TOR_TS_HS_HOSTNAME_PATH}"
 echo ""
 for torrc in "${CHUTNEY_DATA_DIR}"/nodes/*/torrc; do
   echo "--- ${torrc}"
@@ -139,5 +154,25 @@ echo "=== end torrc summary ==="
 echo ""
 
 cd "${ROOT_DIR}"
-timeout 2m node --experimental-transform-types "${ROOT_DIR}/scripts/chutney-ci.ts"
+
+TOR_TS_CHUTNEY_TESTS="${TOR_TS_CHUTNEY_TESTS:-exit,hidden-service}"
+IFS=',' read -ra TESTS <<< "${TOR_TS_CHUTNEY_TESTS}"
+for t in "${TESTS[@]}"; do
+  case "${t}" in
+    exit)
+      echo ""
+      echo "=== running chutney integration test: exit ==="
+      timeout 2m node --experimental-transform-types "${ROOT_DIR}/scripts/chutney-ci.ts"
+      ;;
+    hidden-service)
+      echo ""
+      echo "=== running chutney integration test: hidden-service ==="
+      timeout 10m node --experimental-transform-types "${ROOT_DIR}/scripts/chutney-hidden-service-ci.ts"
+      ;;
+    *)
+      echo "Unknown TOR_TS_CHUTNEY_TESTS entry: ${t}"
+      exit 1
+      ;;
+  esac
+done
 

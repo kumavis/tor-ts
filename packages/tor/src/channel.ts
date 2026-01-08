@@ -20,6 +20,7 @@ import type {
 } from './messaging.ts';
 import { sha256, sha1 } from './util.ts';
 import type { PeerInfo } from './circuit.ts';
+import { circuitIdLengthForProtocolVersion } from './circuit.ts';
 import { getTime as defaultGetTime } from './time.ts';
 import type { GetTime } from './time.ts';
 
@@ -46,6 +47,7 @@ export class ChannelConnection {
   _serverHandshakeDigestData: never[];
   _incommingHandshakeDigestData: any;
   _outgoingHandshakeDigestData: any;
+  _incomingDataBuffer: Buffer;
 
   constructor({
     isInitiator = true,
@@ -66,6 +68,7 @@ export class ChannelConnection {
     this._outgoingHandshakeDigestData = this.isInitiator
       ? this._serverHandshakeDigestData
       : this._clientHandshakeDigestData;
+    this._incomingDataBuffer = Buffer.alloc(0);
   }
 
   async performHandshake() {
@@ -142,15 +145,37 @@ export class ChannelConnection {
   onData(data: Buffer): void {
     // console.log(`< received data (${data.length} bytes)`)
     const { handShakeInProgress } = this.state;
-    // TODO: dont read cells until you've seen the minimum number of bytes for a cell
-    // TODO: retain unused data
-    for (const cell of readCellsFromData(data, () => this.state.linkProtocolVersion)) {
-      if (handShakeInProgress) {
-        this._incommingHandshakeDigestData.push(cell.data);
+    this._incomingDataBuffer = Buffer.concat([this._incomingDataBuffer, data]);
+
+    const getVersion = () => this.state.linkProtocolVersion;
+
+    // Parse only complete cells; keep any remainder buffered.
+    while (true) {
+      const circIdLen = circuitIdLengthForProtocolVersion(getVersion());
+      if (this._incomingDataBuffer.length < circIdLen + 1) break;
+      const command = this._incomingDataBuffer.readUInt8(circIdLen);
+
+      const isVariable = command === MessageCells.VERSIONS || command >= 128;
+      let totalLen: number;
+      if (isVariable) {
+        if (this._incomingDataBuffer.length < circIdLen + 1 + 2) break;
+        const payloadLen = this._incomingDataBuffer.readUInt16BE(circIdLen + 1);
+        totalLen = circIdLen + 1 + 2 + payloadLen;
+      } else {
+        totalLen = circIdLen + 1 + 509;
       }
-      // console.log(`<< received ${cell.commandName} (${cell.data.length} bytes)`)
-      this.incommingCommands.emit(cell.commandName, cell);
-      this.incommingCommands.emit('*', cell);
+      if (this._incomingDataBuffer.length < totalLen) break;
+
+      const cellData = this._incomingDataBuffer.subarray(0, totalLen);
+      this._incomingDataBuffer = this._incomingDataBuffer.subarray(totalLen);
+
+      for (const cell of readCellsFromData(cellData, getVersion)) {
+        if (handShakeInProgress) {
+          this._incommingHandshakeDigestData.push(cell.data);
+        }
+        this.incommingCommands.emit(cell.commandName, cell);
+        this.incommingCommands.emit('*', cell);
+      }
     }
   }
   sendMessage(messageType: number, messageParams: any): void {

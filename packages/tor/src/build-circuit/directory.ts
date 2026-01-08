@@ -170,10 +170,30 @@ export type MicroDescNodeInfo = {
   bandwidthStats?: Record<string, number>;
 };
 
+export type MicroDescConsensus = {
+  validAfter: Date | undefined;
+  freshUntil: Date | undefined;
+  validUntil: Date | undefined;
+  params: Record<string, number>;
+  sharedRandPreviousValue: Buffer | undefined;
+  sharedRandCurrentValue: Buffer | undefined;
+  relays: MicroDescNodeInfo[];
+};
+
 export function parseRelaysFromMicroDesc(microDescContent: string): MicroDescNodeInfo[] {
+  return parseMicroDescConsensus(microDescContent).relays;
+}
+
+export function parseMicroDescConsensus(microDescContent: string): MicroDescConsensus {
   const lines = microDescContent.split('\n');
   let relayInfo: MicroDescNodeInfo | undefined;
   const relayInfos: MicroDescNodeInfo[] = [];
+  const params: Record<string, number> = {};
+  let validAfter: Date | undefined;
+  let freshUntil: Date | undefined;
+  let validUntil: Date | undefined;
+  let sharedRandPreviousValue: Buffer | undefined;
+  let sharedRandCurrentValue: Buffer | undefined;
 
   // r test002a AB+0S6hvSEnm7ifzqh3QaYOxsm0 2038-01-01 00:00:00 127.0.0.1 5002 7002
   // m BY6mSHVSthDKuKGu8aiGKhuGkwZqJqDLs9RxY99gKYs
@@ -184,6 +204,42 @@ export function parseRelaysFromMicroDesc(microDescContent: string): MicroDescNod
 
   for (const line of lines) {
     const tokens = line.split(' ');
+    if (tokens[0] === 'valid-after') {
+      const d = tokens[1];
+      const t = tokens[2];
+      if (d && t) validAfter = new Date(`${d} ${t} UTC`);
+      continue;
+    } else if (tokens[0] === 'fresh-until') {
+      const d = tokens[1];
+      const t = tokens[2];
+      if (d && t) freshUntil = new Date(`${d} ${t} UTC`);
+      continue;
+    } else if (tokens[0] === 'valid-until') {
+      const d = tokens[1];
+      const t = tokens[2];
+      if (d && t) validUntil = new Date(`${d} ${t} UTC`);
+      continue;
+    } else if (tokens[0] === 'params') {
+      // Example: params bwweightscale=10000 hsdir-interval=1440 ...
+      for (const kv of tokens.slice(1)) {
+        const [k, v] = kv.split('=');
+        if (!k || !v) continue;
+        const n = Number.parseInt(v, 10);
+        if (!Number.isFinite(n)) continue;
+        params[k] = n;
+      }
+      continue;
+    } else if (tokens[0] === 'shared-rand-previous-value') {
+      // shared-rand-previous-value <NUM_REVEALS> <BASE64>
+      const valueB64 = tokens[2];
+      if (valueB64) sharedRandPreviousValue = Buffer.from(valueB64, 'base64');
+      continue;
+    } else if (tokens[0] === 'shared-rand-current-value') {
+      const valueB64 = tokens[2];
+      if (valueB64) sharedRandCurrentValue = Buffer.from(valueB64, 'base64');
+      continue;
+    }
+
     if (tokens[0] === 'r') {
       const parts = line.split(' ');
       if (parts.length < 8) {
@@ -260,7 +316,15 @@ export function parseRelaysFromMicroDesc(microDescContent: string): MicroDescNod
     }
   }
 
-  return relayInfos;
+  return {
+    validAfter,
+    freshUntil,
+    validUntil,
+    params,
+    sharedRandPreviousValue,
+    sharedRandCurrentValue,
+    relays: relayInfos,
+  };
 }
 
 // this is "dangerous" because we're performing it over http

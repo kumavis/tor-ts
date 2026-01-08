@@ -3,10 +3,10 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
   downloadMicrodescFromDirectory,
-  parseRelaysFromMicroDesc,
+  parseMicroDescConsensus,
   dangerouslyLookupPeerInfo,
 } from './directory.ts';
-import type { MicroDescNodeInfo } from './directory.ts';
+import type { MicroDescConsensus, MicroDescNodeInfo } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
 
 function mustFindMicroDescNodeInfo(
@@ -59,6 +59,20 @@ async function discoverDirectoryServerIpPort(): Promise<string> {
   return '127.0.0.1:7000';
 }
 
+export async function discoverChutneyDirectoryServer(): Promise<string> {
+  return await discoverDirectoryServerIpPort();
+}
+
+export async function getChutneyMicrodescConsensus(): Promise<{
+  directoryServer: string;
+  consensus: MicroDescConsensus;
+}> {
+  const directoryServer = await discoverDirectoryServerIpPort();
+  const microDescContent = await downloadMicrodescFromDirectory(directoryServer);
+  const consensus = parseMicroDescConsensus(microDescContent);
+  return { directoryServer, consensus };
+}
+
 /* chutney testing instructions:
 
 start
@@ -87,9 +101,8 @@ restart
 */
 
 export async function getStandardChutneyCircuitPath() {
-  const directoryServer = await discoverDirectoryServerIpPort();
-  const microDescContent = await downloadMicrodescFromDirectory(directoryServer);
-  const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
+  const { directoryServer, consensus } = await getChutneyMicrodescConsensus();
+  const microDescNodeInfos = consensus.relays;
 
   const circuitPlan: Array<MicroDescNodeInfo> = [];
   circuitPlan.push(
@@ -126,9 +139,8 @@ export async function getStandardChutneyCircuitPath() {
 }
 
 export async function getRandomChutneyCircuitPath() {
-  const directoryServer = await discoverDirectoryServerIpPort();
-  const microDescContent = await downloadMicrodescFromDirectory(directoryServer);
-  const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
+  const { directoryServer, consensus } = await getChutneyMicrodescConsensus();
+  const microDescNodeInfos = consensus.relays;
 
   const circuitPlan: Array<MicroDescNodeInfo> = [];
 
@@ -159,5 +171,36 @@ export async function getRandomChutneyCircuitPath() {
   // reverse so that gateway is first and exit is last
   circuitPeerInfos.reverse();
 
+  return circuitPeerInfos;
+}
+
+export async function getRandomChutneyCircuitPathToTarget(
+  target: PeerInfo,
+  opts: { avoidRsaIdDigests?: Buffer[] } = {}
+) {
+  const { directoryServer, consensus } = await getChutneyMicrodescConsensus();
+  const microDescNodeInfos = consensus.relays;
+
+  const avoid = new Set<string>([
+    target.rsaIdDigest.toString('hex'),
+    ...(opts.avoidRsaIdDigests ?? []).map((b) => b.toString('hex')),
+  ]);
+
+  const ignore: MicroDescNodeInfo[] = microDescNodeInfos.filter((n) =>
+    avoid.has(n.rsaIdDigest.toString('hex'))
+  );
+
+  const circuitPlan: Array<MicroDescNodeInfo> = [];
+  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, [], ignore));
+  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Guard'], [...ignore, ...circuitPlan]));
+
+  // Build in exit->...->guard order, then reverse at the end.
+  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(
+    circuitPlan.map(async (relayInfo) => {
+      return await dangerouslyLookupPeerInfo(directoryServer, relayInfo);
+    })
+  );
+  circuitPeerInfos.unshift(target);
+  circuitPeerInfos.reverse();
   return circuitPeerInfos;
 }

@@ -1,7 +1,8 @@
 import { Mutex } from './util.ts';
 
 const blockLength = 16;
-const keyParams = { name: 'AES-CTR', length: 128 };
+const keyParams128 = { name: 'AES-CTR', length: 128 };
+const keyParams256 = { name: 'AES-CTR', length: 256 };
 
 const incrementCounter = (counter: Buffer, blockCount: number) => {
   const ivLength = counter.length;
@@ -13,7 +14,7 @@ const incrementCounter = (counter: Buffer, blockCount: number) => {
 
 export const makeAes128CtrKey = (key: Buffer) => {
   const counter = Buffer.alloc(blockLength);
-  const cryptParams = { ...keyParams, length: 64, counter };
+  const cryptParams = { ...keyParams128, length: 64, counter };
   // when AES-CTR is used in stream mode, it will leave unused
   // encryption bytes from the block in the cache. webcrypto does not
   // seem to provide an api to support this but we can achieve it by
@@ -22,7 +23,7 @@ export const makeAes128CtrKey = (key: Buffer) => {
   let internalOffset = 0;
   // Copy to a Uint8Array backed by an ArrayBuffer (avoids SharedArrayBuffer typing issues)
   const rawKey = Uint8Array.from(key);
-  const iKeyP = crypto.subtle.importKey('raw', rawKey, keyParams, false, ['encrypt', 'decrypt']);
+  const iKeyP = crypto.subtle.importKey('raw', rawKey, keyParams128, false, ['encrypt', 'decrypt']);
   const mutex = new Mutex();
 
   const crypt = async (input: Buffer): Promise<Buffer> => {
@@ -45,6 +46,41 @@ export const makeAes128CtrKey = (key: Buffer) => {
       unlock();
     }
   };
+  return {
+    encrypt(plaintext: Buffer) {
+      return crypt(plaintext);
+    },
+    decrypt(ciphertext: Buffer) {
+      return crypt(ciphertext);
+    },
+  };
+};
+
+export const makeAes256CtrKey = (key: Buffer) => {
+  const counter = Buffer.alloc(blockLength);
+  const cryptParams = { ...keyParams256, length: 64, counter };
+  let internalOffset = 0;
+  // Copy to a Uint8Array backed by an ArrayBuffer (avoids SharedArrayBuffer typing issues)
+  const rawKey = Uint8Array.from(key);
+  const iKeyP = crypto.subtle.importKey('raw', rawKey, keyParams256, false, ['encrypt', 'decrypt']);
+  const mutex = new Mutex();
+
+  const crypt = async (input: Buffer): Promise<Buffer> => {
+    const iKey = await iKeyP;
+    const unlock = await mutex.lock();
+    try {
+      const paddedInput = Buffer.concat([Buffer.alloc(internalOffset), input]);
+      const paddedOutput = Buffer.from(await crypto.subtle.encrypt(cryptParams, iKey, paddedInput));
+      const output = paddedOutput.subarray(internalOffset);
+      const blockCount = Math.floor(paddedInput.length / blockLength);
+      internalOffset = paddedInput.length % blockLength;
+      incrementCounter(counter, blockCount);
+      return output;
+    } finally {
+      unlock();
+    }
+  };
+
   return {
     encrypt(plaintext: Buffer) {
       return crypt(plaintext);
