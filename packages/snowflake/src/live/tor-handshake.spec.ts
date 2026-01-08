@@ -10,6 +10,7 @@ liveTest('snowflake live: complete Tor link handshake over ws downlink (optional
   const channel = new SnowflakeTlsChannelConnection();
   await channel.connect({ relayUrl: 'wss://snowflake.torproject.net/' });
   channel.destroy();
+  t.pass();
 });
 
 function isLiveEnabled(): boolean {

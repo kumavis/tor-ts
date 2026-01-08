@@ -15,7 +15,7 @@ import { SnowflakeTlsChannelConnection } from '../tor-channel.ts';
 
 type DirectoryAuthority = { address: string; orPort: number; dirPort?: number };
 
-const liveTest = isLiveEnabled() ? test.serial : test.serial.skip;
+const liveTest = isLiveEnabled() && isFetchEnabled() ? test.serial : test.serial.skip;
 
 liveTest('snowflake live: build circuit + fetch ipify (optional)', async (t) => {
   t.timeout(180_000);
@@ -34,7 +34,10 @@ liveTest('snowflake live: build circuit + fetch ipify (optional)', async (t) => 
   const entryRsaIdDigest = channel.peerIdentity?.rsaIdDigest;
   if (!entryRsaIdDigest) throw new Error('snowflake channel has no peer identity');
 
-  const entryOnionKey = await dangerouslyLookupOnionKey(directoryServer, entryRsaIdDigest);
+  const entryNode = microDescNodeInfos.find((n) => n.rsaIdDigest.equals(entryRsaIdDigest));
+  const entryOnionKey = entryNode?.mKey
+    ? await dangerouslyLookupOnionKeyByMicrodescDigest(directoryServer, entryNode.mKey)
+    : await dangerouslyLookupOnionKeyByServerDescriptor(directoryServer, entryRsaIdDigest);
   const entryPeerInfo: PeerInfo = {
     onionKey: entryOnionKey,
     rsaIdDigest: entryRsaIdDigest,
@@ -83,6 +86,11 @@ function isLiveEnabled(): boolean {
   return v === '1' || v === 'true';
 }
 
+function isFetchEnabled(): boolean {
+  const v = process.env.SNOWFLAKE_LIVE_FETCH?.toLowerCase();
+  return v === '1' || v === 'true';
+}
+
 async function loadDirectoryAuthoritiesFromTorPackage(): Promise<DirectoryAuthority[]> {
   // NOTE: This is test-only wiring inside this monorepo; not part of snowflake's runtime API.
   const here = path.dirname(fileURLToPath(import.meta.url));
@@ -96,18 +104,52 @@ async function loadDirectoryAuthoritiesFromTorPackage(): Promise<DirectoryAuthor
   for (const item of json) {
     if (!item || typeof item !== 'object') continue;
     const it = item as Record<string, unknown>;
-    if (typeof it.address !== 'string') continue;
-    if (typeof it.orPort !== 'number') continue;
-    const dirPort = typeof it.dirPort === 'number' ? it.dirPort : undefined;
+    const dirAddress = typeof it.dir_address === 'string' ? it.dir_address : undefined;
+    const orAddresses = Array.isArray(it.or_addresses)
+      ? it.or_addresses.filter((x) => typeof x === 'string')
+      : [];
+
+    // Prefer the directory port, since we're going to fetch the microdesc/descriptor over HTTP.
+    const ipPort = dirAddress ?? (orAddresses[0] as string | undefined);
+    if (!ipPort) continue;
+
+    // Accept both IPv4 "ip:port" and bracketed IPv6 "[...]:port".
+    const parsed = parseIpPort(ipPort);
+    if (!parsed) continue;
+
+    const dirPort = dirAddress ? parsed.port : undefined;
+    const orPort = dirAddress ? 0 : parsed.port;
     out.push(
       dirPort === undefined
-        ? { address: it.address, orPort: it.orPort }
-        : { address: it.address, orPort: it.orPort, dirPort }
+        ? { address: parsed.address, orPort }
+        : { address: parsed.address, orPort, dirPort }
     );
   }
 
   if (out.length === 0) throw new Error('no directory authorities loaded');
   return out;
+}
+
+function parseIpPort(ipPort: string): { address: string; port: number } | null {
+  const s = ipPort.trim();
+  // [IPv6]:port
+  if (s.startsWith('[')) {
+    const idx = s.lastIndexOf(']:');
+    if (idx === -1) return null;
+    const host = s.slice(1, idx);
+    const portText = s.slice(idx + 2);
+    const port = Number.parseInt(portText, 10);
+    if (!host || !Number.isFinite(port) || port <= 0) return null;
+    return { address: host, port };
+  }
+  // IPv4:port (or hostname:port)
+  const idx = s.lastIndexOf(':');
+  if (idx === -1) return null;
+  const host = s.slice(0, idx);
+  const portText = s.slice(idx + 1);
+  const port = Number.parseInt(portText, 10);
+  if (!host || !Number.isFinite(port) || port <= 0) return null;
+  return { address: host, port };
 }
 
 function pickRandom<T>(arr: readonly T[]): T {
@@ -147,11 +189,26 @@ function extractNtorOnionKey(directoryRecord: string): string {
   return line.slice(linePrefix.length);
 }
 
-async function dangerouslyLookupOnionKey(peerIpPort: string, rsaIdDigest: Buffer): Promise<Buffer> {
+async function dangerouslyLookupOnionKeyByServerDescriptor(
+  peerIpPort: string,
+  rsaIdDigest: Buffer
+): Promise<Buffer> {
   const url = `http://${peerIpPort}/tor/server/fp/${rsaIdDigest.toString('hex').toUpperCase()}`;
   const response = await fetchWithRetry(url);
   const directoryRecord = await response.text();
   const ntorOnionKeyText = extractNtorOnionKey(directoryRecord);
+  return Buffer.from(ntorOnionKeyText, 'base64');
+}
+
+async function dangerouslyLookupOnionKeyByMicrodescDigest(
+  peerIpPort: string,
+  microdescDigest: Buffer
+): Promise<Buffer> {
+  // Dir-spec: /tor/micro/d/<hex-encoded microdesc digests...>
+  const url = `http://${peerIpPort}/tor/micro/d/${microdescDigest.toString('hex').toUpperCase()}`;
+  const response = await fetchWithRetry(url);
+  const microdescText = await response.text();
+  const ntorOnionKeyText = extractNtorOnionKey(microdescText);
   return Buffer.from(ntorOnionKeyText, 'base64');
 }
 
@@ -304,6 +361,8 @@ async function dangerouslyLookupPeerInfo(
   directoryServer: string,
   nodeInfo: MicroDescNodeInfo
 ): Promise<PeerInfo> {
-  const onionKey = await dangerouslyLookupOnionKey(directoryServer, nodeInfo.rsaIdDigest);
+  const onionKey = nodeInfo.mKey
+    ? await dangerouslyLookupOnionKeyByMicrodescDigest(directoryServer, nodeInfo.mKey)
+    : await dangerouslyLookupOnionKeyByServerDescriptor(directoryServer, nodeInfo.rsaIdDigest);
   return microDescNodeInfoToPeerInfo(nodeInfo, onionKey);
 }
