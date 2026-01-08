@@ -16,7 +16,7 @@ import { getTorAgentForUrl } from 'tor/node';
 
 import { SnowflakeTlsChannelConnection } from '../tor-channel.ts';
 
-test.serial('snowflake live: build circuit + fetch ipify (optional)', async (t) => {
+test.serial('snowflake live: build circuit + fetch example.com (optional)', async (t) => {
   t.timeout(180_000);
 
   const directoryAuthority = await getRandomDirectoryAuthority();
@@ -35,29 +35,27 @@ test.serial('snowflake live: build circuit + fetch ipify (optional)', async (t) 
   const entryRsaIdDigest = channel.peerIdentity?.rsaIdDigest;
   if (!entryRsaIdDigest) throw new Error('snowflake channel has no peer identity');
 
-  const entryNode = microDescNodeInfos.find((n) => n.rsaIdDigest.equals(entryRsaIdDigest));
-  if (!entryNode) {
-    throw new Error(
-      `snowflake entry rsaIdDigest not found in microdesc consensus from ${directoryServer}`
-    );
-  }
+  // The Snowflake entry may not appear in the public consensus. For the first hop only,
+  // we use CREATE_FAST (no descriptor keys required). Subsequent hops are extended with ntor.
+  const entryPeerInfo: PeerInfo = {
+    onionKey: Buffer.alloc(0),
+    rsaIdDigest: entryRsaIdDigest,
+    linkSpecifiers: [],
+  };
 
-  const circuitPlan: Array<MicroDescNodeInfo> = [];
-  circuitPlan.push(entryNode);
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, [], circuitPlan));
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Exit'], circuitPlan));
+  const middleNode = pickRelayWithFlags(microDescNodeInfos, [], []);
+  const exitNode = pickRelayWithFlags(microDescNodeInfos, ['Exit'], [middleNode]);
 
-  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(
-    circuitPlan.map(async (relayInfo) => {
-      return await dangerouslyLookupPeerInfo(directoryServer, relayInfo);
-    })
-  );
+  const middlePeerInfo = await dangerouslyLookupPeerInfo(directoryServer, middleNode);
+  const exitPeerInfo = await dangerouslyLookupPeerInfo(directoryServer, exitNode);
+
+  const circuitPeerInfos: Array<PeerInfo> = [entryPeerInfo, middlePeerInfo, exitPeerInfo];
 
   const circuit = new Circuit({ path: circuitPeerInfos, channel });
   await circuit.connect();
   t.teardown(() => circuit.destroy());
 
-  const url = new URL('https://api.ipify.org?format=json');
+  const url = new URL('https://example.com/');
   const agent = getTorAgentForUrl(circuit, url.toString());
 
   const body = await new Promise<string>((resolve, reject) => {
@@ -80,5 +78,5 @@ test.serial('snowflake live: build circuit + fetch ipify (optional)', async (t) 
     req.end();
   });
 
-  t.regex(body, /"ip"\s*:\s*"/);
+  t.regex(body, /Example Domain/);
 });

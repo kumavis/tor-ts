@@ -15,6 +15,7 @@ import {
 import type {
   MessageCell,
   CellCreated2,
+  Create2ClientHandshake,
   CellDestroy,
   CellRelay,
   CellRelayUnparsed,
@@ -34,6 +35,10 @@ import { ReadableStream, WritableStream } from 'stream/web';
 
 const KEY_LEN = 16;
 const HASH_LEN = 20;
+
+type HopClientHandshake =
+  | { kind: 'fast'; x: Buffer }
+  | { kind: 'ntor'; handshake: Create2ClientHandshake };
 
 type HopKey = {
   encrypt(message: Buffer): Promise<Uint8Array>;
@@ -77,6 +82,7 @@ class Hop {
 
   ntorEphemeralKeyPrivate!: Buffer;
   ntorEphemeralKeyPublic!: Buffer;
+  createFastX?: Buffer;
 
   async encryptForward(data: Buffer) {
     return Buffer.from(await this.cipherPair.forward.key.encrypt(data));
@@ -90,7 +96,13 @@ class Hop {
     const integrity = this.cipherPair.forward.digest.copy().digest().subarray(0, 4);
     return integrity;
   }
-  createClientHandshake() {
+  createClientHandshake(): HopClientHandshake {
+    // If we don't have the peer's ntor onion key, fall back to CREATE_FAST.
+    if (this.peerInfo.onionKey.length !== 32) {
+      const x = crypto.randomBytes(HASH_LEN);
+      this.createFastX = x;
+      return { kind: 'fast', x };
+    }
     this.ntorEphemeralKeyPrivate = Buffer.from(x25519.utils.randomPrivateKey());
     this.ntorEphemeralKeyPublic = Buffer.from(x25519.getPublicKey(this.ntorEphemeralKeyPrivate));
     const clientHandshake = makeCreate2ClientHandshakeForNtor({
@@ -98,7 +110,24 @@ class Hop {
       peerOnionKey: this.peerInfo.onionKey,
       peerRsaIdDigest: this.peerInfo.rsaIdDigest,
     });
-    return clientHandshake;
+    return { kind: 'ntor', handshake: clientHandshake };
+  }
+  receiveCreatedFastHandshake({ y, kh }: { y: Buffer; kh: Buffer }) {
+    const x = this.createFastX;
+    if (!x) throw new Error('CREATE_FAST state missing');
+    if (x.length !== HASH_LEN || y.length !== HASH_LEN || kh.length !== HASH_LEN) {
+      throw new Error('CREATE_FAST handshake sizes are invalid');
+    }
+    const k0 = Buffer.concat([x, y]);
+    const k = KDF_TOR(k0, 3 * HASH_LEN + 2 * KEY_LEN);
+    const expectedKh = k.subarray(0, HASH_LEN);
+    if (!expectedKh.equals(kh)) {
+      throw new Error('CREATE_FAST handshake verification failed (KH mismatch)');
+    }
+    const keyMaterial = k.subarray(HASH_LEN);
+    this.cipherPair = makeTor1CipherPairFromKeyMaterial(keyMaterial);
+    this.isConnected = true;
+    this.handshakePromiseKit.resolve();
   }
   async receiveCreated2Handshake(handshake: NtorServerHandshake) {
     const { serverNtorEphemeralKeyPublic, serverNtorAuth } = handshake;
@@ -212,18 +241,28 @@ export class Circuit {
     }
     const clientHandshake = hop.createClientHandshake();
     if (hop === this.firstHop) {
-      // this is our first hop - just a create2
-      this.channel.sendMessage(MessageCellType.CREATE2, {
-        circuitId: this.circuitId,
-        handshake: clientHandshake,
-      });
+      // this is our first hop - either CREATE2 (ntor) or CREATE_FAST
+      if (clientHandshake.kind === 'fast') {
+        this.channel.sendMessage(MessageCellType.CREATE_FAST, {
+          circuitId: this.circuitId,
+          x: clientHandshake.x,
+        });
+      } else {
+        this.channel.sendMessage(MessageCellType.CREATE2, {
+          circuitId: this.circuitId,
+          handshake: clientHandshake.handshake,
+        });
+      }
     } else {
+      if (clientHandshake.kind !== 'ntor') {
+        throw new Error('CREATE_FAST is only supported for the first hop');
+      }
       // extending the relay - send extend2 to previous hop
       const handshakeHopIndex = this.hops.indexOf(hop);
       const targetHop = this.hops[handshakeHopIndex - 1];
       const extend2PayloadPlaintext = serializeExtend2({
         linkSpecifiers: hop.peerInfo.linkSpecifiers,
-        handshake: clientHandshake,
+        handshake: clientHandshake.handshake,
       });
       await this.sendRelayMessage(
         {
@@ -260,6 +299,11 @@ export class Circuit {
     switch (message.command) {
       case MessageCellType.RELAY: {
         this.receiveRelayMessage(message.message as CellRelayUnparsed);
+        break;
+      }
+      case MessageCellType.CREATED_FAST: {
+        const createdFastMessage = message.message as { y: Buffer; kh: Buffer };
+        this.firstHop.receiveCreatedFastHandshake(createdFastMessage);
         break;
       }
       case MessageCellType.CREATED2: {
@@ -504,4 +548,17 @@ function makeTor1CipherPairFromKeyMaterial(keyMaterial: Buffer) {
     new Tor1Cipher(forwardKey, forwardDigest),
     new Tor1Cipher(backwardKey, backwardDigest)
   );
+}
+
+function KDF_TOR(keyMaterial: Buffer, length: number): Buffer {
+  // K = H(K0 | [00]) | H(K0 | [01]) | H(K0 | [02]) | ...
+  const blocks: Buffer[] = [];
+  for (let i = 0; Buffer.concat(blocks).length < length; i++) {
+    const digest = crypto
+      .createHash('sha1')
+      .update(Buffer.concat([keyMaterial, Buffer.from([i])]))
+      .digest();
+    blocks.push(digest);
+  }
+  return Buffer.concat(blocks).subarray(0, length);
 }
