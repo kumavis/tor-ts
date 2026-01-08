@@ -15,9 +15,7 @@ import { SnowflakeTlsChannelConnection } from '../tor-channel.ts';
 
 type DirectoryAuthority = { address: string; orPort: number; dirPort?: number };
 
-const liveTest = isLiveEnabled() && isFetchEnabled() ? test.serial : test.serial.skip;
-
-liveTest('snowflake live: build circuit + fetch ipify (optional)', async (t) => {
+test.serial('snowflake live: build circuit + fetch ipify (optional)', async (t) => {
   t.timeout(180_000);
 
   const authorities = await loadDirectoryAuthoritiesFromTorPackage();
@@ -80,16 +78,6 @@ liveTest('snowflake live: build circuit + fetch ipify (optional)', async (t) => 
 
   t.regex(body, /"ip"\\s*:\\s*"/);
 });
-
-function isLiveEnabled(): boolean {
-  const v = process.env.SNOWFLAKE_LIVE?.toLowerCase();
-  return v === '1' || v === 'true';
-}
-
-function isFetchEnabled(): boolean {
-  const v = process.env.SNOWFLAKE_LIVE_FETCH?.toLowerCase();
-  return v === '1' || v === 'true';
-}
 
 async function loadDirectoryAuthoritiesFromTorPackage(): Promise<DirectoryAuthority[]> {
   // NOTE: This is test-only wiring inside this monorepo; not part of snowflake's runtime API.
