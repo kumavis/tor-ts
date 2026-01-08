@@ -115,12 +115,8 @@ jobs:
       - name: Install JS deps
         run: yarn install --frozen-lockfile
 
-      - name: Run Snowflake live tests (non-blocking)
-        run: |
-          set +e
-          SNOWFLAKE_LIVE=1 yarn workspace snowflake test:live
-          status=$?
-          if [ $status -ne 0 ]; then
-            echo "::warning title=Snowflake live tests failed::Non-blocking live tests failed (exit $status). See job logs for details."
-          fi
-          exit 0
+      - name: Run Snowflake live tests
+        continue-on-error: true
+        env:
+          SNOWFLAKE_LIVE: '1'
+        run: yarn workspace snowflake test:live
