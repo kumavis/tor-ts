@@ -1,121 +1,114 @@
-import fs from 'fs';
-import Onionoo from 'onionoo';
-import * as url from 'node:url';
 import type { PeerInfo } from '../circuit.ts';
 import { AddressTypes, LinkSpecifierTypes, addressAndPortToLinkSpecifier } from '../messaging.ts';
 import type { LinkSpecifier } from '../messaging.ts';
-const __dirname = url.fileURLToPath(new URL('.', import.meta.url));
 
-// get "consensus document"
-// curl `${authority.dir_address}/tor/status-vote/current/consensus`
+export type DirectoryAuthority = {
+  dir_address?: string;
+};
 
-// get "relay descriptor"
-// curl `${relay.dir_address}/tor/server/fp/${relay.fingerprint}`
+type OnionooDetailsResponse = {
+  relays: Array<DirectoryAuthority>;
+};
 
-// {
-//   nickname: 'dizum',
-//   fingerprint: '7EA6EAD6FD83083C538F44038BBFA077587DD755',
-//   or_addresses: [ '45.66.33.45:443' ],
-//   dir_address: '45.66.33.45:80',
-//   last_seen: '2023-06-01 08:00:00',
-//   last_changed_address_or_port: '2019-08-12 16:00:00',
-//   first_seen: '2007-10-27 12:00:00',
-//   running: true,
-//   flags: [ 'Authority', 'Fast', 'Running', 'Stable', 'V2Dir', 'Valid' ],
-//   country: 'nl',
-//   country_name: 'Netherlands',
-//   as: 'AS47482',
-//   as_name: 'Spectre Operations B.V.',
-//   consensus_weight: 20,
-//   verified_host_names: [ 'tor.dizum.com' ],
-//   last_restarted: '2023-05-26 10:26:19',
-//   bandwidth_rate: 90112,
-//   bandwidth_burst: 68157440,
-//   observed_bandwidth: 11219030,
-//   advertised_bandwidth: 90112,
-//   exit_policy: [ 'reject *:*' ],
-//   exit_policy_summary: { reject: [Array] },
-//   contact: 'email:usura[]sabotage.org url:https://386bsd.net proof:uri-rsa abuse:abuse[]sabotage.net twitter:adejoode ciissversion:2',
-//   platform: 'Tor 0.4.7.13 on Linux',
-//   version: '0.4.7.13',
-//   version_status: 'recommended',
-//   effective_family: [
-//     '74C0C2705DB1192C03F19F7CD1BB234843B1A81F',
-//     '7EA6EAD6FD83083C538F44038BBFA077587DD755'
-//   ],
-//   consensus_weight_fraction: 1.6330152e-7,
-//   guard_probability: 0,
-//   middle_probability: 4.898479e-7,
-//   exit_probability: 0,
-//   recommended_version: true,
-//   measured: false,
-//   unreachable_or_addresses: [ '[::]:443' ]
-// },
+type DangerouslyFetchWithRetryOptions = RequestInit & {
+  timeoutMs?: number;
+  maxRetries?: number;
+  retryDelayMs?: number;
+};
 
-// main()
+const onionooCache = {
+  relays: [] as Array<DirectoryAuthority>,
+  expiresAtMs: 0,
+};
 
-// async function main () {
-//   const relays = await requestDirectoryAuthorities()
-//   await fs.promises.writeFile(__dirname + '/directory-authorities.json', JSON.stringify(relays, null, 2))
-// }
+export async function getRandomDirectoryAuthority(): Promise<DirectoryAuthority> {
+  const response = await dangerouslyFetchOnionooDetailsWithCache({
+    limit: '30',
+    running: 'true',
+    search: 'flag:Authority',
+    order: '-consensus_weight',
+  });
 
-export async function getRandomDirectoryAuthority() {
-  const data = await fs.promises.readFile(__dirname + '/directory-authorities.json', 'utf8');
-  const relays = JSON.parse(data);
-  const selected = relays[Math.floor(Math.random() * relays.length)];
+  const candidates = response.relays.filter(
+    (r) => typeof r.dir_address === 'string' && r.dir_address.length > 0
+  );
+  if (candidates.length === 0) {
+    throw new Error('No directory authorities returned from Onionoo (missing dir_address)');
+  }
+
+  const selected = candidates[Math.floor(Math.random() * candidates.length)];
+  if (!selected) throw new Error('Failed to select a directory authority');
   return selected;
 }
 
-async function _requestDirectoryAuthorities(opts = {}) {
-  return requestOnionData({ flags: ['Authority'], ...opts });
-}
+async function dangerouslyFetchOnionooDetailsWithCache(
+  query: Record<string, string>
+): Promise<OnionooDetailsResponse> {
+  const now = Date.now();
+  if (onionooCache.expiresAtMs > now && onionooCache.relays.length > 0) {
+    return { relays: onionooCache.relays };
+  }
 
-async function requestOnionData({
-  flags = [] as string[],
-  ...opts
-}: {
-  flags?: string[];
-  [key: string]: unknown;
-} = {}) {
-  const onionoo = new Onionoo();
-  const query = {
-    limit: 30,
-    running: true,
-    search: flags.map((flag) => `flag:${flag}`).join(' '),
-    order: '-consensus_weight',
-    ...opts,
-  };
-  const response = await onionoo.details(query);
-  const { relays } = response.body;
-  return relays;
+  const u = new URL('https://onionoo.torproject.org/details');
+  u.search = new URLSearchParams(query).toString();
+  const res = await dangerouslyFetchWithRetry(u.toString(), {
+    timeoutMs: 12_000,
+    maxRetries: 5,
+    retryDelayMs: 750,
+    headers: {
+      accept: 'application/json',
+      // Identify as a script without leaking a stable, unique identifier.
+      'user-agent': 'tor-ts (build-circuit)',
+    },
+  });
+  const json = (await res.json()) as unknown;
+  if (!json || typeof json !== 'object') throw new Error('Onionoo response was not an object');
+  const obj = json as Record<string, unknown>;
+
+  const relays = Array.isArray(obj.relays) ? (obj.relays as Array<DirectoryAuthority>) : [];
+  onionooCache.relays = relays;
+  onionooCache.expiresAtMs = now + 5 * 60_000;
+  return { relays };
 }
 
 // perform fetch with retry and delay
-const fetchWithRetry = async (url: string, opts: any = {}) => {
-  const maxRetries = 3;
-  const retryDelay = 500;
-  let retries = 0;
-  while (true) {
+const dangerouslyFetchWithRetry = async (
+  url: string,
+  opts: DangerouslyFetchWithRetryOptions = {}
+) => {
+  const maxRetries = opts.maxRetries ?? 3;
+  const retryDelayMs = opts.retryDelayMs ?? 500;
+  const timeoutMs = opts.timeoutMs ?? 10_000;
+
+  let lastErr: unknown;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), timeoutMs);
+    timeout.unref?.();
+
     try {
-      const response = await fetch(url, opts);
+      const { timeoutMs: _t, maxRetries: _m, retryDelayMs: _r, ...fetchOpts } = opts;
+      const response = await fetch(url, { ...fetchOpts, signal: controller.signal });
       if (!response.ok) {
-        throw new Error(`Failed to fetch: ${response.status} ${response.statusText}`);
+        throw new Error(`Fetch failed for ${url}: ${response.status} ${response.statusText}`);
       }
       return response;
     } catch (err) {
-      retries++;
-      if (retries > maxRetries) {
-        throw err;
-      }
-      await new Promise((resolve) => setTimeout(resolve, retryDelay));
+      lastErr = err;
+      if (attempt >= maxRetries) break;
+      await new Promise((resolve) => setTimeout(resolve, retryDelayMs));
+    } finally {
+      clearTimeout(timeout);
     }
   }
+
+  throw lastErr instanceof Error ? lastErr : new Error(`Fetch failed for ${url}`);
 };
 
 // this is "dangerous" because we're performing it over http
 export async function dangerouslyLookupOnionKey(peerIpPort: string, rsaIdDigest: Buffer) {
   const url = `http://${peerIpPort}/tor/server/fp/${rsaIdDigest.toString('hex').toUpperCase()}`;
-  const response = await fetchWithRetry(url);
+  const response = await dangerouslyFetchWithRetry(url);
   if (!response.ok) {
     throw new Error(
       `Failed to query peer for onion key: ${response.status} ${response.statusText}`
@@ -129,11 +122,11 @@ export async function dangerouslyLookupOnionKey(peerIpPort: string, rsaIdDigest:
   return ntorOnionKey;
 }
 
-export async function downloadMicrodescFromDirectory(
+export async function dangerouslyDownloadMicrodescFromDirectory(
   directoryServerIpPort: string
 ): Promise<string> {
   const url = `http://${directoryServerIpPort}/tor/status-vote/current/consensus-microdesc`;
-  const response = await fetchWithRetry(url);
+  const response = await dangerouslyFetchWithRetry(url);
   if (!response.ok) {
     throw new Error(
       `Failed to query directory for microdesc: ${response.status} ${response.statusText}`
@@ -161,12 +154,12 @@ function extractMasterKeyEd25519(directoryRecord: string): string {
   return line.slice(linePrefix.length).trim();
 }
 
-async function downloadRelayServerDescriptor(
+async function dangerouslyDownloadRelayServerDescriptor(
   peerIpPort: string,
   rsaIdDigest: Buffer
 ): Promise<string> {
   const url = `http://${peerIpPort}/tor/server/fp/${rsaIdDigest.toString('hex').toUpperCase()}`;
-  const response = await fetchWithRetry(url);
+  const response = await dangerouslyFetchWithRetry(url);
   if (!response.ok) {
     throw new Error(
       `Failed to query peer for relay descriptor: ${response.status} ${response.statusText}`
@@ -365,7 +358,7 @@ export async function dangerouslyLookupPeerInfoWithEd25519IdentityKey(
   directoryServer: string,
   nodeInfo: MicroDescNodeInfo
 ): Promise<{ peerInfo: PeerInfo; ed25519IdentityKey: Buffer }> {
-  const directoryRecord = await downloadRelayServerDescriptor(
+  const directoryRecord = await dangerouslyDownloadRelayServerDescriptor(
     directoryServer,
     nodeInfo.rsaIdDigest
   );

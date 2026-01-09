@@ -143,6 +143,15 @@ export type CellAuthenticate = {
   auth: Buffer;
 };
 
+export type CellCreateFast = {
+  x: Buffer;
+};
+
+export type CellCreatedFast = {
+  y: Buffer;
+  kh: Buffer;
+};
+
 export type CellCreate2 = {
   handshake: Create2ClientHandshake;
 };
@@ -288,6 +297,14 @@ const cellParsers: Record<number, (reader: BytesReader) => any> = {
     const auth = reader.readBytes(authLength);
     return { type, auth };
   },
+  [MessageCellType.CREATED_FAST]: (reader: BytesReader): CellCreatedFast => {
+    // Key material (Y)    [HASH_LEN bytes]
+    // Derivative key data [HASH_LEN bytes]
+    const HASH_LEN = 20;
+    const y = reader.readBytes(HASH_LEN);
+    const kh = reader.readBytes(HASH_LEN);
+    return { y, kh };
+  },
   [MessageCellType.DESTROY]: (reader: BytesReader): CellDestroy => {
     // The payload of a DESTROY and RELAY_TRUNCATED cell contains a single
     // octet, describing the reason that the circuit was
@@ -375,6 +392,11 @@ const cellSerializers: Record<number, (params: any) => Buffer> = {
       auth,
     ]);
     return payloadBytes;
+  },
+  [MessageCellType.CREATE_FAST]: ({ x }: CellCreateFast) => {
+    const HASH_LEN = 20;
+    assert.equal(x.length, HASH_LEN, `CREATE_FAST x must be ${HASH_LEN} bytes`);
+    return x;
   },
   [MessageCellType.NETINFO]: ({ time, otherAddress, addresses }: CellNetInfo) => {
     //   TIME       (Timestamp)                     [4 bytes]

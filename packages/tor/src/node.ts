@@ -1,10 +1,11 @@
-import http, { ClientRequestArgs } from 'http';
-import https from 'https';
-import tls from 'tls';
-import net from 'net';
-import url from 'url';
+import http from 'node:http';
+import type { ClientRequestArgs } from 'node:http';
+import https from 'node:https';
+import tls from 'node:tls';
+import net from 'node:net';
+import url from 'node:url';
 import { Circuit, CircuitStream } from './circuit.ts';
-import { Readable, Writable, Duplex } from 'stream';
+import { Readable, Writable, Duplex } from 'node:stream';
 
 // Node HTTP Agent https://nodejs.org/docs/latest-v20.x/api/http.html#class-httpagent
 export const getTorAgentForUrl = (
@@ -62,12 +63,22 @@ export function makeNodeDuplexStreamForCircuit(circuit: Circuit, req: ClientRequ
   const circuitStream = circuit.openStream(target);
   const duplexStream = circuitStreamToNodeDuplex(circuitStream);
 
-  // Nodejs docs suggest this can return a Duplex but it frequently returns a Socket
-  // and `node-fetch` seems to expect it to return a ClientRequest (?)
-  // "setTimeout" is called by 'node:_http_client' via 'node-fetch'
-  // adding a stub here to prevent errors
-  (duplexStream as any).setTimeout = () => {
-    console.warn('CircuitHttpAgent - setTimeout stub called');
+  // The HTTP client stack expects a Socket-like interface here and will call
+  // setTimeout() to implement request timeouts. Provide a minimal implementation
+  // that emits 'timeout' after the requested delay.
+  let timeoutTimer: NodeJS.Timeout | undefined;
+  (duplexStream as any).setTimeout = (msecs?: number, callback?: () => void) => {
+    if (timeoutTimer) clearTimeout(timeoutTimer);
+    const ms = typeof msecs === 'number' ? msecs : 0;
+    if (ms > 0) {
+      timeoutTimer = setTimeout(() => {
+        duplexStream.emit('timeout');
+        if (callback) callback();
+      }, ms);
+      // Best-effort: don't keep the event loop open.
+      timeoutTimer.unref?.();
+    }
+    return duplexStream;
   };
 
   return duplexStream;

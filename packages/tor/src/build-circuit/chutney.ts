@@ -2,7 +2,7 @@ import type { PeerInfo } from '../circuit.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
-  downloadMicrodescFromDirectory,
+  dangerouslyDownloadMicrodescFromDirectory,
   parseMicroDescConsensus,
   dangerouslyLookupPeerInfo,
 } from './directory.ts';
@@ -68,7 +68,7 @@ export async function getChutneyMicrodescConsensus(): Promise<{
   consensus: MicroDescConsensus;
 }> {
   const directoryServer = await discoverDirectoryServerIpPort();
-  const microDescContent = await downloadMicrodescFromDirectory(directoryServer);
+  const microDescContent = await dangerouslyDownloadMicrodescFromDirectory(directoryServer);
   const consensus = parseMicroDescConsensus(microDescContent);
   return { directoryServer, consensus };
 }

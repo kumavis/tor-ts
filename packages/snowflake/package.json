@@ -1,0 +1,37 @@
+{
+  "name": "snowflake",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "tor": "0.1.0",
+    "ws": "^8.19.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "@types/ws": "^8.18.1",
+    "ava": "^6.4.1",
+    "typescript": "^5.9.3"
+  },
+  "exports": {
+    ".": "./src/index.ts",
+    "./encapsulation": "./src/encapsulation.ts",
+    "./turbotunnel": "./src/turbotunnel.ts",
+    "./ws-downlink": "./src/ws-downlink.ts",
+    "./kcp": "./src/kcp/index.ts",
+    "./smux": "./src/smux/index.ts"
+  },
+  "scripts": {
+    "test": "ava src/*.spec.ts",
+    "test:live": "ava src/live/*.spec.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "ava": {
+    "extensions": {
+      "ts": "module"
+    },
+    "nodeArguments": [
+      "--experimental-transform-types"
+    ]
+  }
+}

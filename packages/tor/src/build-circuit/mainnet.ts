@@ -2,40 +2,24 @@ import { Circuit } from '../circuit.ts';
 import type { PeerInfo } from '../circuit.ts';
 import { TlsChannelConnection } from '../channel.ts';
 import {
+  getRandomDirectoryAuthority,
   dangerouslyLookupPeerInfo,
-  downloadMicrodescFromDirectory,
+  dangerouslyDownloadMicrodescFromDirectory,
   parseRelaysFromMicroDesc,
 } from './directory.ts';
 import type { MicroDescNodeInfo } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
-import { createRequire } from 'node:module';
-
-const require = createRequire(import.meta.url);
-const mainnetDirectoryAuthorities = require('../directory-authorities.json') as Array<{
-  dir_address?: string;
-}>;
-
-const getRandomDirectoryAuthority = () => {
-  const randomIndex = Math.floor(Math.random() * mainnetDirectoryAuthorities.length);
-  const selected = mainnetDirectoryAuthorities[randomIndex];
-  if (!selected) {
-    throw new Error('Failed to pick a directory authority');
-  }
-  return selected;
-};
 
 export async function getRandomCircuitPath() {
   // try directory services until successful
   let directoryServer: string | undefined;
   let microDescContent: string | undefined;
   while (!microDescContent) {
-    const directoryServerInfo = getRandomDirectoryAuthority();
-    if (!directoryServerInfo.dir_address) {
-      continue;
-    }
+    const directoryServerInfo = await getRandomDirectoryAuthority();
     directoryServer = directoryServerInfo.dir_address;
+    if (!directoryServer) continue;
     try {
-      microDescContent = await downloadMicrodescFromDirectory(directoryServer);
+      microDescContent = await dangerouslyDownloadMicrodescFromDirectory(directoryServer);
     } catch {
       // ignore error and attempt again
     }
