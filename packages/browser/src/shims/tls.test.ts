@@ -68,7 +68,7 @@ describe('Crypto polyfills', () => {
   it('Buffer.alloc works', () => {
     const buf = Buffer.alloc(10);
     expect(buf.length).toBe(10);
-    expect(buf.every(b => b === 0)).toBe(true);
+    expect(buf.every((b) => b === 0)).toBe(true);
   });
 
   it('Buffer.from with hex encoding', () => {

@@ -79,10 +79,7 @@ test('filterRelaysByFlags: respects ignore list by rsaIdDigest', (t) => {
 });
 
 test('filterRelaysByFlags: returns empty when no matches', (t) => {
-  const relays = [
-    createMockRelay('relay1', ['Fast']),
-    createMockRelay('relay2', ['Stable']),
-  ];
+  const relays = [createMockRelay('relay1', ['Fast']), createMockRelay('relay2', ['Stable'])];
 
   const result = filterRelaysByFlags(relays, ['Exit']);
   t.is(result.length, 0);
@@ -118,10 +115,7 @@ test('pickRelayWithFlags: returns a matching relay', (t) => {
 });
 
 test('pickRelayWithFlags: throws when no matches', (t) => {
-  const relays = [
-    createMockRelay('relay1', ['Fast']),
-    createMockRelay('relay2', ['Stable']),
-  ];
+  const relays = [createMockRelay('relay1', ['Fast']), createMockRelay('relay2', ['Stable'])];
 
   t.throws(() => pickRelayWithFlags(relays, ['Exit'], []), {
     message: /Failed to find any matching relays/,

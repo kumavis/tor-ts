@@ -58,7 +58,7 @@ export class TLSSocket extends EventEmitter {
         }
         return verified;
       },
-      connected: (connection) => {
+      connected: (_connection) => {
         this.connected = true;
         this.emit('secureConnect');
       },
@@ -87,7 +87,8 @@ export class TLSSocket extends EventEmitter {
 
     // Set SNI if provided
     if (options.servername) {
-      (this.tls as forge.tls.Connection & { virtualHost?: string }).virtualHost = options.servername;
+      (this.tls as forge.tls.Connection & { virtualHost?: string }).virtualHost =
+        options.servername;
     }
 
     // Wire up underlying socket
@@ -113,7 +114,9 @@ export class TLSSocket extends EventEmitter {
     this.tls.handshake();
   }
 
-  private formatName(name: { attributes: Array<{ shortName?: string; name?: string; value?: unknown }> }): Record<string, string> {
+  private formatName(name: {
+    attributes: Array<{ shortName?: string; name?: string; value?: unknown }>;
+  }): Record<string, string> {
     const result: Record<string, string> = {};
     for (const attr of name.attributes) {
       const key = attr.shortName || attr.name || 'unknown';
@@ -170,12 +173,15 @@ export class TLSSocket extends EventEmitter {
 /**
  * Create a TLS connection over an existing socket/stream.
  */
+
 export function connect(options: TLSConnectOptions): TLSSocket;
+// eslint-disable-next-line no-redeclare
 export function connect(port: number, host: string, options?: TLSConnectOptions): TLSSocket;
+// eslint-disable-next-line no-redeclare
 export function connect(
   portOrOptions: number | TLSConnectOptions,
-  hostOrOptions?: string | TLSConnectOptions,
-  maybeOptions?: TLSConnectOptions
+  _hostOrOptions?: string | TLSConnectOptions,
+  _maybeOptions?: TLSConnectOptions
 ): TLSSocket {
   // Handle overloads
   if (typeof portOrOptions === 'object') {

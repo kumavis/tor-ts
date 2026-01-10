@@ -35,9 +35,7 @@ export default defineConfig({
     browser: {
       enabled: true,
       provider: 'playwright',
-      instances: [
-        { browser: 'chromium' },
-      ],
+      instances: [{ browser: 'chromium' }],
       headless: true,
     },
     testTimeout: 180_000, // 3 minutes for live network tests

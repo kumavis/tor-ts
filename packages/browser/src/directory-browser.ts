@@ -4,10 +4,7 @@
  */
 
 import type { PeerInfo } from 'tor/circuit';
-import {
-  parseRelaysFromMicroDesc,
-  microDescNodeInfoToPeerInfo,
-} from 'tor/build-circuit/directory';
+import { parseRelaysFromMicroDesc, microDescNodeInfoToPeerInfo } from 'tor/build-circuit/directory';
 import type { MicroDescNodeInfo } from 'tor/build-circuit/directory';
 
 export { pickRelayWithFlags } from 'tor/build-circuit/util';
@@ -57,7 +54,11 @@ export async function getRandomDirectoryAuthorityBrowser(): Promise<{ dir_addres
 /**
  * Build proxied URL for CORS bypass.
  */
-function buildProxiedUrl(directoryServer: string, path: string, options: BrowserDirectoryOptions = {}): string {
+function buildProxiedUrl(
+  directoryServer: string,
+  path: string,
+  options: BrowserDirectoryOptions = {}
+): string {
   const corsProxy = options.corsProxy ?? DEFAULT_CORS_PROXY;
   const fullUrl = `http://${directoryServer}${path}`;
   return `${corsProxy}${encodeURIComponent(fullUrl)}`;
@@ -70,7 +71,11 @@ export async function downloadMicrodescBrowser(
   directoryServer: string,
   options: BrowserDirectoryOptions = {}
 ): Promise<string> {
-  const url = buildProxiedUrl(directoryServer, '/tor/status-vote/current/consensus-microdesc', options);
+  const url = buildProxiedUrl(
+    directoryServer,
+    '/tor/status-vote/current/consensus-microdesc',
+    options
+  );
 
   const response = await fetch(url);
   if (!response.ok) {

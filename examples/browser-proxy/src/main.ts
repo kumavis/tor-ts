@@ -14,9 +14,13 @@ const btnLoading = browseBtn.querySelector('.btn-loading') as HTMLElement;
 const statusIndicator = document.getElementById('status-indicator') as HTMLElement;
 const statusText = document.getElementById('status-text') as HTMLElement;
 const circuitPanel = document.getElementById('circuit-panel') as HTMLElement;
-const middleNode = document.getElementById('middle-node')?.querySelector('.node-label') as HTMLElement;
-const exitNode = document.getElementById('exit-node')?.querySelector('.node-label') as HTMLElement;
-const destinationNode = document.getElementById('destination-node')?.querySelector('.node-label') as HTMLElement;
+const _middleNode = document
+  .getElementById('middle-node')
+  ?.querySelector('.node-label') as HTMLElement;
+const _exitNode = document.getElementById('exit-node')?.querySelector('.node-label') as HTMLElement;
+const destinationNode = document
+  .getElementById('destination-node')
+  ?.querySelector('.node-label') as HTMLElement;
 const logContent = document.getElementById('log-content') as HTMLElement;
 const logClear = document.getElementById('log-clear') as HTMLButtonElement;
 const contentPanel = document.getElementById('content-panel') as HTMLElement;
@@ -32,7 +36,7 @@ let isConnecting = false;
 function log(message: string, type: 'info' | 'success' | 'error' = 'info'): void {
   const now = new Date();
   const time = now.toLocaleTimeString('en-US', { hour12: false });
-  
+
   const entry = document.createElement('div');
   entry.className = 'log-entry';
   entry.innerHTML = `
@@ -50,7 +54,10 @@ function escapeHtml(text: string): string {
 }
 
 // Status updates
-function setStatus(status: 'disconnected' | 'connecting' | 'connected' | 'error', text: string): void {
+function setStatus(
+  status: 'disconnected' | 'connecting' | 'connected' | 'error',
+  text: string
+): void {
   statusIndicator.className = `status-indicator ${status}`;
   statusText.textContent = text;
 }
@@ -122,12 +129,11 @@ async function browsePage(url: string): Promise<void> {
 
     // Display in iframe using srcdoc
     displayContent(parsedUrl.href, html);
-
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log(`Error: ${message}`, 'error');
     setStatus('error', 'Error');
-    
+
     // Reset circuit on error
     if (currentCircuit) {
       currentCircuit.destroy();
@@ -140,13 +146,13 @@ async function browsePage(url: string): Promise<void> {
 
 function displayContent(url: string, html: string): void {
   contentUrl.textContent = url;
-  
+
   // Inject HTML into iframe using srcdoc
   // Note: This won't load external resources (images, CSS, JS) correctly
   // as they would need to be fetched through Tor too
   const sanitizedHtml = sanitizeHtml(html);
   contentIframe.srcdoc = sanitizedHtml;
-  
+
   contentPanel.hidden = false;
   log('Content displayed in iframe', 'success');
 }

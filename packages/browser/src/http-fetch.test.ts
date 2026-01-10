@@ -182,7 +182,7 @@ describe('Browser APIs', () => {
     const array = new Uint8Array(16);
     crypto.getRandomValues(array);
     // At least some bytes should be non-zero
-    expect(array.some(b => b !== 0)).toBe(true);
+    expect(array.some((b) => b !== 0)).toBe(true);
   });
 
   it('fetch is available', () => {

@@ -13,8 +13,7 @@ import {
   pickRelayWithFlags,
 } from './directory-browser.ts';
 import { SnowflakeBrowserChannel } from './snowflake-channel.ts';
-import { fetchViaTor, fetchHtml } from './http-fetch.ts';
-import type { TorFetchResponse } from './http-fetch.ts';
+import { fetchHtml } from './http-fetch.ts';
 
 export { SnowflakeBrowserChannel } from './snowflake-channel.ts';
 export { fetchViaTor, fetchHtml } from './http-fetch.ts';

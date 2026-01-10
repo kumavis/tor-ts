@@ -3,7 +3,11 @@
  */
 
 import test from 'ava';
-import { parseRelaysFromMicroDesc, parseMicroDescConsensus, microDescNodeInfoToPeerInfo } from './directory.ts';
+import {
+  parseRelaysFromMicroDesc,
+  parseMicroDescConsensus,
+  microDescNodeInfoToPeerInfo,
+} from './directory.ts';
 import { LinkSpecifierTypes } from '../messaging.ts';
 
 const sampleMicroDesc = `network-status-version 3 microdesc
@@ -41,7 +45,17 @@ test('parseRelaysFromMicroDesc: parses relay entries', (t) => {
   t.is(relay1.ip_address, '192.168.1.1');
   t.is(relay1.onion_router_port, 9001);
   t.is(relay1.directory_server_port, 9030);
-  t.deepEqual(relay1.flags, ['Authority', 'Exit', 'Fast', 'Guard', 'HSDir', 'Running', 'Stable', 'V2Dir', 'Valid']);
+  t.deepEqual(relay1.flags, [
+    'Authority',
+    'Exit',
+    'Fast',
+    'Guard',
+    'HSDir',
+    'Running',
+    'Stable',
+    'V2Dir',
+    'Valid',
+  ]);
   t.is(relay1.version, 'Tor');
   t.truthy(relay1.protocols['Conflux']);
   t.is(relay1.protocols['Conflux'], '1');

@@ -1,7 +1,7 @@
 /**
  * Live browser tests for Snowflake connectivity.
  * These tests connect to the real Tor network via Snowflake.
- * 
+ *
  * IMPORTANT: These tests require:
  * - Network access
  * - Access to snowflake.torproject.net
@@ -40,7 +40,9 @@ describe('Snowflake Live: Circuit Connection', () => {
 
     // Verify we received status updates
     expect(statusMessages.length).toBeGreaterThan(0);
-    expect(statusMessages.some(s => s.includes('directory') || s.includes('Directory'))).toBe(true);
+    expect(statusMessages.some((s) => s.includes('directory') || s.includes('Directory'))).toBe(
+      true
+    );
   }, 180_000); // 3 minute timeout
 });
 
@@ -118,8 +120,6 @@ describe('Snowflake Live: Error Handling', () => {
   it('handles fetch with invalid URL', async () => {
     expect(circuit).toBeDefined();
 
-    await expect(
-      fetchHtml(circuit!.circuit, 'not-a-valid-url')
-    ).rejects.toThrow();
+    await expect(fetchHtml(circuit!.circuit, 'not-a-valid-url')).rejects.toThrow();
   }, 10_000);
 });
