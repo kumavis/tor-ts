@@ -1,7 +1,6 @@
 import { Circuit } from '../circuit.ts';
 import type { PeerInfo } from '../circuit.ts';
 import { TlsChannelConnection } from '../channel.ts';
-import { AddressTypes, LinkSpecifierTypes, addressAndPortToLinkSpecifier } from '../messaging.ts';
 import {
   DirectoryClient,
   lookupPeerInfo,
@@ -17,37 +16,8 @@ import type { MicroDescNodeInfo } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
 import {
   getRandomFallbackDirectory,
-  type FallbackDirectory,
+  fallbackToPeerInfo,
 } from '../fallback-dirs.ts';
-
-// =============================================================================
-// Safe Bootstrap Using Fallback Directories (Tor Spec Compliant)
-// =============================================================================
-
-/**
- * Convert a FallbackDirectory to PeerInfo for circuit building.
- */
-function fallbackToPeerInfo(fallback: FallbackDirectory): PeerInfo {
-  return {
-    onionKey: fallback.ntorOnionKey,
-    rsaIdDigest: fallback.rsaIdDigest,
-    linkSpecifiers: [
-      addressAndPortToLinkSpecifier({
-        type: AddressTypes.IPv4,
-        ip: fallback.ip,
-        port: fallback.orPort,
-      }),
-      {
-        type: LinkSpecifierTypes.LegacyId,
-        data: fallback.rsaIdDigest,
-      },
-      {
-        type: LinkSpecifierTypes.Ed25519Id,
-        data: fallback.ed25519Id,
-      },
-    ],
-  };
-}
 
 /**
  * Bootstrap safely using hardcoded fallback directories.

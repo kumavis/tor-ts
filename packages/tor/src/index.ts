@@ -35,6 +35,7 @@ export {
 export {
   FALLBACK_DIRECTORIES,
   getRandomFallbackDirectory,
+  fallbackToPeerInfo,
   parseFallbackEntry,
   type FallbackDirectory,
 } from './fallback-dirs.ts';
