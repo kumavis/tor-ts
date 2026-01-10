@@ -15,6 +15,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Enable Corepack
+        run: corepack enable
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -34,9 +37,6 @@ jobs:
           key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
-
-      - name: Enable Corepack
-        run: corepack enable
 
       - name: Install
         run: yarn install --frozen-lockfile
@@ -65,6 +65,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Enable Corepack
+        run: corepack enable
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -84,9 +87,6 @@ jobs:
           key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
-
-      - name: Enable Corepack
-        run: corepack enable
 
       - name: Install JS deps
         run: yarn install --frozen-lockfile
@@ -112,6 +112,9 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Enable Corepack
+        run: corepack enable
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -139,9 +142,6 @@ jobs:
           go-version: '1.22.x'
           cache: true
 
-      - name: Enable Corepack
-        run: corepack enable
-
       - name: Install JS deps
         run: yarn install --frozen-lockfile
 
@@ -162,6 +162,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Enable Corepack
+        run: corepack enable
+
       - name: Setup Node
         uses: actions/setup-node@v4
         with:
@@ -181,9 +184,6 @@ jobs:
           key: ${{ runner.os }}-yarn-${{ hashFiles('**/yarn.lock') }}
           restore-keys: |
             ${{ runner.os }}-yarn-
-
-      - name: Enable Corepack
-        run: corepack enable
 
       - name: Install JS deps
         run: yarn install --frozen-lockfile
