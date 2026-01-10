@@ -818,23 +818,9 @@ export async function connectToHiddenServiceOverChutney(params: {
   // We use safe lookups via a bootstrap circuit to avoid leaking our IP.
   const localEd25519ByNickname = await tryReadChutneyEd25519IdentityKeyMap();
 
-  // Build HSDir candidates using safe directory lookups via the bootstrap circuit.
-  // For nodes where we have local ed25519 keys (Chutney test setup), we can construct
-  // PeerInfo directly from the consensus without additional lookups.
+  // Build HSDir candidates using safe directory lookups via a bootstrap circuit.
   const hsdirCandidates: HsdirCandidate[] = [];
-  const nodesNeedingLookup: typeof hsdirNodes = [];
-
-  for (const n of shuffleInPlace([...hsdirNodes])) {
-    const localEd25519 = localEd25519ByNickname?.get(n.nickname);
-    if (localEd25519) {
-      // For Chutney testing: we have the ed25519 key locally, so we can build PeerInfo
-      // directly from the consensus microdesc info (we just need the onion key).
-      // In Chutney, we defer the onion key lookup until we have a circuit.
-      nodesNeedingLookup.push(n);
-    } else {
-      nodesNeedingLookup.push(n);
-    }
-  }
+  const shuffledHsdirNodes = shuffleInPlace([...hsdirNodes]);
 
   // We need a bootstrap circuit to do safe directory lookups for the remaining nodes.
   // Build a random bootstrap circuit using dangerous methods (unavoidable for first circuit).
@@ -853,7 +839,7 @@ export async function connectToHiddenServiceOverChutney(params: {
     // Now use safe lookups for HSDir candidates
     const dirClient = new DirectoryClient(bootstrapCircuit);
     const results = await Promise.all(
-      nodesNeedingLookup.map(async (n) => {
+      shuffledHsdirNodes.map(async (n) => {
         try {
           const localEd25519 = localEd25519ByNickname?.get(n.nickname);
           if (localEd25519) {

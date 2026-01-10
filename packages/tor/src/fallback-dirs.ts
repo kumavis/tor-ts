@@ -90,34 +90,17 @@ function parseEntry(entry: FallbackDirEntry): FallbackDirectory {
 
 /**
  * All fallback directories with parsed Buffers.
- * Lazily initialized on first access.
+ * Parsed once on module load.
  */
-let _fallbackDirectories: FallbackDirectory[] | undefined;
-
-export function getFallbackDirectories(): FallbackDirectory[] {
-  if (!_fallbackDirectories) {
-    _fallbackDirectories = FALLBACK_DIRS_DATA.entries.map(parseEntry);
-  }
-  return _fallbackDirectories;
-}
+export const FALLBACK_DIRECTORIES: FallbackDirectory[] = FALLBACK_DIRS_DATA.entries.map(parseEntry);
 
 /**
- * For backwards compatibility - direct array access.
- * Prefer getFallbackDirectories() for lazy initialization.
+ * Alias for FALLBACK_DIRECTORIES.
+ * @deprecated Use FALLBACK_DIRECTORIES directly.
  */
-export const FALLBACK_DIRECTORIES: FallbackDirectory[] = new Proxy([] as FallbackDirectory[], {
-  get(target, prop) {
-    const dirs = getFallbackDirectories();
-    if (prop === 'length') return dirs.length;
-    if (typeof prop === 'string' && /^\d+$/.test(prop)) {
-      return dirs[parseInt(prop, 10)];
-    }
-    if (prop === Symbol.iterator) {
-      return dirs[Symbol.iterator].bind(dirs);
-    }
-    return Reflect.get(dirs, prop);
-  },
-});
+export function getFallbackDirectories(): FallbackDirectory[] {
+  return FALLBACK_DIRECTORIES;
+}
 
 /**
  * Select a random fallback directory.
