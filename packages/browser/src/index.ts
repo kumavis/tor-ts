@@ -19,6 +19,14 @@ import type { TorFetchResponse } from './http-fetch.ts';
 export { SnowflakeBrowserChannel } from './snowflake-channel.ts';
 export { fetchViaTor, fetchHtml } from './http-fetch.ts';
 export type { TorFetchResponse } from './http-fetch.ts';
+export {
+  getRandomDirectoryAuthorityBrowser,
+  downloadMicrodescBrowser,
+  lookupPeerInfoBrowser,
+  parseRelaysFromMicroDesc,
+  pickRelayWithFlags,
+} from './directory-browser.ts';
+export type { MicroDescNodeInfo, BrowserDirectoryOptions } from './directory-browser.ts';
 
 export type BrowserCircuitOptions = {
   relayUrl?: string;
