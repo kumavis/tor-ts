@@ -38,6 +38,9 @@ jobs:
       - name: Install
         run: yarn install --frozen-lockfile
 
+      - name: Install Playwright browsers
+        run: yarn workspace browser exec playwright install chromium
+
       - name: Typecheck
         run: yarn typecheck
 
