@@ -95,18 +95,10 @@ function parseEntry(entry: FallbackDirEntry): FallbackDirectory {
 export const FALLBACK_DIRECTORIES: FallbackDirectory[] = FALLBACK_DIRS_DATA.entries.map(parseEntry);
 
 /**
- * Alias for FALLBACK_DIRECTORIES.
- * @deprecated Use FALLBACK_DIRECTORIES directly.
- */
-export function getFallbackDirectories(): FallbackDirectory[] {
-  return FALLBACK_DIRECTORIES;
-}
-
-/**
  * Select a random fallback directory.
  */
 export function getRandomFallbackDirectory(): FallbackDirectory {
-  const dirs = getFallbackDirectories();
+  const dirs = FALLBACK_DIRECTORIES;
   const index = Math.floor(Math.random() * dirs.length);
   const fallback = dirs[index];
   if (!fallback) {

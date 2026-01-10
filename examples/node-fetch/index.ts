@@ -1,4 +1,4 @@
-import { connectRandomCircuit } from 'tor/build-circuit/mainnet';
+import { connectRandomCircuitWithSafeBootstrap } from 'tor/build-circuit/mainnet';
 import { getTorAgentForUrl } from 'tor/node';
 
 import fetch from 'node-fetch';
@@ -16,7 +16,7 @@ async function main() {
 }
 
 async function setupTor() {
-  const circuit = await connectRandomCircuit();
+  const circuit = await connectRandomCircuitWithSafeBootstrap();
   console.log('circuit established');
   return circuit;
 }

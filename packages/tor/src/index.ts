@@ -35,7 +35,6 @@ export {
 export {
   FALLBACK_DIRECTORIES,
   FALLBACK_DIRS_DATA,
-  getFallbackDirectories,
   getRandomFallbackDirectory,
   fallbackToPeerInfo,
   parseFallbackEntry,

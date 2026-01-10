@@ -33,9 +33,6 @@
  * - **Testing/Development**: In controlled test environments like Chutney,
  *   privacy isn't a concern and direct fetches are simpler.
  *
- * - **Legacy Code**: Some code paths still use dangerous methods for
- *   backwards compatibility. These are marked `@deprecated`.
- *
  * ### Safe Alternatives
  *
  * After you have at least one circuit, use the safe alternatives in
