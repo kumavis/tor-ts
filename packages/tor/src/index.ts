@@ -30,3 +30,11 @@ export {
   type MicroDescConsensus,
   type DirectoryResponse,
 } from './directory-client.ts';
+
+// Fallback directories for safe bootstrap
+export {
+  FALLBACK_DIRECTORIES,
+  getRandomFallbackDirectory,
+  parseFallbackEntry,
+  type FallbackDirectory,
+} from './fallback-dirs.ts';

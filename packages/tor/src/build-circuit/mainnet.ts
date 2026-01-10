@@ -1,6 +1,7 @@
 import { Circuit } from '../circuit.ts';
 import type { PeerInfo } from '../circuit.ts';
 import { TlsChannelConnection } from '../channel.ts';
+import { AddressTypes, LinkSpecifierTypes, addressAndPortToLinkSpecifier } from '../messaging.ts';
 import {
   DirectoryClient,
   lookupPeerInfo,
@@ -14,14 +15,119 @@ import {
 } from './directory.ts';
 import type { MicroDescNodeInfo } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
+import {
+  getRandomFallbackDirectory,
+  type FallbackDirectory,
+} from '../fallback-dirs.ts';
+
+// =============================================================================
+// Safe Bootstrap Using Fallback Directories (Tor Spec Compliant)
+// =============================================================================
+
+/**
+ * Convert a FallbackDirectory to PeerInfo for circuit building.
+ */
+function fallbackToPeerInfo(fallback: FallbackDirectory): PeerInfo {
+  return {
+    onionKey: fallback.ntorOnionKey,
+    rsaIdDigest: fallback.rsaIdDigest,
+    linkSpecifiers: [
+      addressAndPortToLinkSpecifier({
+        type: AddressTypes.IPv4,
+        ip: fallback.ip,
+        port: fallback.orPort,
+      }),
+      {
+        type: LinkSpecifierTypes.LegacyId,
+        data: fallback.rsaIdDigest,
+      },
+      {
+        type: LinkSpecifierTypes.Ed25519Id,
+        data: fallback.ed25519Id,
+      },
+    ],
+  };
+}
+
+/**
+ * Bootstrap safely using hardcoded fallback directories.
+ *
+ * This is the Tor-spec-compliant way to bootstrap:
+ * 1. Connect via TLS to a fallback directory's OR port
+ * 2. Verify the relay's identity during TLS handshake
+ * 3. Build a single-hop circuit using ntor handshake
+ * 4. Use RELAY_BEGIN_DIR to fetch directory info over encrypted channel
+ *
+ * This is SAFER than plain HTTP because:
+ * - Connection is encrypted (TLS + Tor encryption)
+ * - Relay identity is cryptographically verified
+ * - Traffic looks like normal Tor (not HTTP)
+ * - Directory request content is hidden from network observers
+ *
+ * While the client's IP is visible to the fallback relay (unavoidable for
+ * first-hop), this is the same exposure as any Tor circuit's entry node.
+ *
+ * @returns A single-hop bootstrap circuit to the fallback directory
+ */
+export async function bootstrapWithFallbackDirectory(): Promise<Circuit> {
+  const fallback = getRandomFallbackDirectory();
+  const peerInfo = fallbackToPeerInfo(fallback);
+
+  const channel = new TlsChannelConnection();
+  await channel.connectPeerInfo(peerInfo);
+
+  // Build a single-hop circuit to the fallback directory
+  const circuit = new Circuit({
+    path: [peerInfo],
+    channel,
+  });
+  await circuit.connect();
+
+  return circuit;
+}
+
+/**
+ * Build a full 3-hop circuit using safe bootstrap.
+ *
+ * This is the recommended way to connect to Tor:
+ * 1. Bootstrap safely using a fallback directory (single-hop, encrypted)
+ * 2. Fetch directory info over the encrypted bootstrap circuit
+ * 3. Build a full 3-hop circuit using safe directory lookups
+ * 4. Close the bootstrap circuit
+ *
+ * The returned circuit is a full 3-hop circuit (Guard → Middle → Exit).
+ */
+export async function connectRandomCircuitWithSafeBootstrap(): Promise<Circuit> {
+  // Step 1: Bootstrap safely using fallback directory
+  const bootstrapCircuit = await bootstrapWithFallbackDirectory();
+
+  try {
+    // Step 2: Build a full 3-hop circuit using safe lookups
+    const circuit = await connectRandomCircuitSafe(bootstrapCircuit);
+
+    // Step 3: Clean up bootstrap circuit
+    bootstrapCircuit.destroy();
+
+    return circuit;
+  } catch (err) {
+    bootstrapCircuit.destroy();
+    throw err;
+  }
+}
+
+// =============================================================================
+// Legacy Bootstrap (uses plain HTTP - less safe)
+// =============================================================================
 
 /**
  * Bootstrap: Download consensus via direct (dangerous) fetch.
  *
- * This is the only unavoidable direct request - we need initial directory
- * information to build our first circuit. After this, use safe methods.
+ * ⚠️ DEPRECATED: Use `bootstrapWithFallbackDirectory()` instead.
  *
- * @returns The consensus content and directory server used
+ * This makes plain HTTP requests which leak client IP and request patterns.
+ * The safe alternative uses TLS to fallback directories with RELAY_BEGIN_DIR.
+ *
+ * @deprecated Use bootstrapWithFallbackDirectory() for safe bootstrap
  */
 async function bootstrapConsensus(): Promise<{
   directoryServer: string;
