@@ -12,10 +12,9 @@ import { Circuit, type CircuitCipherPair, type CircuitStream, type PeerInfo } fr
 import { TlsChannelConnection } from './channel.ts';
 import {
   getChutneyMicrodescConsensus,
-  getRandomChutneyCircuitPathToTarget,
+  getRandomChutneyCircuitPath,
   getRandomChutneyCircuitPathToTargetSafe,
 } from './build-circuit/chutney.ts';
-import { microDescNodeInfoToPeerInfo } from './build-circuit/directory.ts';
 import { pickRelayWithFlags } from './build-circuit/util.ts';
 import {
   DirectoryClient,
@@ -838,15 +837,11 @@ export async function connectToHiddenServiceOverChutney(params: {
   }
 
   // We need a bootstrap circuit to do safe directory lookups for the remaining nodes.
-  // Build a simple bootstrap circuit using dangerous methods (unavoidable for first circuit).
+  // Build a random bootstrap circuit using dangerous methods (unavoidable for first circuit).
   let bootstrapCircuit: Circuit | undefined;
   try {
-    // Pick a relay for the bootstrap circuit that serves directory info
-    const bootstrapNode = pickRelayWithFlags(consensus.relays, ['V2Dir'], []);
-    const bootstrapPath = await getRandomChutneyCircuitPathToTarget(
-      microDescNodeInfoToPeerInfo(bootstrapNode, Buffer.alloc(32)) // placeholder onion key
-    );
-    // The first hop of the path has the correct onion key from the path builder
+    // Build a random 3-hop circuit for directory lookups
+    const bootstrapPath = await getRandomChutneyCircuitPath();
     const bootstrapFirst = bootstrapPath[0];
     if (!bootstrapFirst) throw new Error('Empty bootstrap circuit path');
 
