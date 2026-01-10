@@ -1,3 +1,11 @@
+/**
+ * Chutney development/testing script.
+ *
+ * Uses direct HTTP requests for directory lookups (dangerous* methods).
+ * This is acceptable for a test script that builds a bootstrap circuit
+ * to a local Chutney test network.
+ */
+
 import net from 'node:net';
 
 import { Circuit } from '../src/circuit.ts';
@@ -5,7 +13,7 @@ import type { PeerInfo } from '../src/circuit.ts';
 import { TlsChannelConnection } from '../src/channel.ts';
 import { linkSpecifierToAddressAndPort } from '../src/messaging.ts';
 import {
-  downloadMicrodescFromDirectory,
+  dangerouslyDownloadMicrodescFromDirectory,
   parseRelaysFromMicroDesc,
   dangerouslyLookupPeerInfo,
 } from '../src/build-circuit/directory.ts';
@@ -14,7 +22,7 @@ import type { MicroDescNodeInfo } from '../src/build-circuit/directory.ts';
 async function getStandardChutneyCircuitPath() {
   const loopback = '127.0.0.1';
   const directoryServer = `${loopback}:7000`;
-  const microDescContent = await downloadMicrodescFromDirectory(directoryServer);
+  const microDescContent = await dangerouslyDownloadMicrodescFromDirectory(directoryServer);
   const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
 
   const circuitPlan: Array<MicroDescNodeInfo> = [];

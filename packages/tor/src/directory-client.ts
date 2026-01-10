@@ -12,7 +12,7 @@
  *   const descriptor = await client.downloadRelayServerDescriptor(rsaIdDigest);
  */
 
-import type { Circuit, CircuitStream } from './circuit.ts';
+import type { Circuit, PeerInfo } from './circuit.ts';
 
 export type DirectoryResponse = {
   statusCode: number;
@@ -190,9 +190,6 @@ import {
   parseMicroDescConsensus,
   microDescNodeInfoToPeerInfo,
 } from './build-circuit/directory.ts';
-import { AddressTypes, LinkSpecifierTypes, addressAndPortToLinkSpecifier } from './messaging.ts';
-import type { LinkSpecifier } from './messaging.ts';
-import type { PeerInfo } from './circuit.ts';
 
 export { parseMicroDescConsensus, type MicroDescNodeInfo, type MicroDescConsensus };
 

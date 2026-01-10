@@ -11,7 +11,6 @@ import {
   dangerouslyLookupPeerInfo,
   dangerouslyDownloadMicrodescFromDirectory,
   parseRelaysFromMicroDesc,
-  microDescNodeInfoToPeerInfo,
 } from './directory.ts';
 import type { MicroDescNodeInfo } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
