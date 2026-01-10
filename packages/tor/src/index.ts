@@ -34,8 +34,12 @@ export {
 // Fallback directories for safe bootstrap
 export {
   FALLBACK_DIRECTORIES,
+  FALLBACK_DIRS_DATA,
+  getFallbackDirectories,
   getRandomFallbackDirectory,
   fallbackToPeerInfo,
   parseFallbackEntry,
   type FallbackDirectory,
+  type FallbackDirEntry,
+  type FallbackDirsData,
 } from './fallback-dirs.ts';
