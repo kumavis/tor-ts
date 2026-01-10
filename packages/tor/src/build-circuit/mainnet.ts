@@ -1,11 +1,7 @@
 import { Circuit } from '../circuit.ts';
 import type { PeerInfo } from '../circuit.ts';
 import { TlsChannelConnection } from '../channel.ts';
-import {
-  DirectoryClient,
-  lookupPeerInfo,
-  parseMicroDescConsensus,
-} from '../directory-client.ts';
+import { DirectoryClient, lookupPeerInfo, parseMicroDescConsensus } from '../directory-client.ts';
 import {
   getRandomDirectoryAuthority,
   dangerouslyLookupPeerInfo,
@@ -14,10 +10,7 @@ import {
 } from './directory.ts';
 import type { MicroDescNodeInfo } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
-import {
-  getRandomFallbackDirectory,
-  fallbackToPeerInfo,
-} from '../fallback-dirs.ts';
+import { getRandomFallbackDirectory, fallbackToPeerInfo } from '../fallback-dirs.ts';
 
 /**
  * Bootstrap safely using hardcoded fallback directories.

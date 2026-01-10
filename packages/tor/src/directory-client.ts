@@ -186,10 +186,7 @@ export function extractEd25519IdentityFromDescriptor(descriptorText: string): Bu
 
 // Re-export types from directory.ts for convenience
 import type { MicroDescNodeInfo, MicroDescConsensus } from './build-circuit/directory.ts';
-import {
-  parseMicroDescConsensus,
-  microDescNodeInfoToPeerInfo,
-} from './build-circuit/directory.ts';
+import { parseMicroDescConsensus, microDescNodeInfoToPeerInfo } from './build-circuit/directory.ts';
 
 export { parseMicroDescConsensus, type MicroDescNodeInfo, type MicroDescConsensus };
 
@@ -199,7 +196,10 @@ export { parseMicroDescConsensus, type MicroDescNodeInfo, type MicroDescConsensu
  *
  * This is the safe equivalent of `dangerouslyLookupOnionKey`.
  */
-export async function lookupOnionKey(client: DirectoryClient, rsaIdDigest: Buffer): Promise<Buffer> {
+export async function lookupOnionKey(
+  client: DirectoryClient,
+  rsaIdDigest: Buffer
+): Promise<Buffer> {
   const descriptor = await client.downloadRelayServerDescriptor(rsaIdDigest);
   return extractNtorOnionKeyFromDescriptor(descriptor);
 }

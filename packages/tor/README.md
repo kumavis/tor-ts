@@ -37,11 +37,7 @@ This fetches the latest `fallback_dirs.inc` from the Tor Project and regenerates
 ### Using Fallback Data
 
 ```typescript
-import { 
-  getRandomFallbackDirectory,
-  fallbackToPeerInfo,
-  FALLBACK_DIRS_DATA,
-} from 'tor';
+import { getRandomFallbackDirectory, fallbackToPeerInfo, FALLBACK_DIRS_DATA } from 'tor';
 
 // Get metadata
 console.log(`${FALLBACK_DIRS_DATA.entries.length} fallbacks`);
