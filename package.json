@@ -19,7 +19,7 @@
   },
   "scripts": {
     "dev": "yarn workspace tor dev",
-    "test": "yarn workspace tor test && yarn workspace snowflake test",
+    "test": "yarn workspace tor test && yarn workspace snowflake test && yarn workspace browser test",
     "typecheck": "yarn workspace tor typecheck && yarn workspace snowflake typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",

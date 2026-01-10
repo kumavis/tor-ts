@@ -29,7 +29,7 @@
   },
   "scripts": {
     "dev": "pm2 start --no-daemon scripts/dev.config.cjs",
-    "test": "ava src/*.spec.ts",
+    "test": "ava src/*.spec.ts src/**/*.spec.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "import:check": "node --experimental-transform-types scripts/import-check.ts",
     "test:dev": "pm2 start --no-daemon scripts/test-dev.config.cjs",
