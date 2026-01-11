@@ -27,24 +27,8 @@ describe('Browser package exports', () => {
     expect(typeof browserExports.SnowflakeBrowserChannel).toBe('function');
   });
 
-  it('exports parseRelaysFromMicroDesc function', () => {
-    expect(typeof browserExports.parseRelaysFromMicroDesc).toBe('function');
-  });
-
   it('exports pickRelayWithFlags function', () => {
     expect(typeof browserExports.pickRelayWithFlags).toBe('function');
-  });
-
-  it('exports getRandomDirectoryAuthorityBrowser function', () => {
-    expect(typeof browserExports.getRandomDirectoryAuthorityBrowser).toBe('function');
-  });
-
-  it('exports downloadMicrodescBrowser function', () => {
-    expect(typeof browserExports.downloadMicrodescBrowser).toBe('function');
-  });
-
-  it('exports lookupPeerInfoBrowser function', () => {
-    expect(typeof browserExports.lookupPeerInfoBrowser).toBe('function');
   });
 });
 
@@ -53,7 +37,6 @@ describe('Type exports', () => {
     // Test that we can create objects matching the type
     const options: browserExports.BrowserCircuitOptions = {
       relayUrl: 'wss://example.com/',
-      corsProxy: 'https://proxy.example.com/',
       onStatus: (status: string) => console.log(status),
     };
     expect(options).toBeDefined();

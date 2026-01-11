@@ -1,35 +1,32 @@
 /**
  * Browser-compatible Tor client using Snowflake transport.
  * Provides high-level API for connecting to Tor and fetching web content.
+ *
+ * BOOTSTRAP FLOW:
+ * 1. Connect to Snowflake via WebSocket → get relay identity from TLS handshake
+ * 2. Build 1-hop bootstrap circuit using CREATE_FAST (no onion key needed)
+ * 3. Fetch directory consensus over encrypted bootstrap circuit
+ * 4. Build full 3-hop circuit using relay info from consensus
+ *
+ * This is safe because all directory lookups happen over an encrypted Tor circuit,
+ * not via plain HTTP or CORS proxies.
  */
 
 import { Circuit } from 'tor/circuit';
 import type { PeerInfo } from 'tor/circuit';
-import {
-  getRandomDirectoryAuthorityBrowser,
-  downloadMicrodescBrowser,
-  lookupPeerInfoBrowser,
-  parseRelaysFromMicroDesc,
-  pickRelayWithFlags,
-} from './directory-browser.ts';
+import { DirectoryClient, parseMicroDescConsensus, lookupPeerInfo } from 'tor/directory-client';
+import { pickRelayWithFlags } from 'tor/build-circuit/util';
 import { SnowflakeBrowserChannel } from './snowflake-channel.ts';
 import { fetchHtml } from './http-fetch.ts';
 
 export { SnowflakeBrowserChannel } from './snowflake-channel.ts';
 export { fetchViaTor, fetchHtml } from './http-fetch.ts';
 export type { TorFetchResponse } from './http-fetch.ts';
-export {
-  getRandomDirectoryAuthorityBrowser,
-  downloadMicrodescBrowser,
-  lookupPeerInfoBrowser,
-  parseRelaysFromMicroDesc,
-  pickRelayWithFlags,
-} from './directory-browser.ts';
-export type { MicroDescNodeInfo, BrowserDirectoryOptions } from './directory-browser.ts';
+export { pickRelayWithFlags } from 'tor/build-circuit/util';
+export type { MicroDescNodeInfo } from 'tor/build-circuit/directory';
 
 export type BrowserCircuitOptions = {
   relayUrl?: string;
-  corsProxy?: string;
   onStatus?: (status: string) => void;
 };
 
@@ -41,26 +38,20 @@ export type BrowserCircuit = {
 
 /**
  * Connect to the Tor network via Snowflake and build a 3-hop circuit.
+ * Uses safe bootstrap: directory lookups happen over an encrypted circuit.
  * Returns a circuit that can be used to fetch content anonymously.
  */
 export async function connectBrowserCircuit(
   options: BrowserCircuitOptions = {}
 ): Promise<BrowserCircuit> {
-  const { relayUrl = 'wss://snowflake.torproject.net/', corsProxy, onStatus } = options;
+  const { relayUrl = 'wss://snowflake.torproject.net/', onStatus } = options;
 
   const log = (msg: string) => {
     console.log(`[tor-browser] ${msg}`);
     onStatus?.(msg);
   };
 
-  log('Fetching directory information...');
-  const directoryAuthority = await getRandomDirectoryAuthorityBrowser();
-  const directoryServer = directoryAuthority.dir_address;
-
-  log('Downloading network consensus (via CORS proxy)...');
-  const microDescContent = await downloadMicrodescBrowser(directoryServer, { corsProxy });
-  const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
-
+  // Step 1: Connect to Snowflake relay
   log('Connecting to Snowflake relay...');
   const channel = new SnowflakeBrowserChannel();
   await channel.connect({ relayUrl });
@@ -71,37 +62,58 @@ export async function connectBrowserCircuit(
     throw new Error('Snowflake channel has no peer identity');
   }
 
-  log('Building circuit...');
-
-  // The Snowflake entry may not appear in the public consensus. For the first hop only,
-  // we use CREATE_FAST (no descriptor keys required). Subsequent hops are extended with ntor.
+  // Step 2: Build 1-hop bootstrap circuit using CREATE_FAST
+  log('Building bootstrap circuit...');
   const entryPeerInfo: PeerInfo = {
-    onionKey: Buffer.alloc(0),
+    onionKey: Buffer.alloc(0), // Empty triggers CREATE_FAST
     rsaIdDigest: entryRsaIdDigest,
     linkSpecifiers: [],
   };
 
-  const middleNode = pickRelayWithFlags(microDescNodeInfos, [], []);
-  const exitNode = pickRelayWithFlags(microDescNodeInfos, ['Exit'], [middleNode]);
+  const bootstrapCircuit = new Circuit({ path: [entryPeerInfo], channel });
+  await bootstrapCircuit.connect();
+
+  // Step 3: Fetch directory consensus over encrypted bootstrap circuit
+  log('Downloading network consensus (via Tor circuit)...');
+  const dirClient = new DirectoryClient(bootstrapCircuit);
+  const microDescContent = await dirClient.downloadMicrodescConsensus();
+  const consensus = parseMicroDescConsensus(microDescContent);
+
+  if (consensus.relays.length === 0) {
+    bootstrapCircuit.destroy();
+    throw new Error('No relays found in consensus');
+  }
+
+  // Step 4: Select middle and exit nodes
+  const middleNode = pickRelayWithFlags(consensus.relays, [], []);
+  const exitNode = pickRelayWithFlags(consensus.relays, ['Exit'], [middleNode]);
 
   log(`Selected middle node: ${middleNode.nickname}`);
   log(`Selected exit node: ${exitNode.nickname}`);
 
-  const middlePeerInfo = await lookupPeerInfoBrowser(directoryServer, middleNode, { corsProxy });
-  const exitPeerInfo = await lookupPeerInfoBrowser(directoryServer, exitNode, { corsProxy });
+  // Step 5: Look up relay info over encrypted circuit
+  log('Looking up relay descriptors (via Tor circuit)...');
+  const middlePeerInfo = await lookupPeerInfo(dirClient, middleNode);
+  const exitPeerInfo = await lookupPeerInfo(dirClient, exitNode);
 
-  const circuitPeerInfos: Array<PeerInfo> = [entryPeerInfo, middlePeerInfo, exitPeerInfo];
+  // Step 6: Extend bootstrap circuit to full 3-hop circuit
+  log('Extending circuit to 3 hops...');
+  const fullCircuit = new Circuit({
+    path: [entryPeerInfo, middlePeerInfo, exitPeerInfo],
+    channel,
+  });
+  await fullCircuit.connect();
 
-  const circuit = new Circuit({ path: circuitPeerInfos, channel });
-  await circuit.connect();
+  // Clean up bootstrap circuit (we now have the full circuit)
+  bootstrapCircuit.destroy();
 
   log('Circuit established!');
 
   return {
-    circuit,
+    circuit: fullCircuit,
     channel,
     destroy: () => {
-      circuit.destroy();
+      fullCircuit.destroy();
     },
   };
 }
