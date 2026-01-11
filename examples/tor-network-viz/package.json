@@ -1,0 +1,27 @@
+{
+  "name": "tor-network-viz",
+  "version": "0.1.0",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "test": "echo 'No tests'"
+  },
+  "dependencies": {
+    "browser": "0.1.0",
+    "d3": "^7.9.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-inject": "^5.0.5",
+    "@types/d3": "^7.4.3",
+    "buffer": "^6.0.3",
+    "process": "^0.11.10",
+    "typescript": "^5.9.3",
+    "vite": "^6.3.5",
+    "vite-plugin-node-polyfills": "^0.23.0",
+    "web-streams-polyfill": "^4.1.0"
+  }
+}

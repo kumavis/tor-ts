@@ -1,0 +1,183 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tor Network Visualizer</title>
+    <link rel="stylesheet" href="./src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <!-- Header -->
+      <header class="header">
+        <div class="header-left">
+          <h1>🧅 Tor Network Visualizer</h1>
+          <span class="subtitle">Force-directed graph of the Tor relay network</span>
+        </div>
+        <div class="header-right">
+          <div class="connection-status" id="connection-status">
+            <span class="status-dot disconnected"></span>
+            <span class="status-text">Not Connected</span>
+          </div>
+        </div>
+      </header>
+
+      <!-- Main Content -->
+      <div class="main-container">
+        <!-- Left Sidebar: Controls -->
+        <aside class="sidebar left-sidebar">
+          <section class="panel">
+            <h2>Network Controls</h2>
+
+            <div class="control-group">
+              <label>Data Source</label>
+              <select id="data-source">
+                <option value="demo">Demo Data (Offline)</option>
+                <option value="onionoo">Onionoo API (Live)</option>
+              </select>
+            </div>
+
+            <div class="control-group">
+              <button id="load-network-btn" class="btn primary">
+                <span class="btn-text">Load Network</span>
+                <span class="btn-loading" hidden>Loading...</span>
+              </button>
+            </div>
+
+            <div class="control-group">
+              <label>Display Limit</label>
+              <input type="range" id="node-limit" min="20" max="500" value="100" />
+              <span id="node-limit-value">100 nodes</span>
+            </div>
+
+            <div class="control-group">
+              <label>Filter by Flags</label>
+              <div class="checkbox-group">
+                <label><input type="checkbox" id="filter-guard" checked /> Guard</label>
+                <label><input type="checkbox" id="filter-exit" checked /> Exit</label>
+                <label><input type="checkbox" id="filter-stable" checked /> Stable</label>
+                <label><input type="checkbox" id="filter-fast" checked /> Fast</label>
+                <label><input type="checkbox" id="filter-authority" checked /> Authority</label>
+                <label><input type="checkbox" id="filter-hsdir" checked /> HSDir</label>
+              </div>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>Circuit Controls</h2>
+
+            <div class="control-group">
+              <label>Circuit Length</label>
+              <select id="circuit-length">
+                <option value="3" selected>3 hops (standard)</option>
+                <option value="2">2 hops</option>
+                <option value="4">4 hops</option>
+                <option value="5">5 hops</option>
+              </select>
+            </div>
+
+            <div class="control-group">
+              <button id="create-circuit-btn" class="btn success" disabled>
+                <span class="btn-text">Create Random Circuit</span>
+                <span class="btn-loading" hidden>Building...</span>
+              </button>
+            </div>
+
+            <div class="control-group">
+              <button id="clear-circuits-btn" class="btn secondary" disabled>
+                Clear All Circuits
+              </button>
+            </div>
+
+            <div class="circuit-list" id="circuit-list">
+              <p class="empty-message">No circuits created yet</p>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>Graph Physics</h2>
+
+            <div class="control-group">
+              <label>Link Distance: <span id="link-distance-value">80</span></label>
+              <input type="range" id="link-distance" min="30" max="200" value="80" />
+            </div>
+
+            <div class="control-group">
+              <label>Charge Strength: <span id="charge-strength-value">-100</span></label>
+              <input type="range" id="charge-strength" min="-300" max="-20" value="-100" />
+            </div>
+
+            <div class="control-group">
+              <label><input type="checkbox" id="show-labels" /> Show Node Labels</label>
+            </div>
+          </section>
+        </aside>
+
+        <!-- Center: Graph Visualization -->
+        <main class="graph-container">
+          <div id="graph-wrapper">
+            <svg id="network-graph"></svg>
+          </div>
+
+          <!-- Legend -->
+          <div class="legend" id="legend">
+            <h3>Node Types</h3>
+            <div class="legend-items">
+              <div class="legend-item"><span class="legend-dot guard"></span> Guard</div>
+              <div class="legend-item"><span class="legend-dot exit"></span> Exit</div>
+              <div class="legend-item">
+                <span class="legend-dot guard-exit"></span> Guard + Exit
+              </div>
+              <div class="legend-item"><span class="legend-dot authority"></span> Authority</div>
+              <div class="legend-item"><span class="legend-dot relay"></span> Relay</div>
+              <div class="legend-item"><span class="legend-dot snowflake"></span> Snowflake</div>
+            </div>
+          </div>
+
+          <!-- Stats Bar -->
+          <div class="stats-bar" id="stats-bar">
+            <div class="stat">
+              <span class="stat-label">Total Nodes:</span>
+              <span class="stat-value" id="stat-total">0</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Guards:</span>
+              <span class="stat-value" id="stat-guards">0</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Exits:</span>
+              <span class="stat-value" id="stat-exits">0</span>
+            </div>
+            <div class="stat">
+              <span class="stat-label">Circuits:</span>
+              <span class="stat-value" id="stat-circuits">0</span>
+            </div>
+          </div>
+        </main>
+
+        <!-- Right Sidebar: Node Info -->
+        <aside class="sidebar right-sidebar">
+          <section class="panel" id="node-info-panel">
+            <h2>Node Information</h2>
+            <div class="node-info-content" id="node-info-content">
+              <p class="empty-message">Click on a node to view details</p>
+            </div>
+          </section>
+
+          <section class="panel">
+            <h2>Activity Log</h2>
+            <div class="log-container" id="log-container">
+              <div class="log-content" id="log-content"></div>
+            </div>
+            <button id="clear-log-btn" class="btn secondary small">Clear Log</button>
+          </section>
+        </aside>
+      </div>
+    </div>
+
+    <!-- Tooltip -->
+    <div id="tooltip" class="tooltip" hidden></div>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
