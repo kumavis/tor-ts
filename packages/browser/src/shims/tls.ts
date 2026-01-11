@@ -53,6 +53,7 @@ export class TLSSocket extends EventEmitter {
   private tls: ReturnType<typeof makeTLSClient> | null = null;
   private handshakePromise: Promise<void> | null = null;
   private ended = false;
+  private writeQueue: Promise<void> = Promise.resolve();
 
   constructor(underlying: Duplex, options: TLSConnectOptions = {}) {
     super();
@@ -196,13 +197,14 @@ export class TLSSocket extends EventEmitter {
   /**
    * Write data to the TLS socket.
    * This is synchronous to match Node.js TLS interface, but internally queues async operations.
+   * Writes are serialized to ensure proper TLS record ordering.
    */
   write(data: Buffer | string): boolean {
     const bytes = typeof data === 'string' ? Buffer.from(data, 'binary') : data;
 
     if (this.tls && !this.ended) {
-      // Queue the async write operation
-      const writePromise = (async () => {
+      // Chain writes to ensure they happen in order (TLS record MAC depends on sequence)
+      this.writeQueue = this.writeQueue.then(async () => {
         // Wait for handshake to complete if needed
         if (this.handshakePromise) {
           await this.handshakePromise;
@@ -211,9 +213,9 @@ export class TLSSocket extends EventEmitter {
         if (this.tls && !this.ended) {
           await this.tls.write(bytes);
         }
-      })();
+      });
 
-      writePromise.catch((err) => {
+      this.writeQueue.catch((err) => {
         this.emit('error', err);
       });
 

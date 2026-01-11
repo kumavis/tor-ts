@@ -1,5 +1,5 @@
-import crypto from 'node:crypto';
 import assert from 'node:assert';
+import { X509Certificate as PeculiarX509Certificate } from '@peculiar/x509';
 import type { CellCerts } from './messaging.ts';
 import { BytesReader, sha256 } from './util.ts';
 import * as ed from '@noble/ed25519';
@@ -207,7 +207,98 @@ type Signature = {
   text: Buffer;
 };
 
-export type RsaId = crypto.KeyObject;
+/**
+ * RSA Identity abstraction that works in both Node.js and browser environments.
+ * Wraps the public key with the ability to export as DER bytes.
+ */
+export interface RsaId {
+  /**
+   * Export the RSA public key in DER format (PKCS#1).
+   */
+  export(options: { type: 'pkcs1'; format: 'der' }): Buffer;
+}
+
+/**
+ * Create an RsaId from raw SPKI DER bytes (the format @peculiar/x509 provides).
+ */
+function createRsaIdFromSpkiDer(spkiDer: ArrayBuffer): RsaId {
+  // Convert SPKI to PKCS#1 format
+  // SPKI wraps the RSA key with algorithm identifier; we need to extract the raw RSA key
+  const spkiBuffer = Buffer.from(spkiDer);
+
+  // Parse SPKI structure to extract RSA public key
+  // SPKI format: SEQUENCE { AlgorithmIdentifier, BIT STRING { RSAPublicKey } }
+  // For RSA, the bit string contains the PKCS#1 RSAPublicKey
+  const pkcs1Der = extractRsaPublicKeyFromSpki(spkiBuffer);
+
+  return {
+    export(options: { type: 'pkcs1'; format: 'der' }): Buffer {
+      if (options.type === 'pkcs1' && options.format === 'der') {
+        return pkcs1Der;
+      }
+      throw new Error(`Unsupported export options: ${JSON.stringify(options)}`);
+    },
+  };
+}
+
+/**
+ * Extract RSA public key (PKCS#1) from SPKI format.
+ * SPKI structure:
+ *   SEQUENCE {
+ *     AlgorithmIdentifier,
+ *     BIT STRING { RSAPublicKey }
+ *   }
+ */
+function extractRsaPublicKeyFromSpki(spki: Buffer): Buffer {
+  // Simple ASN.1 DER parser for this specific case
+  let offset = 0;
+
+  // Outer SEQUENCE
+  if (spki[offset++] !== 0x30) throw new Error('Expected SEQUENCE');
+  const outerLen = readAsn1Length(spki, offset);
+  offset += outerLen.bytesRead;
+
+  // AlgorithmIdentifier SEQUENCE - skip it
+  if (spki[offset++] !== 0x30) throw new Error('Expected AlgorithmIdentifier SEQUENCE');
+  const algIdLen = readAsn1Length(spki, offset);
+  offset += algIdLen.bytesRead + algIdLen.length;
+
+  // BIT STRING containing RSA public key
+  if (spki[offset++] !== 0x03) throw new Error('Expected BIT STRING');
+  const bitStringLen = readAsn1Length(spki, offset);
+  offset += bitStringLen.bytesRead;
+
+  // Skip the "unused bits" byte in BIT STRING
+  offset += 1;
+
+  // The rest is the RSA public key in PKCS#1 format
+  return spki.subarray(offset, offset + bitStringLen.length - 1);
+}
+
+/**
+ * Read ASN.1 DER length encoding.
+ */
+function readAsn1Length(buffer: Buffer, offset: number): { length: number; bytesRead: number } {
+  const firstByte = buffer[offset];
+  if (firstByte === undefined) {
+    throw new Error('Unexpected end of buffer reading ASN.1 length');
+  }
+  if (firstByte < 0x80) {
+    // Short form: length is the byte itself
+    return { length: firstByte, bytesRead: 1 };
+  }
+  // Long form: first byte indicates number of length bytes
+  const numLengthBytes = firstByte & 0x7f;
+  let length = 0;
+  for (let i = 0; i < numLengthBytes; i++) {
+    const byte = buffer[offset + 1 + i];
+    if (byte === undefined) {
+      throw new Error('Unexpected end of buffer reading ASN.1 length bytes');
+    }
+    length = (length << 8) | byte;
+  }
+  return { length, bytesRead: 1 + numLengthBytes };
+}
 
 export const validateCertsCellForIdentities = (
   certsCell: CellCerts,
@@ -406,22 +497,28 @@ export const validateCertsCellForIdentities = (
   };
 };
 
-function convertDERtoPEM(derData: Buffer): Buffer {
-  // Base64 encode and split into lines of 64 characters
-  const base64 = derData.toString('base64');
-  const base64Lines = base64.match(/.{1,64}/g)!.join('\n');
-  const pemData = Buffer.from(
-    '-----BEGIN CERTIFICATE-----\n' + base64Lines + '\n-----END CERTIFICATE-----\n'
-  );
-  return pemData;
-}
+/**
+ * Parse an X.509 certificate and extract the RSA public key.
+ * Uses @peculiar/x509 for browser compatibility.
+ */
+function parseRsaX509Certificate(certBody: Buffer): { publicKey: RsaId } {
+  // @peculiar/x509 accepts BufferSource (ArrayBuffer | ArrayBufferView)
+  // Create a new ArrayBuffer copy to ensure type compatibility
+  const arrayBuffer = new ArrayBuffer(certBody.length);
+  const view = new Uint8Array(arrayBuffer);
+  for (let i = 0; i < certBody.length; i++) {
+    view[i] = certBody[i]!;
+  }
 
-function parseRsaX509Certificate(certBody: Buffer) {
-  // const asn1Obj = forge.asn1.fromDer(certBody.toString('binary'))
-  // const cert = forge.pki.certificateFromAsn1(asn1Obj);
-  // console.log({ forgeCert: cert })
-  // return cert
-  return new crypto.X509Certificate(convertDERtoPEM(certBody));
+  const cert = new PeculiarX509Certificate(arrayBuffer);
+  const publicKeyInfo = cert.publicKey;
+
+  // Get the raw SPKI (SubjectPublicKeyInfo) bytes
+  const spkiDer = publicKeyInfo.rawData;
+
+  return {
+    publicKey: createRsaIdFromSpkiDer(spkiDer),
+  };
 }
 
 export type CrossCertificate = {
@@ -429,6 +526,11 @@ export type CrossCertificate = {
   expirationHours: number;
   signature: Buffer;
   digest: Buffer;
+  /**
+   * Verify the RSA signature on this cross-certificate.
+   * NOTE: This is currently not implemented (see SECURITY TODO in validateCertsCellForIdentities).
+   * The verification is skipped in the current implementation.
+   */
   checkSignature(publicKey: RsaId): boolean;
 };
 
@@ -452,24 +554,12 @@ function parseRsaCrossCertificate(certBody: Buffer): CrossCertificate {
     expirationHours,
     signature,
     digest,
-    checkSignature(publicKey: RsaId): boolean {
-      const verifier = crypto.createVerify('RSA-SHA256');
-      // // verifier.update(Buffer.concat([RsaCrossCertPrefix, signedPortion]));
-      verifier.update(RsaCrossCertPrefix);
-      verifier.update(signedPortion);
-      verifier.end();
-      // console.log({
-      //   digest: digest.toString('hex'),
-      //   signature: signature.toString('hex'),
-      //   publicKey: publicKey.export({ type: 'spki', format: 'der' }).toString('hex')
-      // })
-      return verifier.verify(publicKey, signature);
-      // need to verify digest not signedPortion
-      // return crypto.verify(null, digest, publicKey, signature)
-      // forge.pki.rsa.setPublicKey(publicKey);
-      // const asn1Obj = forge.asn1.fromDer(_publicKey.export({ type: 'pkcs1', format: 'der' }).toString('binary'))
-      // const publicKey = forge.pki.publicKeyFromAsn1(asn1Obj)
-      // return publicKey.verify(digest.toString('binary'), signature.toString('binary'));
+    checkSignature(_publicKey: RsaId): boolean {
+      // TODO: Implement RSA signature verification for browser compatibility.
+      // This would require using WebCrypto's crypto.subtle.verify() with an
+      // imported RSA public key. Currently this check is skipped in
+      // validateCertsCellForIdentities (see SECURITY TODO comment there).
+      throw new Error('RSA signature verification not yet implemented');
     },
   };
 }

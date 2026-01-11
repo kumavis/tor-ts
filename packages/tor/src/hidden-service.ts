@@ -8,7 +8,13 @@ import type { LinkSpecifier } from './messaging.ts';
 import { RelayCell } from './relay-cell.ts';
 import { makeAes256CtrKey } from './aes.ts';
 import { parseEd25519Certificate } from './cert.ts';
-import { Circuit, type CircuitCipherPair, type CircuitStream, type PeerInfo } from './circuit.ts';
+import {
+  Circuit,
+  type CircuitCipherPair,
+  type CircuitStream,
+  type PeerInfo,
+  type CopyableHash,
+} from './circuit.ts';
 import { TlsChannelConnection } from './channel.ts';
 import {
   getChutneyMicrodescConsensus,
@@ -58,6 +64,40 @@ async function tryReadChutneyEd25519IdentityKeyMap(): Promise<Map<string, Buffer
 
 function sha3(...parts: Buffer[]): Buffer {
   return Buffer.from(sha3_256(Buffer.concat(parts)));
+}
+
+/**
+ * Browser-compatible SHA3-256 hash wrapper that provides Node.js-like interface.
+ * Uses @noble/hashes/sha3 internally, which works in both Node.js and browsers.
+ */
+class Sha3_256Hash implements CopyableHash {
+  private accumulated: Uint8Array[] = [];
+
+  update(data: Buffer | Uint8Array): this {
+    this.accumulated.push(data);
+    return this;
+  }
+
+  copy(): Sha3_256Hash {
+    const cloned = new Sha3_256Hash();
+    cloned.accumulated = [...this.accumulated];
+    return cloned;
+  }
+
+  digest(): Buffer {
+    const totalLength = this.accumulated.reduce((sum, arr) => sum + arr.length, 0);
+    const combined = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const arr of this.accumulated) {
+      combined.set(arr, offset);
+      offset += arr.length;
+    }
+    return Buffer.from(sha3_256(combined));
+  }
+}
+
+function createSha3_256Hash(): Sha3_256Hash {
+  return new Sha3_256Hash();
 }
 
 function bytesToBigIntLE(bytes: Uint8Array): bigint {
@@ -652,8 +692,9 @@ function makeHsRendezvousCipherPairFromKeySeed(NTOR_KEY_SEED: Buffer) {
   const Kf = r.readBytes(S_KEY_LEN);
   const Kb = r.readBytes(S_KEY_LEN);
 
-  const forwardDigest = crypto.createHash('sha3-256');
-  const backwardDigest = crypto.createHash('sha3-256');
+  // Use browser-compatible SHA3-256 implementation
+  const forwardDigest = createSha3_256Hash();
+  const backwardDigest = createSha3_256Hash();
   forwardDigest.update(fSeed);
   backwardDigest.update(bSeed);
 
