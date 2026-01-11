@@ -3,6 +3,8 @@ import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import path from 'path';
 
 export default defineConfig({
+  // Use base path from env for GitHub Pages deployment
+  base: process.env.VITE_BASE_PATH || '/',
   plugins: [
     nodePolyfills({
       include: ['buffer', 'crypto', 'events', 'stream', 'util', 'process', 'assert'],

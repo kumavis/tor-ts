@@ -1,3 +1,4 @@
 profiles
 node_modules
 .bin
+dist
