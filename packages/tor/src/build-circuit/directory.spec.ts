@@ -72,7 +72,8 @@ test('parseRelaysFromMicroDesc: parses relay entries', (t) => {
 });
 
 test('parseMicroDescConsensus: parses consensus metadata', (t) => {
-  const consensus = parseMicroDescConsensus(sampleMicroDesc);
+  // Disable signature verification for unit tests with synthetic data
+  const consensus = parseMicroDescConsensus(sampleMicroDesc, { verifySignatures: false });
 
   t.truthy(consensus.validAfter);
   t.truthy(consensus.freshUntil);
@@ -91,7 +92,8 @@ test('parseMicroDescConsensus: handles missing optional fields', (t) => {
   const minimalDesc = `r MinimalRelay EF+2U8jxUGom9khzsh5ScaRzto2 2024-01-01 00:00:00 1.2.3.4 9001 0
 `;
 
-  const consensus = parseMicroDescConsensus(minimalDesc);
+  // Disable signature verification for unit tests with synthetic data
+  const consensus = parseMicroDescConsensus(minimalDesc, { verifySignatures: false });
   t.is(consensus.relays.length, 1);
 
   const relay = consensus.relays[0]!;

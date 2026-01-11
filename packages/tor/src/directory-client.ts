@@ -143,10 +143,38 @@ export function extractEd25519IdentityFromDescriptor(descriptorText: string): Bu
 }
 
 // Re-export types from directory.ts for convenience
-import type { MicroDescNodeInfo, MicroDescConsensus } from './build-circuit/directory.ts';
+import type {
+  MicroDescNodeInfo,
+  MicroDescConsensus,
+  ParseMicroDescConsensusOptions,
+} from './build-circuit/directory.ts';
 import { parseMicroDescConsensus, microDescNodeInfoToPeerInfo } from './build-circuit/directory.ts';
 
-export { parseMicroDescConsensus, type MicroDescNodeInfo, type MicroDescConsensus };
+export {
+  parseMicroDescConsensus,
+  type MicroDescNodeInfo,
+  type MicroDescConsensus,
+  type ParseMicroDescConsensusOptions,
+};
+
+// Re-export consensus signature types
+export type {
+  ConsensusSignature,
+  ConsensusVerificationResult,
+  DirectoryAuthorityIdentity,
+  AuthorityKeyCertificate,
+  VerifyConsensusOptions,
+  SignatureVerificationResult,
+} from './consensus-signature.ts';
+
+export {
+  DIRECTORY_AUTHORITIES,
+  verifyConsensusSignatures,
+  parseConsensusSignatures,
+  parseKeyCertificate,
+  findAuthorityByFingerprint,
+  extractAuthorityFingerprints,
+} from './consensus-signature.ts';
 
 /**
  * Safely look up a relay's onion key by downloading its server descriptor

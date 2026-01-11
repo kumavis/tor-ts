@@ -28,7 +28,21 @@ export {
   parseMicroDescConsensus,
   type MicroDescNodeInfo,
   type MicroDescConsensus,
+  type ParseMicroDescConsensusOptions,
   type DirectoryResponse,
+  // Consensus signature verification
+  DIRECTORY_AUTHORITIES,
+  verifyConsensusSignatures,
+  parseConsensusSignatures,
+  parseKeyCertificate,
+  findAuthorityByFingerprint,
+  extractAuthorityFingerprints,
+  type ConsensusSignature,
+  type ConsensusVerificationResult,
+  type DirectoryAuthorityIdentity,
+  type AuthorityKeyCertificate,
+  type VerifyConsensusOptions,
+  type SignatureVerificationResult,
 } from './directory-client.ts';
 
 // Fallback directories for safe bootstrap
