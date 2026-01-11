@@ -29,6 +29,20 @@ export default defineConfig({
       'stream/web': 'web-streams-polyfill/dist/ponyfill.mjs',
     },
   },
+  optimizeDeps: {
+    include: [
+      'vite-plugin-node-polyfills/shims/buffer',
+      'vite-plugin-node-polyfills/shims/global',
+      'vite-plugin-node-polyfills/shims/process',
+      'events',
+      'node:assert',
+      'node:crypto',
+      'node:events',
+      'stream',
+      'node:stream',
+      '@reclaimprotocol/tls',
+    ],
+  },
   test: {
     name: 'browser-live',
     include: ['src/**/*.live.test.ts'],

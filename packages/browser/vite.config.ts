@@ -21,7 +21,7 @@ export default defineConfig({
     alias: {
       // Replace 'ws' package with our browser WebSocket shim
       ws: path.resolve(__dirname, 'src/shims/ws.ts'),
-      // Replace node:tls with our forge-based implementation
+      // Replace node:tls with our @reclaimprotocol/tls-based implementation (TLS 1.3)
       'node:tls': path.resolve(__dirname, 'src/shims/tls.ts'),
       // Stream/web polyfill
       'stream/web': 'web-streams-polyfill/dist/ponyfill.mjs',
@@ -44,6 +44,6 @@ export default defineConfig({
     minify: false,
   },
   optimizeDeps: {
-    include: ['node-forge', 'web-streams-polyfill'],
+    include: ['@reclaimprotocol/tls', 'web-streams-polyfill'],
   },
 });

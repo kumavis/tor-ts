@@ -4,6 +4,7 @@
   "license": "MIT",
   "type": "module",
   "dependencies": {
+    "@reclaimprotocol/tls": "^0.1.2",
     "tor": "0.1.0",
     "ws": "^8.19.0"
   },

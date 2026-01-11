@@ -39,7 +39,7 @@ export default defineConfig({
       'node:events',
       'stream',
       'node:stream',
-      'node-forge',
+      '@reclaimprotocol/tls',
     ],
   },
   test: {
