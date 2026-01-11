@@ -2,6 +2,8 @@
 
 TypeScript implementation of the Tor protocol.
 
+> ⚠️ **Warning**: This has **not** been audited, skips some security precautions, and is likely highly fingerprintable. This is for educational and experimental purposes only.
+
 ## Installation
 
 ```bash
@@ -34,6 +36,8 @@ yarn update:fallback-dirs
 
 This fetches the latest `fallback_dirs.inc` from the Tor Project and regenerates `src/fallback-dirs.json`.
 
+The Tor Project updates fallback directories with each stable release (approximately every 6-9 months). It's recommended to update when upgrading Tor versions or if experiencing connection issues.
+
 ### Using Fallback Data
 
 ```typescript
@@ -56,4 +60,6 @@ Requires Node.js 18+ with corepack enabled:
 corepack enable
 yarn install
 yarn test
+yarn lint
+yarn format
 ```

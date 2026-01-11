@@ -1,9 +1,8 @@
-#!/usr/bin/env npx tsx
 /**
  * Script to update fallback directories from the Tor Project.
  *
- * Usage:
- *   npx tsx scripts/update-fallback-dirs.ts
+ * Usage (from packages/tor):
+ *   yarn update:fallback-dirs
  *
  * This fetches the latest fallback_dirs.inc from the Tor GitLab and
  * generates a JSON file that can be imported in Node.js and browsers.
