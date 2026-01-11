@@ -13,7 +13,7 @@ A static website that uses Snowflake to browse web pages through Tor entirely in
 ## How It Works
 
 1. **Snowflake Connection**: Connects to the Tor network via a Snowflake WebSocket relay
-2. **TLS over Forge**: Uses node-forge for TLS encryption in the browser
+2. **TLS 1.3**: Uses @reclaimprotocol/tls for TLS 1.3 encryption in the browser
 3. **Circuit Building**: Extends the circuit through randomly selected middle and exit nodes
 4. **HTTP Fetching**: Constructs raw HTTP/1.1 requests over the Tor circuit
 5. **Content Display**: Injects fetched HTML into an iframe using `srcdoc`
@@ -49,7 +49,7 @@ The development server will start at `http://localhost:3000`.
 │  └─────────────┘    └──────────────┘    └───────────────────┘  │
 │                            │                      │              │
 │                     ┌──────┴──────┐               │              │
-│                     │ Forge TLS   │               │              │
+│                     │  TLS 1.3    │               │              │
 │                     └─────────────┘               │              │
 └───────────────────────────────────────────────────│──────────────┘
                                                     │

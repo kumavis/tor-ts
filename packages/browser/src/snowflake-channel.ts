@@ -1,6 +1,8 @@
 /**
- * Browser-compatible Snowflake Tor channel using forge TLS.
+ * Browser-compatible Snowflake Tor channel using @reclaimprotocol/tls.
  * Connects to the Tor network via Snowflake WebSocket relay.
+ *
+ * Uses TLS 1.3 which is required by modern Tor relays.
  */
 
 import { ChannelConnection } from 'tor/channel';
@@ -27,7 +29,7 @@ function makeRandomServerName(): string {
 
 /**
  * Tor channel connection that uses Snowflake WS downlink as the carrier.
- * Browser-compatible implementation using forge TLS.
+ * Browser-compatible implementation using @reclaimprotocol/tls (TLS 1.3).
  */
 export class SnowflakeBrowserChannel extends ChannelConnection {
   private stack?: SnowflakeWsStack;

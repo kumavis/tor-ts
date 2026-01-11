@@ -1,11 +1,32 @@
 /**
- * Browser shim for node:tls using node-forge.
- * Provides TLS connection capability over arbitrary duplex streams.
+ * Browser TLS shim using @reclaimprotocol/tls.
+ *
+ * Provides TLS 1.3 support for browser environments over arbitrary duplex streams.
+ * Modern Tor relays require TLS 1.3, which this implementation fully supports.
+ *
+ * Key features:
+ * - Pure JavaScript TLS 1.3 implementation (no WASM required)
+ * - Uses WebCrypto for cryptographic operations where available
+ * - Provides Node.js-compatible TLS socket interface
+ * - Extracts raw DER certificates for Tor CERTS cell verification
  */
 
-import forge from 'node-forge';
+import { makeTLSClient, setCryptoImplementation } from '@reclaimprotocol/tls';
+import type { TLSClientOptions, TLSSessionTicket, X509Certificate } from '@reclaimprotocol/tls';
+import { pureJsCrypto } from '@reclaimprotocol/tls/purejs-crypto';
 import { EventEmitter } from 'events';
 import { Duplex } from 'stream';
+
+// Initialize crypto implementation with browser-compatible random
+const cryptoImpl = {
+  ...pureJsCrypto,
+  randomBytes: (length: number): Uint8Array => {
+    const array = new Uint8Array(length);
+    crypto.getRandomValues(array);
+    return array;
+  },
+};
+setCryptoImplementation(cryptoImpl);
 
 export interface TLSConnectOptions {
   socket?: Duplex;
@@ -22,130 +43,202 @@ export interface DetailedPeerCertificate {
 }
 
 /**
- * TLSSocket implementation using node-forge for browser environments.
+ * TLSSocket implementation using @reclaimprotocol/tls for browser environments.
+ * Supports TLS 1.3 which is required by modern Tor relays.
  */
 export class TLSSocket extends EventEmitter {
-  private tls: forge.tls.Connection;
   private underlying: Duplex;
   private connected = false;
   private peerCert: DetailedPeerCertificate | null = null;
+  private tls: ReturnType<typeof makeTLSClient> | null = null;
+  private handshakePromise: Promise<void> | null = null;
+  private ended = false;
 
   constructor(underlying: Duplex, options: TLSConnectOptions = {}) {
     super();
     this.underlying = underlying;
 
-    // Create forge TLS client connection
-    this.tls = forge.tls.createConnection({
-      server: false,
-      verify: (_connection, verified, _depth, certs) => {
-        // Store the peer certificate
-        if (certs && certs.length > 0) {
-          const cert = certs[0];
-          if (cert) {
-            const der = forge.asn1.toDer(forge.pki.certificateToAsn1(cert));
-            this.peerCert = {
-              raw: Buffer.from(der.getBytes(), 'binary'),
-              subject: this.formatName(cert.subject),
-              issuer: this.formatName(cert.issuer),
-              valid_from: cert.validity.notBefore.toISOString(),
-              valid_to: cert.validity.notAfter.toISOString(),
-            };
+    // Start handshake asynchronously
+    this.handshakePromise = this.performHandshake(options).catch((err) => {
+      this.emit('error', err);
+    });
+  }
+
+  private async performHandshake(options: TLSConnectOptions): Promise<void> {
+    const servername = options.servername || 'localhost';
+
+    return new Promise<void>((resolve, reject) => {
+      let handshakeComplete = false;
+
+      // Create TLS client
+      const tlsOptions: TLSClientOptions = {
+        host: servername,
+        // Note: For Tor, certificate verification is intentionally disabled.
+        // Tor relays use self-signed certificates; authentication happens at
+        // the Tor protocol level via the CERTS cell and RSA/Ed25519 identity verification.
+        verifyServerCertificate: options.rejectUnauthorized === true,
+
+        // Write TLS packets to underlying socket
+        write: async (packet) => {
+          const data = Buffer.concat([Buffer.from(packet.header), Buffer.from(packet.content)]);
+          this.underlying.write(data);
+        },
+
+        // Handle handshake completion
+        onHandshake: () => {
+          this.connected = true;
+          handshakeComplete = true;
+          console.log('[reclaim-tls] TLS handshake completed');
+          this.emit('secureConnect');
+          resolve();
+        },
+
+        // Handle received certificates
+        onRecvCertificates: ({ certificates }: { certificates: X509Certificate[] }) => {
+          if (certificates.length > 0) {
+            const cert = certificates[0];
+            try {
+              // Access the internal @peculiar/x509 certificate to get raw DER data
+              // This is needed for Tor's certificate verification (CERTS cell)
+              const internalCert = cert.internal as {
+                rawData?: ArrayBuffer;
+                notBefore?: Date;
+                notAfter?: Date;
+              };
+
+              // Extract certificate info
+              const cn = cert.getSubjectField('CN');
+              const rawData = internalCert.rawData
+                ? Buffer.from(internalCert.rawData)
+                : Buffer.from(cert.serialiseToPem(), 'utf-8');
+
+              this.peerCert = {
+                raw: rawData,
+                subject: { CN: cn[0] || '' },
+                issuer: {},
+                valid_from: internalCert.notBefore?.toISOString() || new Date().toISOString(),
+                valid_to: internalCert.notAfter?.toISOString() || new Date().toISOString(),
+              };
+              console.log('[reclaim-tls] Got peer certificate, raw length:', rawData.length);
+            } catch (e) {
+              console.warn('[reclaim-tls] Error parsing certificate:', e);
+            }
+          }
+        },
+
+        // Handle application data
+        onApplicationData: (plaintext: Uint8Array) => {
+          this.emit('data', Buffer.from(plaintext));
+        },
+
+        // Handle TLS end
+        onTlsEnd: (error?: Error) => {
+          if (error && !handshakeComplete) {
+            reject(error);
+          } else if (error) {
+            this.emit('error', error);
+          }
+          if (!this.ended) {
+            this.ended = true;
+            this.emit('close');
+          }
+        },
+
+        // Handle session tickets (for resumption, not currently used)
+        onSessionTicket: (_ticket: TLSSessionTicket) => {
+          // Could store for session resumption
+        },
+      };
+
+      this.tls = makeTLSClient(tlsOptions);
+
+      // Handle data from underlying socket
+      this.underlying.on('data', async (chunk: Buffer) => {
+        if (this.tls && !this.ended) {
+          try {
+            await this.tls.handleReceivedBytes(chunk);
+          } catch (err) {
+            if (!handshakeComplete) {
+              reject(err as Error);
+            } else {
+              this.emit('error', err);
+            }
           }
         }
-        // Accept all certificates (rejectUnauthorized: false behavior)
-        if (options.rejectUnauthorized === false) {
-          return true;
+      });
+
+      this.underlying.on('error', (err: Error) => {
+        if (!handshakeComplete) {
+          reject(err);
+        } else {
+          this.emit('error', err);
         }
-        return verified;
-      },
-      connected: (_connection) => {
-        this.connected = true;
-        this.emit('secureConnect');
-      },
-      tlsDataReady: (connection) => {
-        // Send TLS records to the underlying socket
-        const data = connection.tlsData.getBytes();
-        if (data.length > 0) {
-          this.underlying.write(Buffer.from(data, 'binary'));
+      });
+
+      this.underlying.on('close', () => {
+        if (!this.ended) {
+          this.ended = true;
+          this.emit('close');
         }
-      },
-      dataReady: (connection) => {
-        // Decrypted application data ready
-        const data = connection.data.getBytes();
-        if (data.length > 0) {
-          this.emit('data', Buffer.from(data, 'binary'));
+      });
+
+      // Start the handshake (sends ClientHello)
+      this.tls.startHandshake().catch((err) => {
+        if (!handshakeComplete) {
+          reject(err);
+        } else {
+          this.emit('error', err);
         }
-      },
-      closed: () => {
-        this.emit('close');
-      },
-      error: (_connection, error) => {
-        console.error('[forge-tls] TLS error:', error);
-        this.emit('error', new Error(error.message));
-      },
+      });
     });
-
-    // Set SNI if provided
-    if (options.servername) {
-      (this.tls as forge.tls.Connection & { virtualHost?: string }).virtualHost =
-        options.servername;
-    }
-
-    // Wire up underlying socket
-    underlying.on('data', (chunk: Buffer) => {
-      try {
-        console.log('[forge-tls] Received', chunk.length, 'bytes from underlying socket');
-        this.tls.process(chunk.toString('binary'));
-      } catch (err) {
-        console.error('[forge-tls] Error processing TLS data:', err);
-        this.emit('error', err);
-      }
-    });
-
-    underlying.on('error', (err: Error) => {
-      this.emit('error', err);
-    });
-
-    underlying.on('close', () => {
-      this.tls.close();
-    });
-
-    // Start TLS handshake
-    this.tls.handshake();
   }
 
-  private formatName(name: {
-    attributes: Array<{ shortName?: string; name?: string; value?: unknown }>;
-  }): Record<string, string> {
-    const result: Record<string, string> = {};
-    for (const attr of name.attributes) {
-      const key = attr.shortName || attr.name || 'unknown';
-      result[key] = typeof attr.value === 'string' ? attr.value : '';
-    }
-    return result;
-  }
-
+  /**
+   * Write data to the TLS socket.
+   * This is synchronous to match Node.js TLS interface, but internally queues async operations.
+   */
   write(data: Buffer | string): boolean {
-    const bytes = typeof data === 'string' ? data : data.toString('binary');
-    try {
-      this.tls.prepare(bytes);
+    const bytes = typeof data === 'string' ? Buffer.from(data, 'binary') : data;
+
+    if (this.tls && !this.ended) {
+      // Queue the async write operation
+      const writePromise = (async () => {
+        // Wait for handshake to complete if needed
+        if (this.handshakePromise) {
+          await this.handshakePromise;
+        }
+
+        if (this.tls && !this.ended) {
+          await this.tls.write(bytes);
+        }
+      })();
+
+      writePromise.catch((err) => {
+        this.emit('error', err);
+      });
+
       return true;
-    } catch (err) {
-      this.emit('error', err);
-      return false;
     }
+    return false;
   }
 
-  end(): void {
-    this.tls.close();
-    this.underlying.end();
+  async end(): Promise<void> {
+    if (this.tls && !this.ended) {
+      this.ended = true;
+      await this.tls.end();
+      this.underlying.end();
+    }
   }
 
   destroy(err?: Error): void {
     if (err) {
       this.emit('error', err);
     }
-    this.tls.close();
+    this.ended = true;
+    if (this.tls) {
+      // Best effort end
+      this.tls.end().catch(() => {});
+    }
     this.underlying.destroy();
   }
 
@@ -166,14 +259,13 @@ export class TLSSocket extends EventEmitter {
   }
 
   get authorized(): boolean {
-    return true; // We're not doing strict verification
+    return true; // We're not doing strict verification for Tor
   }
 }
 
 /**
  * Create a TLS connection over an existing socket/stream.
  */
-
 export function connect(options: TLSConnectOptions): TLSSocket;
 // eslint-disable-next-line no-redeclare
 export function connect(port: number, host: string, options?: TLSConnectOptions): TLSSocket;
