@@ -41,6 +41,8 @@ export default defineConfig({
       'stream',
       'node:stream',
       '@reclaimprotocol/tls',
+      '@peculiar/x509',
+      '@noble/hashes/sha1',
     ],
   },
   test: {

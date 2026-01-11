@@ -834,7 +834,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"@peculiar/x509@npm:^1.12.3":
+"@peculiar/x509@npm:^1.12.3, @peculiar/x509@npm:^1.14.2":
   version: 1.14.2
   resolution: "@peculiar/x509@npm:1.14.2"
   dependencies:
@@ -7329,6 +7329,7 @@ __metadata:
     "@noble/curves": "npm:^1.9.7"
     "@noble/ed25519": "npm:^2.3.0"
     "@noble/hashes": "npm:^1.8.0"
+    "@peculiar/x509": "npm:^1.14.2"
     "@types/node": "npm:^22.0.0"
     ava: "npm:^6.4.1"
     commander: "npm:^14.0.2"

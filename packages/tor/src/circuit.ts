@@ -1,6 +1,55 @@
 import { x25519 } from '@noble/curves/ed25519';
+import { sha1 as sha1Noble } from '@noble/hashes/sha1';
 import { makeAes128CtrKey } from './aes.ts';
 import crypto from 'node:crypto';
+
+/**
+ * Interface for a hash that supports update, copy, and digest operations.
+ * This is used instead of Node.js crypto.Hash for browser compatibility.
+ */
+export interface CopyableHash {
+  update(data: Buffer | Uint8Array): this;
+  copy(): CopyableHash;
+  digest(): Buffer;
+}
+
+/**
+ * Browser-compatible SHA-1 hash wrapper that provides Node.js-like interface.
+ * Uses @noble/hashes/sha1 internally, which works in both Node.js and browsers.
+ */
+export class Sha1Hash implements CopyableHash {
+  private accumulated: Uint8Array[] = [];
+
+  update(data: Buffer | Uint8Array): this {
+    this.accumulated.push(data);
+    return this;
+  }
+
+  copy(): Sha1Hash {
+    const cloned = new Sha1Hash();
+    cloned.accumulated = [...this.accumulated];
+    return cloned;
+  }
+
+  digest(): Buffer {
+    // Concatenate all accumulated data and hash
+    const totalLength = this.accumulated.reduce((sum, arr) => sum + arr.length, 0);
+    const combined = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const arr of this.accumulated) {
+      combined.set(arr, offset);
+      offset += arr.length;
+    }
+    return Buffer.from(sha1Noble(combined));
+  }
+}
+
+/**
+ * Create a new SHA-1 hash instance (browser-compatible).
+ */
+function createSha1Hash(): Sha1Hash {
+  return new Sha1Hash();
+}
 
 import { ChannelConnection } from './channel.ts';
 import {
@@ -63,7 +112,7 @@ export type HopKey = {
 
 export interface Cipher {
   key: HopKey;
-  digest: crypto.Hash;
+  digest: CopyableHash;
 }
 
 export type CircuitCipherPair = {
@@ -82,8 +131,8 @@ class CipherPair {
 
 class Tor1Cipher implements Cipher {
   key: HopKey;
-  digest: crypto.Hash;
-  constructor(key: HopKey, digest: crypto.Hash) {
+  digest: CopyableHash;
+  constructor(key: HopKey, digest: CopyableHash) {
     this.key = key;
     this.digest = digest;
   }
@@ -647,8 +696,9 @@ function createSourceAndSinkForCircuit(circuitStream: CircuitStream) {
 
 function makeTor1CipherPairFromKeyMaterial(keyMaterial: Buffer) {
   const keyMaterialReader = new BytesReader(keyMaterial);
-  const forwardDigest = crypto.createHash('sha1');
-  const backwardDigest = crypto.createHash('sha1');
+  // Use browser-compatible SHA-1 implementation
+  const forwardDigest = createSha1Hash();
+  const backwardDigest = createSha1Hash();
   forwardDigest.update(keyMaterialReader.readBytes(HASH_LEN));
   backwardDigest.update(keyMaterialReader.readBytes(HASH_LEN));
   // we use 128-bit AES in counter mode, with an IV of all 0 bytes.
@@ -662,10 +712,10 @@ function makeTor1CipherPairFromKeyMaterial(keyMaterial: Buffer) {
 
 function KDF_TOR(keyMaterial: Buffer, length: number): Buffer {
   // K = H(K0 | [00]) | H(K0 | [01]) | H(K0 | [02]) | ...
+  // Use browser-compatible SHA-1 implementation
   const blocks: Buffer[] = [];
   for (let i = 0; Buffer.concat(blocks).length < length; i++) {
-    const digest = crypto
-      .createHash('sha1')
+    const digest = createSha1Hash()
       .update(Buffer.concat([keyMaterial, Buffer.from([i])]))
       .digest();
     blocks.push(digest);
