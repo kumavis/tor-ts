@@ -21,7 +21,10 @@ export class Sha1Hash implements CopyableHash {
   private accumulated: Uint8Array[] = [];
 
   update(data: Buffer | Uint8Array): this {
-    this.accumulated.push(data);
+    // IMPORTANT: Copy the data to avoid issues if the caller mutates the buffer later.
+    // This is critical for relay cell digest computation where the integrity field
+    // is set after the digest is updated.
+    this.accumulated.push(Uint8Array.from(data));
     return this;
   }
 
