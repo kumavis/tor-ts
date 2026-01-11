@@ -1,6 +1,22 @@
 /**
  * Browser-compatible directory functions with CORS proxy support.
- * Wraps the tor package directory functions to work in browsers.
+ *
+ * WHY CORS PROXY IS NEEDED FOR BROWSER BOOTSTRAP:
+ *
+ * The `tor` package supports safe bootstrap via fallback directories, connecting
+ * directly to relay OR ports over TLS. However, browsers cannot make direct TCP/TLS
+ * connections to arbitrary ports - they must use Snowflake (WebRTC-based transport).
+ *
+ * Bootstrap chicken-and-egg problem:
+ * 1. To build a Tor circuit, we need relay info (consensus data)
+ * 2. To fetch consensus safely (over Tor), we need an existing circuit
+ * 3. To connect via Snowflake, we need to know middle/exit relay info
+ *
+ * Solution: Use a CORS proxy for initial directory fetch, then use the circuit
+ * for subsequent lookups. This is a browser-specific limitation.
+ *
+ * FUTURE IMPROVEMENT: Once a circuit is established, use DirectoryClient from
+ * the `tor` package for safe directory lookups over the encrypted circuit.
  */
 
 import type { PeerInfo } from 'tor/circuit';
@@ -52,7 +68,7 @@ export async function getRandomDirectoryAuthorityBrowser(): Promise<{ dir_addres
 }
 
 /**
- * Build proxied URL for CORS bypass.
+ * Build proxied URL for fetching directory data from browsers.
  */
 function buildProxiedUrl(
   directoryServer: string,
