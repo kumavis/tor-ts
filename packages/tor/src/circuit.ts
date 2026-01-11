@@ -220,6 +220,7 @@ export class Circuit extends EventEmitter {
   relayMessageCount = 0;
   lastStreamId = 0;
   streams: Array<CircuitStream> = [];
+  private loggedIgnoredRelayCommands = new Set<number>();
 
   constructor({ path, channel }: { path: Array<PeerInfo>; channel: ChannelConnection }) {
     super();
@@ -461,10 +462,24 @@ export class Circuit extends EventEmitter {
       case RelayCell.SENDME: {
         // Flow control message. We currently don't implement SENDME-based windows,
         // but we should never crash on it (real relays send it routinely).
+        if (!this.loggedIgnoredRelayCommands.has(relayCommand)) {
+          this.loggedIgnoredRelayCommands.add(relayCommand);
+          console.log(
+            `ignoring RELAY_${RelayCell[relayCommand] ?? relayCommand} (${relayCommand}) ` +
+              `for streamId=${streamId} on ${targetHop.toString()} (flow control not implemented)`
+          );
+        }
         return;
       }
       case RelayCell.DROP: {
         // Padding / control cell that should be ignored.
+        if (!this.loggedIgnoredRelayCommands.has(relayCommand)) {
+          this.loggedIgnoredRelayCommands.add(relayCommand);
+          console.log(
+            `ignoring RELAY_${RelayCell[relayCommand] ?? relayCommand} (${relayCommand}) ` +
+              `for streamId=${streamId} on ${targetHop.toString()}`
+          );
+        }
         return;
       }
       default: {
