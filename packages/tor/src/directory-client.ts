@@ -13,52 +13,10 @@
  */
 
 import type { Circuit, PeerInfo } from './circuit.ts';
+import { parseHttpResponse, type ParsedHttpResponse } from './http-parse.ts';
 
-export type DirectoryResponse = {
-  statusCode: number;
-  statusText: string;
-  headers: Map<string, string>;
-  body: string;
-};
-
-/**
- * Parse an HTTP response from the directory stream.
- */
-function parseHttpResponse(raw: string): DirectoryResponse {
-  const headerEnd = raw.indexOf('\r\n\r\n');
-  if (headerEnd === -1) {
-    throw new Error('Malformed HTTP response: missing header/body separator');
-  }
-
-  const headerSection = raw.slice(0, headerEnd);
-  const body = raw.slice(headerEnd + 4);
-
-  const lines = headerSection.split('\r\n');
-  const statusLine = lines[0];
-  if (!statusLine) {
-    throw new Error('Malformed HTTP response: missing status line');
-  }
-
-  // Parse "HTTP/1.x CODE TEXT"
-  const statusMatch = statusLine.match(/^HTTP\/\d+\.\d+\s+(\d+)\s*(.*)$/);
-  if (!statusMatch) {
-    throw new Error(`Malformed HTTP status line: ${statusLine}`);
-  }
-  const statusCode = parseInt(statusMatch[1]!, 10);
-  const statusText = statusMatch[2] ?? '';
-
-  const headers = new Map<string, string>();
-  for (let i = 1; i < lines.length; i++) {
-    const line = lines[i]!;
-    const colonIdx = line.indexOf(':');
-    if (colonIdx === -1) continue;
-    const key = line.slice(0, colonIdx).trim().toLowerCase();
-    const value = line.slice(colonIdx + 1).trim();
-    headers.set(key, value);
-  }
-
-  return { statusCode, statusText, headers, body };
-}
+// Re-export the response type for external use
+export type { ParsedHttpResponse as DirectoryResponse } from './http-parse.ts';
 
 export class DirectoryClient {
   private circuit: Circuit;
@@ -72,7 +30,7 @@ export class DirectoryClient {
   /**
    * Make an HTTP request through the directory stream.
    */
-  private async request(method: string, path: string): Promise<DirectoryResponse> {
+  private async request(method: string, path: string): Promise<ParsedHttpResponse> {
     const stream = await this.circuit.openDirectoryStream();
 
     const requestText = `${method} ${path} HTTP/1.0\r\n` + `Host: directory\r\n` + `\r\n`;

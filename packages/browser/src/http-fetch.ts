@@ -1,9 +1,22 @@
 /**
  * HTTP/1.1 fetch implementation over Tor circuit streams.
  * Manually constructs HTTP requests and parses responses.
+ *
+ * LIMITATIONS:
+ * - Responses are decoded as UTF-8 text. Binary responses (images, etc.) will be corrupted.
+ *   This is intentional for the HTML-fetching use case. For binary data, use a Buffer-based API.
+ * - HTTP redirects (3xx) are NOT followed automatically. Callers must handle redirects
+ *   if needed (e.g., http→https, www→non-www).
+ * - Only supports HTTP/1.1 with Connection: close semantics.
  */
 
 import type { Circuit, CircuitStream } from 'tor/circuit';
+import {
+  parseHttpHeaders,
+  parseHttpStatusLine,
+  decodeChunked,
+  isChunkedComplete,
+} from 'tor/http-parse';
 
 export interface TorFetchResponse {
   status: number;
@@ -15,6 +28,9 @@ export interface TorFetchResponse {
 /**
  * Fetch a URL over a Tor circuit.
  * Supports HTTP and HTTPS (TLS is handled by the exit node).
+ *
+ * Note: Does not follow redirects. Check response.status for 3xx codes
+ * and handle manually if redirect-following is needed.
  */
 export async function fetchViaTor(
   circuit: Circuit,
@@ -62,6 +78,7 @@ export async function fetchViaTor(
 
 /**
  * Read and parse HTTP response from a circuit stream.
+ * Uses shared parsing utilities from tor/http-parse.
  */
 async function readHttpResponse(stream: CircuitStream, timeout: number): Promise<TorFetchResponse> {
   return new Promise<TorFetchResponse>((resolve, reject) => {
@@ -69,7 +86,7 @@ async function readHttpResponse(stream: CircuitStream, timeout: number): Promise
     let headersComplete = false;
     let status = 0;
     let statusText = '';
-    const headers = new Map<string, string>();
+    let headers = new Map<string, string>();
     let contentLength = -1;
     let isChunked = false;
     let bodyStart = 0;
@@ -96,26 +113,18 @@ async function readHttpResponse(stream: CircuitStream, timeout: number): Promise
           const headerSection = data.subarray(0, headerEnd).toString('utf-8');
           const lines = headerSection.split('\r\n');
 
-          // Parse status line
+          // Parse status line using shared utility
           const statusLine = lines[0];
           if (statusLine) {
-            const match = statusLine.match(/^HTTP\/\d\.\d\s+(\d+)\s*(.*)/);
-            if (match) {
-              status = parseInt(match[1]!, 10);
-              statusText = match[2] || '';
+            const parsed = parseHttpStatusLine(statusLine);
+            if (parsed) {
+              status = parsed.statusCode;
+              statusText = parsed.statusText;
             }
           }
 
-          // Parse headers
-          for (let i = 1; i < lines.length; i++) {
-            const line = lines[i]!;
-            const colonIdx = line.indexOf(':');
-            if (colonIdx > 0) {
-              const key = line.substring(0, colonIdx).trim().toLowerCase();
-              const value = line.substring(colonIdx + 1).trim();
-              headers.set(key, value);
-            }
-          }
+          // Parse headers using shared utility
+          headers = parseHttpHeaders(headerSection);
 
           // Check for content-length or chunked
           const cl = headers.get('content-length');
@@ -139,9 +148,9 @@ async function readHttpResponse(stream: CircuitStream, timeout: number): Promise
             body: bodyData.subarray(0, contentLength).toString('utf-8'),
           });
         } else if (isChunked) {
-          // Simple chunked decoding - look for final chunk
+          // Check for final chunk using shared utility
           const bodyStr = bodyData.toString('utf-8');
-          if (bodyStr.includes('\r\n0\r\n')) {
+          if (isChunkedComplete(bodyStr)) {
             cleanup();
             resolve({
               status,
@@ -174,30 +183,6 @@ async function readHttpResponse(stream: CircuitStream, timeout: number): Promise
       reject(err);
     });
   });
-}
-
-/**
- * Decode chunked transfer encoding.
- */
-function decodeChunked(data: Buffer): string {
-  let result = '';
-  let offset = 0;
-  const str = data.toString('utf-8');
-
-  while (offset < str.length) {
-    const lineEnd = str.indexOf('\r\n', offset);
-    if (lineEnd === -1) break;
-
-    const sizeLine = str.substring(offset, lineEnd);
-    const size = parseInt(sizeLine, 16);
-    if (isNaN(size) || size === 0) break;
-
-    offset = lineEnd + 2;
-    result += str.substring(offset, offset + size);
-    offset += size + 2; // Skip chunk data and trailing \r\n
-  }
-
-  return result;
 }
 
 /**

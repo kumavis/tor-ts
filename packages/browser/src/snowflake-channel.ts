@@ -43,6 +43,10 @@ export class SnowflakeBrowserChannel extends ChannelConnection {
     const smuxStream = await stack.openStream();
     const streamDuplex = new SmuxStreamDuplex(smuxStream);
 
+    // Note: rejectUnauthorized: false is intentional and safe here.
+    // Tor does NOT use CA-signed certificates. Instead, relay identity is verified
+    // cryptographically via the RSA fingerprint during the Tor handshake (CERTS cell).
+    // The TLS layer provides encryption; authentication happens at the Tor protocol level.
     const socket = tlsConnect({
       socket: streamDuplex,
       servername: makeRandomServerName(),

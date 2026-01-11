@@ -21,6 +21,7 @@
     "./channel": "./src/channel.ts",
     "./circuit": "./src/circuit.ts",
     "./messaging": "./src/messaging.ts",
+    "./http-parse": "./src/http-parse.ts",
     "./directory-client": "./src/directory-client.ts",
     "./build-circuit/chutney": "./src/build-circuit/chutney.ts",
     "./build-circuit/directory": "./src/build-circuit/directory.ts",

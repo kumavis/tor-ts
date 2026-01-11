@@ -96,15 +96,19 @@ export async function connectBrowserCircuit(
   const middlePeerInfo = await lookupPeerInfo(dirClient, middleNode);
   const exitPeerInfo = await lookupPeerInfo(dirClient, exitNode);
 
-  // Step 6: Extend bootstrap circuit to full 3-hop circuit
-  log('Extending circuit to 3 hops...');
+  // Step 6: Build full 3-hop circuit on the same channel
+  // Note: We create a new Circuit instance rather than extending the bootstrap circuit.
+  // Circuit.destroy() only cleans up circuit-level state (streams, crypto contexts),
+  // it does NOT close the underlying channel. This allows us to reuse the same
+  // Snowflake connection for the full circuit.
+  log('Building full 3-hop circuit...');
   const fullCircuit = new Circuit({
     path: [entryPeerInfo, middlePeerInfo, exitPeerInfo],
     channel,
   });
   await fullCircuit.connect();
 
-  // Clean up bootstrap circuit (we now have the full circuit)
+  // Clean up bootstrap circuit state (channel remains open for fullCircuit)
   bootstrapCircuit.destroy();
 
   log('Circuit established!');
