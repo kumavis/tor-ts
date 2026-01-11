@@ -2,35 +2,22 @@
  * Tor Network Visualizer
  *
  * A force-directed graph visualization of the Tor relay network.
- * Displays node types, flags, circuits, and allows interactive exploration.
+ * Uses real Snowflake connections to explore the network and build circuits.
  */
 
 import * as d3 from 'd3';
+import {
+  TorClient,
+  type MicroDescNodeInfo,
+  type ManagedCircuit,
+  type ConnectionState,
+} from './tor-client.ts';
 
 // ============================================
 // Types
 // ============================================
 
-interface TorNode {
-  id: string;
-  nickname: string;
-  fingerprint: string;
-  ipAddress: string;
-  orPort: number;
-  dirPort: number;
-  flags: string[];
-  bandwidth: number;
-  version?: string;
-  protocols?: Record<string, string>;
-  // Computed properties
-  isGuard: boolean;
-  isExit: boolean;
-  isAuthority: boolean;
-  isStable: boolean;
-  isFast: boolean;
-  isHSDir: boolean;
-  isSnowflake: boolean;
-  nodeType: NodeType;
+interface GraphNode extends MicroDescNodeInfo {
   // D3 simulation properties
   x?: number;
   y?: number;
@@ -39,60 +26,55 @@ interface TorNode {
   vx?: number;
   vy?: number;
   index?: number;
+  // Computed
+  nodeType: NodeType;
 }
 
-interface TorLink {
-  source: TorNode | string;
-  target: TorNode | string;
+interface GraphLink {
+  source: GraphNode | string;
+  target: GraphNode | string;
   isCircuit?: boolean;
   circuitId?: number;
 }
 
-interface Circuit {
-  id: number;
-  nodes: TorNode[];
-  color: string;
-}
-
-type NodeType = 'guard' | 'exit' | 'guard-exit' | 'authority' | 'relay' | 'snowflake';
-
-type ConnectionStatus = 'disconnected' | 'connecting' | 'connected' | 'error';
-
-interface AppState {
-  nodes: TorNode[];
-  links: TorLink[];
-  circuits: Circuit[];
-  selectedNode: TorNode | null;
-  connectionStatus: ConnectionStatus;
-  simulation: d3.Simulation<TorNode, TorLink> | null;
-}
+type NodeType = 'guard' | 'exit' | 'guard-exit' | 'authority' | 'relay' | 'snowflake-entry';
 
 // Circuit colors
 const CIRCUIT_COLORS = [
-  '#ec4899', // pink
-  '#8b5cf6', // purple
-  '#06b6d4', // cyan
-  '#84cc16', // lime
-  '#f43f5e', // rose
-  '#f59e0b', // amber
-  '#10b981', // emerald
-  '#6366f1', // indigo
+  '#ec4899',
+  '#8b5cf6',
+  '#06b6d4',
+  '#84cc16',
+  '#f43f5e',
+  '#f59e0b',
+  '#10b981',
+  '#6366f1',
 ];
 
 // ============================================
 // State
 // ============================================
 
+const torClient = new TorClient({
+  onStateChange: handleStateChange,
+  onLog: handleLog,
+  onConsensusLoaded: handleConsensusLoaded,
+  onCircuitUpdate: handleCircuitUpdate,
+});
+
+interface AppState {
+  graphNodes: GraphNode[];
+  selectedNodes: Set<string>; // fingerprints
+  selectedForCircuit: GraphNode[];
+  simulation: d3.Simulation<GraphNode, GraphLink> | null;
+}
+
 const state: AppState = {
-  nodes: [],
-  links: [],
-  circuits: [],
-  selectedNode: null,
-  connectionStatus: 'disconnected',
+  graphNodes: [],
+  selectedNodes: new Set(),
+  selectedForCircuit: [],
   simulation: null,
 };
-
-let nextCircuitId = 1;
 
 // ============================================
 // DOM Elements
@@ -150,10 +132,36 @@ const elements = {
 };
 
 // ============================================
-// Logging
+// Event Handlers for TorClient
 // ============================================
 
-function log(message: string, type: 'info' | 'success' | 'error' | 'warning' = 'info'): void {
+function handleStateChange(connectionState: ConnectionState, message: string): void {
+  const dot = elements.connectionStatus.querySelector('.status-dot')!;
+  const textEl = elements.connectionStatus.querySelector('.status-text')!;
+
+  let dotClass = 'disconnected';
+  if (connectionState === 'connected') dotClass = 'connected';
+  else if (connectionState === 'error') dotClass = 'error';
+  else if (connectionState !== 'disconnected') dotClass = 'connecting';
+
+  dot.className = `status-dot ${dotClass}`;
+  textEl.textContent = message;
+
+  // Update button states
+  const isConnected = connectionState === 'connected';
+  elements.createCircuitBtn.disabled = !isConnected;
+  elements.loadNetworkBtn.disabled =
+    connectionState !== 'disconnected' &&
+    connectionState !== 'error' &&
+    connectionState !== 'connected';
+
+  if (isConnected) {
+    const btnText = elements.loadNetworkBtn.querySelector('.btn-text') as HTMLElement;
+    btnText.textContent = 'Reconnect';
+  }
+}
+
+function handleLog(message: string, level: 'info' | 'success' | 'error' | 'warning'): void {
   const now = new Date();
   const time = now.toLocaleTimeString('en-US', { hour12: false });
 
@@ -161,13 +169,38 @@ function log(message: string, type: 'info' | 'success' | 'error' | 'warning' = '
   entry.className = 'log-entry';
   entry.innerHTML = `
     <span class="log-time">${time}</span>
-    <span class="log-message ${type}">${escapeHtml(message)}</span>
+    <span class="log-message ${level}">${escapeHtml(message)}</span>
   `;
   elements.logContent.appendChild(entry);
   elements.logContent.scrollTop = elements.logContent.scrollHeight;
 
-  console.log(`[${type.toUpperCase()}] ${message}`);
+  console.log(`[${level.toUpperCase()}] ${message}`);
 }
+
+function handleConsensusLoaded(): void {
+  const consensus = torClient.consensus;
+  if (!consensus) return;
+
+  // Convert to graph nodes
+  const limit = parseInt(elements.nodeLimit.value, 10);
+  state.graphNodes = consensus.relays.slice(0, limit).map((relay) => ({
+    ...relay,
+    nodeType: getNodeType(relay),
+  }));
+
+  renderGraph();
+  updateStats();
+}
+
+function handleCircuitUpdate(circuits: ManagedCircuit[]): void {
+  renderCircuitList(circuits);
+  renderGraph(); // Re-render to show circuit paths
+  updateStats();
+}
+
+// ============================================
+// Helpers
+// ============================================
 
 function escapeHtml(text: string): string {
   const div = document.createElement('div');
@@ -175,295 +208,56 @@ function escapeHtml(text: string): string {
   return div.innerHTML;
 }
 
-// ============================================
-// Status Updates
-// ============================================
+function getNodeType(node: MicroDescNodeInfo): NodeType {
+  const flags = node.flags || [];
+  if (flags.includes('Authority')) return 'authority';
+  if (flags.includes('Guard') && flags.includes('Exit')) return 'guard-exit';
+  if (flags.includes('Guard')) return 'guard';
+  if (flags.includes('Exit')) return 'exit';
+  return 'relay';
+}
 
-function setConnectionStatus(status: ConnectionStatus, text: string): void {
-  state.connectionStatus = status;
-  const dot = elements.connectionStatus.querySelector('.status-dot')!;
-  const textEl = elements.connectionStatus.querySelector('.status-text')!;
+function getNodeColor(nodeType: NodeType): string {
+  switch (nodeType) {
+    case 'authority':
+      return '#a855f7';
+    case 'guard-exit':
+      return '#eab308';
+    case 'guard':
+      return '#22c55e';
+    case 'exit':
+      return '#f97316';
+    case 'snowflake-entry':
+      return '#06b6d4';
+    default:
+      return '#3b82f6';
+  }
+}
 
-  dot.className = `status-dot ${status}`;
-  textEl.textContent = text;
+function getNodeRadius(node: GraphNode): number {
+  const flags = node.flags || [];
+  if (flags.includes('Authority')) return 12;
+  if (flags.includes('Guard') && flags.includes('Exit')) return 10;
+  if (flags.includes('Guard') || flags.includes('Exit')) return 8;
+  return 6;
 }
 
 function updateStats(): void {
-  const guards = state.nodes.filter((n) => n.isGuard).length;
-  const exits = state.nodes.filter((n) => n.isExit).length;
+  const nodes = state.graphNodes;
+  const guards = nodes.filter((n) => n.flags?.includes('Guard')).length;
+  const exits = nodes.filter((n) => n.flags?.includes('Exit')).length;
 
-  elements.statTotal.textContent = state.nodes.length.toString();
+  elements.statTotal.textContent = nodes.length.toString();
   elements.statGuards.textContent = guards.toString();
   elements.statExits.textContent = exits.toString();
-  elements.statCircuits.textContent = state.circuits.length.toString();
+  elements.statCircuits.textContent = torClient.circuits.length.toString();
 }
 
-// ============================================
-// Demo Data Generation
-// ============================================
-
-function generateDemoNodes(count: number): TorNode[] {
-  const nodes: TorNode[] = [];
-  const nicknames = [
-    'TorRelay',
-    'Guardian',
-    'ExitNode',
-    'Router',
-    'Onion',
-    'Proxy',
-    'Anonymizer',
-    'Privacy',
-    'Freedom',
-    'Liberty',
-    'Secure',
-    'Safe',
-    'Hidden',
-    'Shadow',
-    'Phantom',
-    'Ghost',
-    'Stealth',
-    'Cipher',
-    'Crypto',
-    'Shield',
-    'Fortress',
-    'Bastion',
-    'Sentinel',
-    'Watch',
-  ];
-
-  const countries = ['US', 'DE', 'FR', 'NL', 'GB', 'CA', 'CH', 'SE', 'NO', 'FI'];
-
-  // Generate some authority nodes first
-  const authorityCount = Math.min(9, Math.floor(count * 0.02));
-  for (let i = 0; i < authorityCount; i++) {
-    nodes.push(createDemoNode(i, nicknames, countries, true, false));
-  }
-
-  // Generate guard + exit nodes
-  const guardExitCount = Math.floor(count * 0.05);
-  for (let i = 0; i < guardExitCount; i++) {
-    const node = createDemoNode(authorityCount + i, nicknames, countries, false, false);
-    node.flags = [
-      'Authority',
-      'Exit',
-      'Fast',
-      'Guard',
-      'HSDir',
-      'Running',
-      'Stable',
-      'V2Dir',
-      'Valid',
-    ];
-    processNodeFlags(node);
-    nodes.push(node);
-  }
-
-  // Generate guard nodes
-  const guardCount = Math.floor(count * 0.15);
-  for (let i = 0; i < guardCount; i++) {
-    const node = createDemoNode(
-      authorityCount + guardExitCount + i,
-      nicknames,
-      countries,
-      false,
-      false
-    );
-    node.flags = ['Fast', 'Guard', 'HSDir', 'Running', 'Stable', 'V2Dir', 'Valid'];
-    processNodeFlags(node);
-    nodes.push(node);
-  }
-
-  // Generate exit nodes
-  const exitCount = Math.floor(count * 0.1);
-  for (let i = 0; i < exitCount; i++) {
-    const node = createDemoNode(
-      authorityCount + guardExitCount + guardCount + i,
-      nicknames,
-      countries,
-      false,
-      false
-    );
-    node.flags = ['Exit', 'Fast', 'Running', 'Stable', 'V2Dir', 'Valid'];
-    processNodeFlags(node);
-    nodes.push(node);
-  }
-
-  // Generate snowflake nodes
-  const snowflakeCount = Math.floor(count * 0.03);
-  for (let i = 0; i < snowflakeCount; i++) {
-    nodes.push(
-      createDemoNode(
-        authorityCount + guardExitCount + guardCount + exitCount + i,
-        nicknames,
-        countries,
-        false,
-        true
-      )
-    );
-  }
-
-  // Fill remaining with regular relays
-  const remainingCount = count - nodes.length;
-  for (let i = 0; i < remainingCount; i++) {
-    const node = createDemoNode(nodes.length + i, nicknames, countries, false, false);
-    node.flags = ['Fast', 'Running', 'Stable', 'V2Dir', 'Valid'];
-    processNodeFlags(node);
-    nodes.push(node);
-  }
-
-  return nodes;
-}
-
-function createDemoNode(
-  index: number,
-  nicknames: string[],
-  countries: string[],
-  isAuthority: boolean,
-  isSnowflake: boolean
-): TorNode {
-  const nickname = nicknames[index % nicknames.length]! + (index + 1);
-  const country = countries[index % countries.length]!;
-  const fingerprint = generateRandomFingerprint();
-
-  let flags: string[];
-  if (isAuthority) {
-    flags = ['Authority', 'Fast', 'Guard', 'HSDir', 'Running', 'Stable', 'V2Dir', 'Valid'];
-  } else if (isSnowflake) {
-    flags = ['Fast', 'Running', 'Stable', 'V2Dir', 'Valid'];
-  } else {
-    flags = ['Fast', 'Running', 'Stable', 'V2Dir', 'Valid'];
-  }
-
-  const node: TorNode = {
-    id: fingerprint,
-    nickname: `${nickname}${country}`,
-    fingerprint,
-    ipAddress: generateRandomIP(),
-    orPort: 9001 + (index % 100),
-    dirPort: 9030 + (index % 100),
-    flags,
-    bandwidth: Math.floor(Math.random() * 50000) + 1000,
-    version: `0.4.${Math.floor(Math.random() * 3) + 7}.${Math.floor(Math.random() * 10)}`,
-    isGuard: false,
-    isExit: false,
-    isAuthority: isAuthority,
-    isStable: true,
-    isFast: true,
-    isHSDir: false,
-    isSnowflake: isSnowflake,
-    nodeType: 'relay',
-  };
-
-  processNodeFlags(node);
-  return node;
-}
-
-function processNodeFlags(node: TorNode): void {
-  node.isGuard = node.flags.includes('Guard');
-  node.isExit = node.flags.includes('Exit');
-  node.isAuthority = node.flags.includes('Authority');
-  node.isStable = node.flags.includes('Stable');
-  node.isFast = node.flags.includes('Fast');
-  node.isHSDir = node.flags.includes('HSDir');
-
-  // Determine node type
-  if (node.isAuthority) {
-    node.nodeType = 'authority';
-  } else if (node.isSnowflake) {
-    node.nodeType = 'snowflake';
-  } else if (node.isGuard && node.isExit) {
-    node.nodeType = 'guard-exit';
-  } else if (node.isGuard) {
-    node.nodeType = 'guard';
-  } else if (node.isExit) {
-    node.nodeType = 'exit';
-  } else {
-    node.nodeType = 'relay';
-  }
-}
-
-function generateRandomFingerprint(): string {
-  const chars = '0123456789ABCDEF';
-  let result = '';
-  for (let i = 0; i < 40; i++) {
-    result += chars[Math.floor(Math.random() * chars.length)];
-  }
-  return result;
-}
-
-function generateRandomIP(): string {
-  return `${Math.floor(Math.random() * 256)}.${Math.floor(Math.random() * 256)}.${Math.floor(Math.random() * 256)}.${Math.floor(Math.random() * 256)}`;
-}
-
-// ============================================
-// Data Fetching
-// ============================================
-
-async function fetchNetworkData(): Promise<TorNode[]> {
-  const source = elements.dataSource.value;
-  const limit = parseInt(elements.nodeLimit.value, 10);
-
-  if (source === 'demo') {
-    log('Generating demo network data...', 'info');
-    await sleep(500); // Simulate network delay
-    const nodes = generateDemoNodes(limit);
-    log(`Generated ${nodes.length} demo nodes`, 'success');
-    return nodes;
-  }
-
-  // Fetch from Onionoo API
-  log('Fetching data from Onionoo API...', 'info');
-
-  try {
-    const response = await fetch(
-      `https://onionoo.torproject.org/details?limit=${limit}&running=true&order=-consensus_weight`
-    );
-
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-
-    const data = await response.json();
-    const relays = data.relays || [];
-
-    const nodes: TorNode[] = relays.map((relay: any) => {
-      const fingerprint = relay.fingerprint || '';
-      const flags = relay.flags || [];
-
-      const node: TorNode = {
-        id: fingerprint,
-        nickname: relay.nickname || 'Unnamed',
-        fingerprint,
-        ipAddress: relay.or_addresses?.[0]?.split(':')[0] || '',
-        orPort: parseInt(relay.or_addresses?.[0]?.split(':')[1] || '9001', 10),
-        dirPort: relay.dir_address ? parseInt(relay.dir_address.split(':')[1] || '0', 10) : 0,
-        flags,
-        bandwidth: relay.observed_bandwidth || relay.bandwidth_rate || 0,
-        version: relay.version,
-        isGuard: false,
-        isExit: false,
-        isAuthority: false,
-        isStable: false,
-        isFast: false,
-        isHSDir: false,
-        isSnowflake: relay.transports?.includes('snowflake') || false,
-        nodeType: 'relay',
-      };
-
-      processNodeFlags(node);
-      return node;
-    });
-
-    log(`Fetched ${nodes.length} relays from Onionoo`, 'success');
-    return nodes;
-  } catch (error) {
-    log(`Failed to fetch from Onionoo: ${error instanceof Error ? error.message : error}`, 'error');
-    throw error;
-  }
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+function formatBandwidth(bytes: number): string {
+  if (bytes >= 1000000000) return (bytes / 1000000000).toFixed(1) + ' GB/s';
+  if (bytes >= 1000000) return (bytes / 1000000).toFixed(1) + ' MB/s';
+  if (bytes >= 1000) return (bytes / 1000).toFixed(1) + ' KB/s';
+  return bytes + ' B/s';
 }
 
 // ============================================
@@ -508,32 +302,7 @@ function initializeGraph(): void {
       .attr('fill', color);
   });
 
-  log('Graph canvas initialized', 'info');
-}
-
-function getNodeColor(node: TorNode): string {
-  switch (node.nodeType) {
-    case 'authority':
-      return '#a855f7';
-    case 'guard-exit':
-      return '#eab308';
-    case 'guard':
-      return '#22c55e';
-    case 'exit':
-      return '#f97316';
-    case 'snowflake':
-      return '#06b6d4';
-    default:
-      return '#3b82f6';
-  }
-}
-
-function getNodeRadius(node: TorNode): number {
-  if (node.isAuthority) return 12;
-  if (node.isSnowflake) return 9;
-  if (node.isGuard && node.isExit) return 10;
-  if (node.isGuard || node.isExit) return 8;
-  return 6;
+  handleLog('Graph canvas initialized', 'info');
 }
 
 function renderGraph(): void {
@@ -542,26 +311,29 @@ function renderGraph(): void {
   const height = container.clientHeight;
 
   // Filter nodes based on current filters
-  const filteredNodes = filterNodes(state.nodes);
+  const filteredNodes = filterNodes(state.graphNodes);
 
   // Generate links between nodes (for visual structure only)
-  // In a real implementation, this could be based on actual circuit data
-  const structureLinks: TorLink[] = generateStructureLinks(filteredNodes);
+  const structureLinks: GraphLink[] = generateStructureLinks(filteredNodes);
 
-  // Combine with circuit links
-  const circuitLinks: TorLink[] = [];
-  state.circuits.forEach((circuit) => {
+  // Add circuit links
+  const circuitLinks: GraphLink[] = [];
+  const circuits = torClient.circuits.filter((c) => c.state === 'connected');
+
+  circuits.forEach((circuit) => {
+    // First hop is always Snowflake entry (not in our graph)
+    // So we show connections between the nodes we selected
     for (let i = 0; i < circuit.nodes.length - 1; i++) {
+      const sourceId = circuit.nodes[i]!.rsaIdDigest.toString('hex');
+      const targetId = circuit.nodes[i + 1]!.rsaIdDigest.toString('hex');
       circuitLinks.push({
-        source: circuit.nodes[i]!.id,
-        target: circuit.nodes[i + 1]!.id,
+        source: sourceId,
+        target: targetId,
         isCircuit: true,
         circuitId: circuit.id,
       });
     }
   });
-
-  const allLinks = [...structureLinks, ...circuitLinks];
 
   // Clear existing graph
   const graphContent = elements.svg.select('g.graph-content');
@@ -581,12 +353,12 @@ function renderGraph(): void {
   const chargeStrength = parseInt(elements.chargeStrength.value, 10);
 
   state.simulation = d3
-    .forceSimulation<TorNode>(filteredNodes)
+    .forceSimulation<GraphNode>(filteredNodes)
     .force(
       'link',
       d3
-        .forceLink<TorNode, TorLink>(structureLinks)
-        .id((d) => d.id)
+        .forceLink<GraphNode, GraphLink>(structureLinks)
+        .id((d) => d.rsaIdDigest.toString('hex'))
         .distance(linkDistance)
         .strength(0.1)
     )
@@ -594,38 +366,44 @@ function renderGraph(): void {
     .force('center', d3.forceCenter(width / 2, height / 2))
     .force(
       'collision',
-      d3.forceCollide().radius((d) => getNodeRadius(d) + 2)
+      d3.forceCollide().radius((d) => getNodeRadius(d as GraphNode) + 2)
     );
 
   // Render regular links
   const links = linkGroup
-    .selectAll<SVGLineElement, TorLink>('line')
+    .selectAll<SVGLineElement, GraphLink>('line')
     .data(structureLinks)
     .join('line')
     .attr('class', 'link');
 
   // Render circuit links
   const circuitLinksSelection = circuitLinkGroup
-    .selectAll<SVGLineElement, TorLink>('line')
+    .selectAll<SVGLineElement, GraphLink>('line')
     .data(circuitLinks)
     .join('line')
     .attr('class', 'circuit-link animated')
     .attr('stroke', (d) => {
-      const circuit = state.circuits.find((c) => c.id === d.circuitId);
-      return circuit?.color || '#ec4899';
+      const idx = circuits.findIndex((c) => c.id === d.circuitId);
+      return CIRCUIT_COLORS[idx % CIRCUIT_COLORS.length] || '#ec4899';
     })
     .attr('marker-end', (d) => {
-      const circuit = state.circuits.find((c) => c.id === d.circuitId);
-      const colorIndex = CIRCUIT_COLORS.indexOf(circuit?.color || '#ec4899');
-      return `url(#arrow-${colorIndex >= 0 ? colorIndex : 0})`;
+      const idx = circuits.findIndex((c) => c.id === d.circuitId);
+      return `url(#arrow-${idx % CIRCUIT_COLORS.length})`;
     });
 
   // Render nodes
+  const isSelectedForCircuit = (node: GraphNode) =>
+    state.selectedForCircuit.some((n) => n.rsaIdDigest.equals(node.rsaIdDigest));
+
   const nodes = nodeGroup
-    .selectAll<SVGGElement, TorNode>('g')
+    .selectAll<SVGGElement, GraphNode>('g')
     .data(filteredNodes)
     .join('g')
-    .attr('class', (d) => `node ${d.nodeType}${state.selectedNode?.id === d.id ? ' selected' : ''}`)
+    .attr('class', (d) => {
+      const selected = state.selectedNodes.has(d.rsaIdDigest.toString('hex'));
+      const forCircuit = isSelectedForCircuit(d);
+      return `node ${d.nodeType}${selected ? ' selected' : ''}${forCircuit ? ' circuit-selected' : ''}`;
+    })
     .call(drag(state.simulation) as any);
 
   // Node circles
@@ -633,7 +411,24 @@ function renderGraph(): void {
     .append('circle')
     .attr('class', 'node-circle')
     .attr('r', (d) => getNodeRadius(d))
-    .attr('fill', (d) => getNodeColor(d));
+    .attr('fill', (d) => getNodeColor(d.nodeType))
+    .attr('stroke', (d) => (isSelectedForCircuit(d) ? '#ec4899' : 'rgba(255,255,255,0.2)'))
+    .attr('stroke-width', (d) => (isSelectedForCircuit(d) ? 3 : 2));
+
+  // Circuit order numbers
+  nodes
+    .filter((d) => isSelectedForCircuit(d))
+    .append('text')
+    .attr('class', 'circuit-order')
+    .attr('dy', 4)
+    .attr('text-anchor', 'middle')
+    .attr('fill', 'white')
+    .attr('font-size', '10px')
+    .attr('font-weight', 'bold')
+    .text((d) => {
+      const idx = state.selectedForCircuit.findIndex((n) => n.rsaIdDigest.equals(d.rsaIdDigest));
+      return idx >= 0 ? (idx + 1).toString() : '';
+    });
 
   // Node labels (conditionally shown)
   const showLabels = elements.showLabels.checked;
@@ -649,7 +444,17 @@ function renderGraph(): void {
   nodes
     .on('click', (event, d) => {
       event.stopPropagation();
-      selectNode(d);
+      if (event.shiftKey) {
+        // Shift+click to add to circuit path
+        toggleNodeForCircuit(d);
+      } else {
+        // Regular click to select and show info
+        selectNode(d);
+      }
+    })
+    .on('contextmenu', (event, d) => {
+      event.preventDefault();
+      toggleNodeForCircuit(d);
     })
     .on('mouseover', (event, d) => {
       showTooltip(event, d);
@@ -660,63 +465,78 @@ function renderGraph(): void {
 
   // Click on background to deselect
   elements.svg.on('click', () => {
-    selectNode(null);
+    state.selectedNodes.clear();
+    renderGraph();
+    elements.nodeInfoContent.innerHTML =
+      '<p class="empty-message">Click on a node to view details<br><small>Shift+click or right-click to add to circuit path</small></p>';
   });
 
   // Update on simulation tick
   state.simulation.on('tick', () => {
     links
-      .attr('x1', (d) => (d.source as TorNode).x!)
-      .attr('y1', (d) => (d.source as TorNode).y!)
-      .attr('x2', (d) => (d.target as TorNode).x!)
-      .attr('y2', (d) => (d.target as TorNode).y!);
+      .attr('x1', (d) => (d.source as GraphNode).x!)
+      .attr('y1', (d) => (d.source as GraphNode).y!)
+      .attr('x2', (d) => (d.target as GraphNode).x!)
+      .attr('y2', (d) => (d.target as GraphNode).y!);
 
     circuitLinksSelection
       .attr('x1', (d) => {
         const sourceNode = filteredNodes.find(
-          (n) => n.id === (typeof d.source === 'string' ? d.source : d.source.id)
+          (n) =>
+            n.rsaIdDigest.toString('hex') ===
+            (typeof d.source === 'string'
+              ? d.source
+              : (d.source as GraphNode).rsaIdDigest.toString('hex'))
         );
         return sourceNode?.x || 0;
       })
       .attr('y1', (d) => {
         const sourceNode = filteredNodes.find(
-          (n) => n.id === (typeof d.source === 'string' ? d.source : d.source.id)
+          (n) =>
+            n.rsaIdDigest.toString('hex') ===
+            (typeof d.source === 'string'
+              ? d.source
+              : (d.source as GraphNode).rsaIdDigest.toString('hex'))
         );
         return sourceNode?.y || 0;
       })
       .attr('x2', (d) => {
         const targetNode = filteredNodes.find(
-          (n) => n.id === (typeof d.target === 'string' ? d.target : d.target.id)
+          (n) =>
+            n.rsaIdDigest.toString('hex') ===
+            (typeof d.target === 'string'
+              ? d.target
+              : (d.target as GraphNode).rsaIdDigest.toString('hex'))
         );
         return targetNode?.x || 0;
       })
       .attr('y2', (d) => {
         const targetNode = filteredNodes.find(
-          (n) => n.id === (typeof d.target === 'string' ? d.target : d.target.id)
+          (n) =>
+            n.rsaIdDigest.toString('hex') ===
+            (typeof d.target === 'string'
+              ? d.target
+              : (d.target as GraphNode).rsaIdDigest.toString('hex'))
         );
         return targetNode?.y || 0;
       });
 
     nodes.attr('transform', (d) => `translate(${d.x},${d.y})`);
   });
-
-  updateStats();
-  log(`Rendered ${filteredNodes.length} nodes and ${allLinks.length} links`, 'info');
 }
 
-function filterNodes(nodes: TorNode[]): TorNode[] {
+function filterNodes(nodes: GraphNode[]): GraphNode[] {
   return nodes.filter((node) => {
-    // At least one of the checked filters must match
+    const flags = node.flags || [];
     const checks = [
-      elements.filterGuard.checked && node.isGuard,
-      elements.filterExit.checked && node.isExit,
-      elements.filterStable.checked && node.isStable,
-      elements.filterFast.checked && node.isFast,
-      elements.filterAuthority.checked && node.isAuthority,
-      elements.filterHsdir.checked && node.isHSDir,
+      elements.filterGuard.checked && flags.includes('Guard'),
+      elements.filterExit.checked && flags.includes('Exit'),
+      elements.filterStable.checked && flags.includes('Stable'),
+      elements.filterFast.checked && flags.includes('Fast'),
+      elements.filterAuthority.checked && flags.includes('Authority'),
+      elements.filterHsdir.checked && flags.includes('HSDir'),
     ];
 
-    // If all filters are unchecked, show all nodes
     const anyChecked =
       elements.filterGuard.checked ||
       elements.filterExit.checked ||
@@ -730,33 +550,37 @@ function filterNodes(nodes: TorNode[]): TorNode[] {
   });
 }
 
-function generateStructureLinks(nodes: TorNode[]): TorLink[] {
-  const links: TorLink[] = [];
+function generateStructureLinks(nodes: GraphNode[]): GraphLink[] {
+  const links: GraphLink[] = [];
 
-  // Create a sparse connectivity structure for visualization
-  // Connect guards to some relays, relays to exits, etc.
-  const guards = nodes.filter((n) => n.isGuard);
-  const exits = nodes.filter((n) => n.isExit && !n.isGuard);
-  const relays = nodes.filter((n) => !n.isGuard && !n.isExit);
-  const authorities = nodes.filter((n) => n.isAuthority);
+  const guards = nodes.filter((n) => n.flags?.includes('Guard'));
+  const exits = nodes.filter((n) => n.flags?.includes('Exit') && !n.flags?.includes('Guard'));
+  const relays = nodes.filter((n) => !n.flags?.includes('Guard') && !n.flags?.includes('Exit'));
+  const authorities = nodes.filter((n) => n.flags?.includes('Authority'));
 
   // Connect authorities to guards
   authorities.forEach((auth) => {
     const connectedGuards = guards.slice(0, Math.min(3, guards.length));
     connectedGuards.forEach((guard) => {
-      if (auth.id !== guard.id) {
-        links.push({ source: auth.id, target: guard.id });
+      if (!auth.rsaIdDigest.equals(guard.rsaIdDigest)) {
+        links.push({
+          source: auth.rsaIdDigest.toString('hex'),
+          target: guard.rsaIdDigest.toString('hex'),
+        });
       }
     });
   });
 
   // Connect guards to relays (sparse)
   guards.forEach((guard, i) => {
-    const startIdx = (i * 2) % relays.length;
+    const startIdx = (i * 2) % Math.max(1, relays.length);
     for (let j = 0; j < Math.min(2, relays.length); j++) {
       const relay = relays[(startIdx + j) % relays.length];
       if (relay) {
-        links.push({ source: guard.id, target: relay.id });
+        links.push({
+          source: guard.rsaIdDigest.toString('hex'),
+          target: relay.rsaIdDigest.toString('hex'),
+        });
       }
     }
   });
@@ -766,7 +590,10 @@ function generateStructureLinks(nodes: TorNode[]): TorLink[] {
     if (exits.length > 0 && i % 3 === 0) {
       const exit = exits[i % exits.length];
       if (exit) {
-        links.push({ source: relay.id, target: exit.id });
+        links.push({
+          source: relay.rsaIdDigest.toString('hex'),
+          target: exit.rsaIdDigest.toString('hex'),
+        });
       }
     }
   });
@@ -774,62 +601,82 @@ function generateStructureLinks(nodes: TorNode[]): TorLink[] {
   return links;
 }
 
-function drag(simulation: d3.Simulation<TorNode, TorLink>) {
-  function dragstarted(event: d3.D3DragEvent<SVGGElement, TorNode, TorNode>) {
+function drag(simulation: d3.Simulation<GraphNode, GraphLink>) {
+  function dragstarted(event: d3.D3DragEvent<SVGGElement, GraphNode, GraphNode>) {
     if (!event.active) simulation.alphaTarget(0.3).restart();
     event.subject.fx = event.subject.x;
     event.subject.fy = event.subject.y;
   }
 
-  function dragged(event: d3.D3DragEvent<SVGGElement, TorNode, TorNode>) {
+  function dragged(event: d3.D3DragEvent<SVGGElement, GraphNode, GraphNode>) {
     event.subject.fx = event.x;
     event.subject.fy = event.y;
   }
 
-  function dragended(event: d3.D3DragEvent<SVGGElement, TorNode, TorNode>) {
+  function dragended(event: d3.D3DragEvent<SVGGElement, GraphNode, GraphNode>) {
     if (!event.active) simulation.alphaTarget(0);
     event.subject.fx = null;
     event.subject.fy = null;
   }
 
   return d3
-    .drag<SVGGElement, TorNode>()
+    .drag<SVGGElement, GraphNode>()
     .on('start', dragstarted)
     .on('drag', dragged)
     .on('end', dragended);
 }
 
 // ============================================
-// Node Selection & Info Panel
+// Node Selection
 // ============================================
 
-function selectNode(node: TorNode | null): void {
-  state.selectedNode = node;
+function selectNode(node: GraphNode): void {
+  state.selectedNodes.clear();
+  state.selectedNodes.add(node.rsaIdDigest.toString('hex'));
+  renderNodeInfo(node);
+  renderGraph();
+}
 
-  // Update node classes
-  elements.svg.selectAll('.node').classed('selected', (d: any) => d.id === node?.id);
-
-  // Update info panel
-  if (node) {
-    renderNodeInfo(node);
-    log(`Selected node: ${node.nickname}`, 'info');
+function toggleNodeForCircuit(node: GraphNode): void {
+  const idx = state.selectedForCircuit.findIndex((n) => n.rsaIdDigest.equals(node.rsaIdDigest));
+  if (idx >= 0) {
+    state.selectedForCircuit.splice(idx, 1);
+    handleLog(`Removed ${node.nickname} from circuit path`, 'info');
   } else {
-    elements.nodeInfoContent.innerHTML =
-      '<p class="empty-message">Click on a node to view details</p>';
+    state.selectedForCircuit.push(node);
+    handleLog(
+      `Added ${node.nickname} to circuit path (position ${state.selectedForCircuit.length})`,
+      'info'
+    );
+  }
+  updateCircuitPathUI();
+  renderGraph();
+}
+
+function updateCircuitPathUI(): void {
+  const pathDisplay = state.selectedForCircuit.map((n) => n.nickname).join(' → ');
+  if (state.selectedForCircuit.length > 0) {
+    handleLog(`Circuit path: Snowflake → ${pathDisplay}`, 'info');
   }
 }
 
-function renderNodeInfo(node: TorNode): void {
-  const iconColor = getNodeColor(node);
+function renderNodeInfo(node: GraphNode): void {
+  const iconColor = getNodeColor(node.nodeType);
   const typeLabel =
     node.nodeType.charAt(0).toUpperCase() + node.nodeType.slice(1).replace('-', ' + ');
+  const flags = node.flags || [];
 
-  const flagBadges = node.flags
+  const flagBadges = flags
     .map((flag) => {
       const flagClass = flag.toLowerCase();
       return `<span class="flag-badge ${flagClass}">${flag}</span>`;
     })
     .join('');
+
+  const bandwidth = node.bandwidthStats?.Bandwidth || 0;
+  const isInCircuitPath = state.selectedForCircuit.some((n) =>
+    n.rsaIdDigest.equals(node.rsaIdDigest)
+  );
 
   elements.nodeInfoContent.innerHTML = `
     <div class="node-info-header">
@@ -839,28 +686,28 @@ function renderNodeInfo(node: TorNode): void {
         <div class="node-info-type">${typeLabel} Node</div>
       </div>
     </div>
-    
+
     <div class="node-info-section">
       <h4>Connection</h4>
       <div class="node-info-row">
         <span class="node-info-label">IP Address</span>
-        <span class="node-info-value">${escapeHtml(node.ipAddress)}</span>
+        <span class="node-info-value">${escapeHtml(node.ip_address)}</span>
       </div>
       <div class="node-info-row">
         <span class="node-info-label">OR Port</span>
-        <span class="node-info-value">${node.orPort}</span>
+        <span class="node-info-value">${node.onion_router_port}</span>
       </div>
       <div class="node-info-row">
         <span class="node-info-label">Dir Port</span>
-        <span class="node-info-value">${node.dirPort || 'N/A'}</span>
+        <span class="node-info-value">${node.directory_server_port || 'N/A'}</span>
       </div>
     </div>
-    
+
     <div class="node-info-section">
       <h4>Identity</h4>
       <div class="node-info-row">
         <span class="node-info-label">Fingerprint</span>
-        <span class="node-info-value" title="${node.fingerprint}">${node.fingerprint.slice(0, 16)}...</span>
+        <span class="node-info-value" title="${node.rsaIdDigest.toString('hex').toUpperCase()}">${node.rsaIdDigest.toString('hex').slice(0, 16).toUpperCase()}...</span>
       </div>
       ${
         node.version
@@ -873,55 +720,48 @@ function renderNodeInfo(node: TorNode): void {
           : ''
       }
     </div>
-    
+
     <div class="node-info-section">
       <h4>Performance</h4>
       <div class="node-info-row">
         <span class="node-info-label">Bandwidth</span>
-        <span class="node-info-value">${formatBandwidth(node.bandwidth)}</span>
+        <span class="node-info-value">${formatBandwidth(bandwidth)}</span>
       </div>
     </div>
-    
+
     <div class="node-info-section">
       <h4>Flags</h4>
       <div class="node-flags">${flagBadges}</div>
     </div>
-    
-    ${
-      node.isSnowflake
-        ? `
-    <div class="node-info-section">
-      <h4>Transport</h4>
-      <div class="node-info-row">
-        <span class="node-info-label">Snowflake</span>
-        <span class="node-info-value" style="color: #06b6d4">✓ Supported</span>
-      </div>
-    </div>
-    `
-        : ''
-    }
-  `;
-}
 
-function formatBandwidth(bytes: number): string {
-  if (bytes >= 1000000000) return (bytes / 1000000000).toFixed(1) + ' GB/s';
-  if (bytes >= 1000000) return (bytes / 1000000).toFixed(1) + ' MB/s';
-  if (bytes >= 1000) return (bytes / 1000).toFixed(1) + ' KB/s';
-  return bytes + ' B/s';
+    <div class="node-info-section">
+      <h4>Actions</h4>
+      <button class="btn ${isInCircuitPath ? 'secondary' : 'success'} small" id="toggle-circuit-node">
+        ${isInCircuitPath ? 'Remove from Circuit' : 'Add to Circuit Path'}
+      </button>
+    </div>
+  `;
+
+  // Add event listener
+  document.getElementById('toggle-circuit-node')?.addEventListener('click', () => {
+    toggleNodeForCircuit(node);
+    renderNodeInfo(node); // Re-render to update button
+  });
 }
 
 // ============================================
 // Tooltip
 // ============================================
 
-function showTooltip(event: MouseEvent, node: TorNode): void {
+function showTooltip(event: MouseEvent, node: GraphNode): void {
   const tooltip = elements.tooltip;
   const typeLabel =
     node.nodeType.charAt(0).toUpperCase() + node.nodeType.slice(1).replace('-', ' + ');
+  const flags = node.flags || [];
 
   tooltip.innerHTML = `
     <div class="tooltip-title">${escapeHtml(node.nickname)}</div>
-    <div class="tooltip-subtitle">${typeLabel} • ${node.flags.length} flags</div>
+    <div class="tooltip-subtitle">${typeLabel} • ${flags.length} flags</div>
   `;
 
   tooltip.hidden = false;
@@ -937,116 +777,122 @@ function hideTooltip(): void {
 // Circuit Management
 // ============================================
 
-function createRandomCircuit(): void {
-  const length = parseInt(elements.circuitLength.value, 10);
-  const filteredNodes = filterNodes(state.nodes);
-
-  if (filteredNodes.length < length) {
-    log(`Not enough nodes (${filteredNodes.length}) to create a ${length}-hop circuit`, 'error');
+async function createCircuit(random: boolean): Promise<void> {
+  if (!torClient.isConnected) {
+    handleLog('Not connected to Tor network', 'error');
     return;
   }
 
-  // Select nodes for circuit
-  const guards = filteredNodes.filter((n) => n.isGuard);
-  const exits = filteredNodes.filter((n) => n.isExit);
-  const relays = filteredNodes.filter((n) => !n.isGuard && !n.isExit);
+  const btn = elements.createCircuitBtn;
+  btn.disabled = true;
 
-  const circuitNodes: TorNode[] = [];
-
-  // First hop: prefer guard
-  if (guards.length > 0) {
-    circuitNodes.push(guards[Math.floor(Math.random() * guards.length)]!);
-  } else {
-    circuitNodes.push(filteredNodes[Math.floor(Math.random() * filteredNodes.length)]!);
-  }
-
-  // Middle hops: prefer relays
-  const middleCount = length - 2;
-  const availableMiddle = [...relays, ...guards].filter((n) => !circuitNodes.includes(n));
-  for (let i = 0; i < middleCount && availableMiddle.length > 0; i++) {
-    const idx = Math.floor(Math.random() * availableMiddle.length);
-    circuitNodes.push(availableMiddle.splice(idx, 1)[0]!);
-  }
-
-  // Last hop: prefer exit
-  const availableExits = exits.filter((n) => !circuitNodes.includes(n));
-  if (availableExits.length > 0) {
-    circuitNodes.push(availableExits[Math.floor(Math.random() * availableExits.length)]!);
-  } else {
-    const remaining = filteredNodes.filter((n) => !circuitNodes.includes(n));
-    if (remaining.length > 0) {
-      circuitNodes.push(remaining[Math.floor(Math.random() * remaining.length)]!);
+  try {
+    if (random) {
+      const hopCount = parseInt(elements.circuitLength.value, 10);
+      await torClient.buildRandomCircuit(hopCount);
+    } else {
+      if (state.selectedForCircuit.length === 0) {
+        handleLog(
+          'No nodes selected for circuit. Shift+click or right-click nodes to add them.',
+          'warning'
+        );
+        return;
+      }
+      await torClient.buildCircuit(state.selectedForCircuit);
+      state.selectedForCircuit = [];
     }
-  }
-
-  // Create circuit
-  const colorIndex = state.circuits.length % CIRCUIT_COLORS.length;
-  const circuit: Circuit = {
-    id: nextCircuitId++,
-    nodes: circuitNodes,
-    color: CIRCUIT_COLORS[colorIndex]!,
-  };
-
-  state.circuits.push(circuit);
-
-  // Update UI
-  renderCircuitList();
-  renderGraph();
-
-  const path = circuitNodes.map((n) => n.nickname).join(' → ');
-  log(`Created circuit ${circuit.id}: ${path}`, 'success');
-}
-
-function removeCircuit(circuitId: number): void {
-  const idx = state.circuits.findIndex((c) => c.id === circuitId);
-  if (idx !== -1) {
-    state.circuits.splice(idx, 1);
-    renderCircuitList();
-    renderGraph();
-    log(`Removed circuit ${circuitId}`, 'info');
+  } catch {
+    // Error already logged by TorClient
+  } finally {
+    btn.disabled = false;
   }
 }
 
-function clearAllCircuits(): void {
-  state.circuits = [];
-  renderCircuitList();
-  renderGraph();
-  log('Cleared all circuits', 'info');
-}
+function renderCircuitList(circuits: ManagedCircuit[]): void {
+  if (circuits.length === 0) {
+    elements.circuitList.innerHTML = `
+      <p class="empty-message">No circuits created yet</p>
+      ${
+        state.selectedForCircuit.length > 0
+          ? `
+        <p class="circuit-path-preview">
+          <strong>Path:</strong> Snowflake → ${state.selectedForCircuit.map((n) => n.nickname).join(' → ')}
+          <button class="btn secondary small" id="build-manual-circuit">Build This Circuit</button>
+          <button class="btn secondary small" id="clear-path">Clear</button>
+        </p>
+      `
+          : ''
+      }
+    `;
 
-function renderCircuitList(): void {
-  if (state.circuits.length === 0) {
-    elements.circuitList.innerHTML = '<p class="empty-message">No circuits created yet</p>';
+    document
+      .getElementById('build-manual-circuit')
+      ?.addEventListener('click', () => createCircuit(false));
+    document.getElementById('clear-path')?.addEventListener('click', () => {
+      state.selectedForCircuit = [];
+      renderCircuitList(circuits);
+      renderGraph();
+    });
+
     elements.clearCircuitsBtn.disabled = true;
     return;
   }
 
   elements.clearCircuitsBtn.disabled = false;
 
-  const html = state.circuits
-    .map((circuit) => {
+  let html = circuits
+    .map((circuit, idx) => {
+      const color = CIRCUIT_COLORS[idx % CIRCUIT_COLORS.length];
       const path = circuit.nodes.map((n) => n.nickname.slice(0, 8)).join(' → ');
+      const stateClass =
+        circuit.state === 'connected'
+          ? 'success'
+          : circuit.state === 'building'
+            ? 'warning'
+            : 'error';
+
       return `
       <div class="circuit-item">
-        <span class="circuit-color" style="background: ${circuit.color}"></span>
-        <span class="circuit-path" title="${circuit.nodes.map((n) => n.nickname).join(' → ')}">${path}</span>
-        <button class="circuit-remove" data-id="${circuit.id}" title="Remove circuit">✕</button>
+        <span class="circuit-color" style="background: ${color}"></span>
+        <span class="circuit-path" title="Snowflake → ${circuit.nodes.map((n) => n.nickname).join(' → ')}">
+          ${path}
+        </span>
+        <span class="circuit-state ${stateClass}">${circuit.state}</span>
+        <button class="circuit-remove" data-id="${circuit.id}" title="Destroy circuit">✕</button>
       </div>
     `;
     })
     .join('');
 
+  // Add manual path preview if nodes are selected
+  if (state.selectedForCircuit.length > 0) {
+    html += `
+      <p class="circuit-path-preview">
+        <strong>Next:</strong> Snowflake → ${state.selectedForCircuit.map((n) => n.nickname).join(' → ')}
+        <button class="btn success small" id="build-manual-circuit">Build</button>
+        <button class="btn secondary small" id="clear-path">Clear</button>
+      </p>
+    `;
+  }
+
   elements.circuitList.innerHTML = html;
 
-  // Add remove handlers
+  // Add event listeners
   elements.circuitList.querySelectorAll('.circuit-remove').forEach((btn) => {
     btn.addEventListener('click', (e) => {
       const id = parseInt((e.target as HTMLElement).dataset.id || '0', 10);
-      removeCircuit(id);
+      torClient.destroyCircuit(id);
     });
   });
 
-  updateStats();
+  document
+    .getElementById('build-manual-circuit')
+    ?.addEventListener('click', () => createCircuit(false));
+  document.getElementById('clear-path')?.addEventListener('click', () => {
+    state.selectedForCircuit = [];
+    renderCircuitList(torClient.circuits);
+    renderGraph();
+  });
 }
 
 // ============================================
@@ -1061,21 +907,16 @@ async function handleLoadNetwork(): Promise<void> {
   btn.disabled = true;
   btnText.hidden = true;
   btnLoading.hidden = false;
-  setConnectionStatus('connecting', 'Loading...');
 
   try {
-    state.nodes = await fetchNetworkData();
-    state.circuits = [];
-    nextCircuitId = 1;
+    // Disconnect if already connected
+    if (torClient.isConnected) {
+      torClient.disconnect();
+    }
 
-    renderGraph();
-    renderCircuitList();
-
-    setConnectionStatus('connected', `${state.nodes.length} nodes loaded`);
-    elements.createCircuitBtn.disabled = false;
-  } catch (error) {
-    setConnectionStatus('error', 'Failed to load');
-    log(`Error: ${error instanceof Error ? error.message : error}`, 'error');
+    await torClient.connect();
+  } catch {
+    // Error already handled by TorClient
   } finally {
     btn.disabled = false;
     btnText.hidden = false;
@@ -1085,6 +926,17 @@ async function handleLoadNetwork(): Promise<void> {
 
 function handleNodeLimitChange(): void {
   elements.nodeLimitValue.textContent = `${elements.nodeLimit.value} nodes`;
+
+  // If we have consensus, re-slice and re-render
+  if (torClient.consensus) {
+    const limit = parseInt(elements.nodeLimit.value, 10);
+    state.graphNodes = torClient.consensus.relays.slice(0, limit).map((relay) => ({
+      ...relay,
+      nodeType: getNodeType(relay),
+    }));
+    renderGraph();
+    updateStats();
+  }
 }
 
 function handlePhysicsChange(): void {
@@ -1096,7 +948,7 @@ function handlePhysicsChange(): void {
     const chargeStrength = parseInt(elements.chargeStrength.value, 10);
 
     state.simulation
-      .force('link', d3.forceLink<TorNode, TorLink>().distance(linkDistance).strength(0.1))
+      .force('link', d3.forceLink<GraphNode, GraphLink>().distance(linkDistance).strength(0.1))
       .force('charge', d3.forceManyBody().strength(chargeStrength))
       .alpha(0.3)
       .restart();
@@ -1104,13 +956,13 @@ function handlePhysicsChange(): void {
 }
 
 function handleFilterChange(): void {
-  if (state.nodes.length > 0) {
+  if (state.graphNodes.length > 0) {
     renderGraph();
   }
 }
 
 function handleShowLabelsChange(): void {
-  if (state.nodes.length > 0) {
+  if (state.graphNodes.length > 0) {
     renderGraph();
   }
 }
@@ -1137,6 +989,13 @@ function handleResize(): void {
 // ============================================
 
 function init(): void {
+  // Remove demo option - this is a real Tor client now
+  elements.dataSource.innerHTML = '<option value="snowflake">Snowflake (Live Tor Network)</option>';
+
+  // Update button text
+  const btnText = elements.loadNetworkBtn.querySelector('.btn-text') as HTMLElement;
+  btnText.textContent = 'Connect to Tor';
+
   // Initialize graph canvas
   initializeGraph();
 
@@ -1153,8 +1012,8 @@ function init(): void {
   elements.filterHsdir.addEventListener('change', handleFilterChange);
 
   // Event listeners - Circuit controls
-  elements.createCircuitBtn.addEventListener('click', createRandomCircuit);
-  elements.clearCircuitsBtn.addEventListener('click', clearAllCircuits);
+  elements.createCircuitBtn.addEventListener('click', () => createCircuit(true));
+  elements.clearCircuitsBtn.addEventListener('click', () => torClient.destroyAllCircuits());
 
   // Event listeners - Physics
   elements.linkDistance.addEventListener('input', handlePhysicsChange);
@@ -1167,9 +1026,14 @@ function init(): void {
   // Window resize
   window.addEventListener('resize', handleResize);
 
+  // Update initial node info
+  elements.nodeInfoContent.innerHTML =
+    '<p class="empty-message">Click on a node to view details<br><small>Shift+click or right-click to add to circuit path</small></p>';
+
   // Initial log
-  log('Tor Network Visualizer initialized', 'success');
-  log('Click "Load Network" to fetch relay data', 'info');
+  handleLog('Tor Network Visualizer initialized', 'success');
+  handleLog('Click "Connect to Tor" to connect via Snowflake', 'info');
+  handleLog('This uses real Tor connections - no simulation!', 'info');
 }
 
 // Start the application
