@@ -1,4 +1,5 @@
-import type { PeerInfo } from '../circuit.ts';
+import { Circuit, type PeerInfo } from '../circuit.ts';
+import { TlsChannelConnection } from '../channel.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import {
@@ -8,6 +9,7 @@ import {
 } from './directory.ts';
 import type { MicroDescConsensus, MicroDescNodeInfo } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
+import { DirectoryClient, lookupPeerInfo } from '../directory-client.ts';
 
 function mustFindMicroDescNodeInfo(
   nodes: MicroDescNodeInfo[],
@@ -203,4 +205,122 @@ export async function getRandomChutneyCircuitPathToTarget(
   circuitPeerInfos.unshift(target);
   circuitPeerInfos.reverse();
   return circuitPeerInfos;
+}
+
+// =============================================================================
+// Safe versions using DirectoryClient over circuits
+// =============================================================================
+
+/**
+ * Get Chutney consensus safely over an existing circuit's directory stream.
+ *
+ * This is the safe alternative to getChutneyMicrodescConsensus().
+ */
+export async function getChutneyMicrodescConsensusSafe(
+  directoryCircuit: Circuit
+): Promise<MicroDescConsensus> {
+  const client = new DirectoryClient(directoryCircuit);
+  const microDescContent = await client.downloadMicrodescConsensus();
+  return parseMicroDescConsensus(microDescContent);
+}
+
+/**
+ * Build a random circuit path safely using an existing circuit for directory lookups.
+ *
+ * This is the safe alternative to getRandomChutneyCircuitPath().
+ */
+export async function getRandomChutneyCircuitPathSafe(
+  directoryCircuit: Circuit
+): Promise<PeerInfo[]> {
+  const client = new DirectoryClient(directoryCircuit);
+  const microDescContent = await client.downloadMicrodescConsensus();
+  const consensus = parseMicroDescConsensus(microDescContent);
+  const microDescNodeInfos = consensus.relays;
+
+  const circuitPlan: Array<MicroDescNodeInfo> = [];
+
+  const forcedExitRsaIdDigestHex = process.env.TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX?.toLowerCase();
+  if (forcedExitRsaIdDigestHex) {
+    const forcedExit = microDescNodeInfos.find((n) => {
+      const digestHex = n.rsaIdDigest.toString('hex');
+      return digestHex === forcedExitRsaIdDigestHex;
+    });
+    if (!forcedExit) {
+      throw new Error(
+        `TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX=${forcedExitRsaIdDigestHex} not found in microdesc`
+      );
+    }
+    circuitPlan.push(forcedExit);
+  } else {
+    circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Exit'], circuitPlan));
+  }
+
+  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, [], circuitPlan));
+  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Guard'], circuitPlan));
+
+  // Look up PeerInfo safely through the circuit
+  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(
+    circuitPlan.map((relayInfo) => lookupPeerInfo(client, relayInfo))
+  );
+
+  // reverse so that gateway is first and exit is last
+  circuitPeerInfos.reverse();
+  return circuitPeerInfos;
+}
+
+/**
+ * Build a random circuit path to a target safely using an existing circuit.
+ *
+ * This is the safe alternative to getRandomChutneyCircuitPathToTarget().
+ */
+export async function getRandomChutneyCircuitPathToTargetSafe(
+  directoryCircuit: Circuit,
+  target: PeerInfo,
+  opts: { avoidRsaIdDigests?: Buffer[] } = {}
+): Promise<PeerInfo[]> {
+  const client = new DirectoryClient(directoryCircuit);
+  const microDescContent = await client.downloadMicrodescConsensus();
+  const consensus = parseMicroDescConsensus(microDescContent);
+  const microDescNodeInfos = consensus.relays;
+
+  const avoid = new Set<string>([
+    target.rsaIdDigest.toString('hex'),
+    ...(opts.avoidRsaIdDigests ?? []).map((b) => b.toString('hex')),
+  ]);
+
+  const ignore: MicroDescNodeInfo[] = microDescNodeInfos.filter((n) =>
+    avoid.has(n.rsaIdDigest.toString('hex'))
+  );
+
+  const circuitPlan: Array<MicroDescNodeInfo> = [];
+  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, [], ignore));
+  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Guard'], [...ignore, ...circuitPlan]));
+
+  // Look up PeerInfo safely through the circuit
+  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(
+    circuitPlan.map((relayInfo) => lookupPeerInfo(client, relayInfo))
+  );
+
+  circuitPeerInfos.unshift(target);
+  circuitPeerInfos.reverse();
+  return circuitPeerInfos;
+}
+
+/**
+ * Connect a random Chutney circuit safely using an existing circuit for directory lookups.
+ */
+export async function connectRandomChutneyCircuitSafe(directoryCircuit: Circuit): Promise<Circuit> {
+  const circuitPeerInfos = await getRandomChutneyCircuitPathSafe(directoryCircuit);
+  const gatewayPeerInfo = circuitPeerInfos[0];
+  if (!gatewayPeerInfo) {
+    throw new Error('Failed to build circuit path (no gateway peer)');
+  }
+  const channel = new TlsChannelConnection();
+  await channel.connectPeerInfo(gatewayPeerInfo);
+  const circuit = new Circuit({
+    path: circuitPeerInfos,
+    channel,
+  });
+  await circuit.connect();
+  return circuit;
 }

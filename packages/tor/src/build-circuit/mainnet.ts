@@ -1,65 +1,87 @@
 import { Circuit } from '../circuit.ts';
 import type { PeerInfo } from '../circuit.ts';
 import { TlsChannelConnection } from '../channel.ts';
-import {
-  getRandomDirectoryAuthority,
-  dangerouslyLookupPeerInfo,
-  dangerouslyDownloadMicrodescFromDirectory,
-  parseRelaysFromMicroDesc,
-} from './directory.ts';
+import { DirectoryClient, lookupPeerInfo, parseMicroDescConsensus } from '../directory-client.ts';
 import type { MicroDescNodeInfo } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
+import { getRandomFallbackDirectory, fallbackToPeerInfo } from '../fallback-dirs.ts';
 
-export async function getRandomCircuitPath() {
-  // try directory services until successful
-  let directoryServer: string | undefined;
-  let microDescContent: string | undefined;
-  while (!microDescContent) {
-    const directoryServerInfo = await getRandomDirectoryAuthority();
-    directoryServer = directoryServerInfo.dir_address;
-    if (!directoryServer) continue;
-    try {
-      microDescContent = await dangerouslyDownloadMicrodescFromDirectory(directoryServer);
-    } catch {
-      // ignore error and attempt again
-    }
-  }
-  if (!directoryServer) {
-    throw new Error('Failed to select a directory authority');
-  }
-  // console.log('microdesc nodeinfos downloaded from', directoryServer)
-  // console.log('microdesc content:', microDescContent)
+/**
+ * Bootstrap safely using hardcoded fallback directories.
+ *
+ * This is the Tor-spec-compliant way to bootstrap:
+ * 1. Connect via TLS to a fallback directory's OR port
+ * 2. Verify the relay's identity during TLS handshake
+ * 3. Build a single-hop circuit using CREATE_FAST (no onion key needed)
+ * 4. Use RELAY_BEGIN_DIR to fetch directory info over encrypted channel
+ *
+ * This is SAFER than plain HTTP because:
+ * - Connection is encrypted (TLS + Tor encryption)
+ * - Relay identity is cryptographically verified
+ * - Traffic looks like normal Tor (not HTTP)
+ * - Directory request content is hidden from network observers
+ *
+ * While the client's IP is visible to the fallback relay (unavoidable for
+ * first-hop), this is the same exposure as any Tor circuit's entry node.
+ *
+ * @returns A single-hop bootstrap circuit to the fallback directory
+ */
+export async function bootstrapWithFallbackDirectory(): Promise<Circuit> {
+  const fallback = getRandomFallbackDirectory();
+  const peerInfo = fallbackToPeerInfo(fallback);
 
-  const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
-  if (microDescNodeInfos.length === 0) {
-    console.warn('microdesc content:', microDescContent);
-    throw new Error(
-      `Failed to parwse relays from directory server (${directoryServer}). No relays parsed from microdesc.`
-    );
-  }
-  // console.log('microdesc nodeinfos parsed', microDescNodeInfos)
+  const channel = new TlsChannelConnection();
+  await channel.connectPeerInfo(peerInfo);
 
-  // console.log('constructing circuit plan')
+  // Build a single-hop circuit to the fallback directory
+  const circuit = new Circuit({
+    path: [peerInfo],
+    channel,
+  });
+  await circuit.connect();
+
+  return circuit;
+}
+
+/**
+ * Build a circuit path using safe directory lookups over an existing circuit.
+ *
+ * This is the privacy-preserving way to look up relay information.
+ * Requires an existing circuit to a relay that serves directory information.
+ */
+export async function getRandomCircuitPathSafe(directoryCircuit: Circuit): Promise<PeerInfo[]> {
+  const client = new DirectoryClient(directoryCircuit);
+  const microDescContent = await client.downloadMicrodescConsensus();
+  const consensus = parseMicroDescConsensus(microDescContent);
+
+  if (consensus.relays.length === 0) {
+    throw new Error('No relays parsed from consensus');
+  }
+
   const circuitPlan: Array<MicroDescNodeInfo> = [];
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Exit'], circuitPlan));
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, [], circuitPlan));
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Guard'], circuitPlan));
-  // look up PeerInfo for each node
+  circuitPlan.push(pickRelayWithFlags(consensus.relays, ['Exit'], circuitPlan));
+  circuitPlan.push(pickRelayWithFlags(consensus.relays, [], circuitPlan));
+  circuitPlan.push(pickRelayWithFlags(consensus.relays, ['Guard'], circuitPlan));
+
+  // Look up PeerInfo safely through the circuit
   const circuitPeerInfos: Array<PeerInfo> = await Promise.all(
-    circuitPlan.map(async (relayInfo) => {
-      return await dangerouslyLookupPeerInfo(directoryServer, relayInfo);
-    })
+    circuitPlan.map((relayInfo) => lookupPeerInfo(client, relayInfo))
   );
-  // console.log('constructing circuit plan complete')
 
-  // reverse so that gateway is first and exit is last
+  // Reverse so that guard is first and exit is last
   circuitPeerInfos.reverse();
-
   return circuitPeerInfos;
 }
 
-export async function connectRandomCircuit() {
-  const circuitPeerInfos = await getRandomCircuitPath();
+/**
+ * Build a new circuit using safe directory lookups over an existing circuit.
+ *
+ * This is the recommended way to build circuits after initial bootstrap.
+ * The existing circuit is used only for directory lookups - the new circuit
+ * is completely independent.
+ */
+export async function connectRandomCircuitSafe(directoryCircuit: Circuit): Promise<Circuit> {
+  const circuitPeerInfos = await getRandomCircuitPathSafe(directoryCircuit);
   const gatewayPeerInfo = circuitPeerInfos[0];
   if (!gatewayPeerInfo) {
     throw new Error('Failed to build circuit path (no gateway peer)');
@@ -72,4 +94,33 @@ export async function connectRandomCircuit() {
   });
   await circuit.connect();
   return circuit;
+}
+
+/**
+ * Build a full 3-hop circuit using safe bootstrap.
+ *
+ * This is the recommended way to connect to Tor:
+ * 1. Bootstrap safely using a fallback directory (single-hop, encrypted)
+ * 2. Fetch directory info over the encrypted bootstrap circuit
+ * 3. Build a full 3-hop circuit using safe directory lookups
+ * 4. Close the bootstrap circuit
+ *
+ * The returned circuit is a full 3-hop circuit (Guard → Middle → Exit).
+ */
+export async function connectRandomCircuitWithSafeBootstrap(): Promise<Circuit> {
+  // Step 1: Bootstrap safely using fallback directory
+  const bootstrapCircuit = await bootstrapWithFallbackDirectory();
+
+  try {
+    // Step 2: Build a full 3-hop circuit using safe lookups
+    const circuit = await connectRandomCircuitSafe(bootstrapCircuit);
+
+    // Step 3: Clean up bootstrap circuit
+    bootstrapCircuit.destroy();
+
+    return circuit;
+  } catch (err) {
+    bootstrapCircuit.destroy();
+    throw err;
+  }
 }

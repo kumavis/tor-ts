@@ -1,3 +1,52 @@
+/**
+ * Directory lookup utilities for Tor circuit building.
+ *
+ * ## WARNING: "Dangerous" Methods
+ *
+ * Several functions in this module are prefixed with "dangerously" because they
+ * make **direct HTTP requests** to directory servers, bypassing Tor circuits.
+ * This leaks the client's IP address and request patterns to:
+ *
+ * 1. The directory server
+ * 2. Any network observer between the client and server
+ *
+ * ### Safe Bootstrap (Recommended)
+ *
+ * The Tor spec provides a safe bootstrap mechanism using hardcoded fallback
+ * directories (see `fallback-dirs.ts` and `mainnet.ts`):
+ *
+ * ```typescript
+ * import { mainnet } from 'tor';
+ *
+ * // Safe bootstrap: connects via TLS to fallback, uses RELAY_BEGIN_DIR
+ * const circuit = await mainnet.connectRandomCircuitWithSafeBootstrap();
+ * ```
+ *
+ * This is safer because:
+ * - Connection is encrypted (TLS + Tor encryption)
+ * - Relay identity is cryptographically verified
+ * - Traffic looks like normal Tor (not HTTP)
+ * - Directory request content is hidden from network observers
+ *
+ * ### When Dangerous Methods Are Still Used
+ *
+ * - **Testing/Development**: In controlled test environments like Chutney,
+ *   privacy isn't a concern and direct fetches are simpler.
+ *
+ * ### Safe Alternatives
+ *
+ * After you have at least one circuit, use the safe alternatives in
+ * `directory-client.ts`:
+ *
+ * - `DirectoryClient` - Make directory requests through circuit streams
+ * - `lookupPeerInfo()` - Safe equivalent of `dangerouslyLookupPeerInfo()`
+ * - `lookupPeerInfoWithEd25519IdentityKey()` - Safe equivalent
+ *
+ * @see {@link ../fallback-dirs.ts} for hardcoded fallback directories
+ * @see {@link ../directory-client.ts} for safe directory lookups
+ * @see {@link ./mainnet.ts#connectRandomCircuitWithSafeBootstrap} for safe bootstrap
+ */
+
 import type { PeerInfo } from '../circuit.ts';
 import { AddressTypes, LinkSpecifierTypes, addressAndPortToLinkSpecifier } from '../messaging.ts';
 import type { LinkSpecifier } from '../messaging.ts';
@@ -105,7 +154,15 @@ const dangerouslyFetchWithRetry = async (
   throw lastErr instanceof Error ? lastErr : new Error(`Fetch failed for ${url}`);
 };
 
-// this is "dangerous" because we're performing it over http
+/**
+ * Look up a relay's ntor-onion-key by making a direct HTTP request.
+ *
+ * ⚠️ **DANGEROUS**: This makes a direct HTTP request, leaking your IP.
+ * Use only for initial bootstrap. For subsequent lookups, use `lookupOnionKey()`
+ * from `directory-client.ts` with an existing circuit.
+ *
+ * @see {@link ../directory-client.ts#lookupOnionKey} for the safe alternative
+ */
 export async function dangerouslyLookupOnionKey(peerIpPort: string, rsaIdDigest: Buffer) {
   const url = `http://${peerIpPort}/tor/server/fp/${rsaIdDigest.toString('hex').toUpperCase()}`;
   const response = await dangerouslyFetchWithRetry(url);
@@ -122,6 +179,15 @@ export async function dangerouslyLookupOnionKey(peerIpPort: string, rsaIdDigest:
   return ntorOnionKey;
 }
 
+/**
+ * Download the consensus-microdesc document via direct HTTP request.
+ *
+ * ⚠️ **DANGEROUS**: This makes a direct HTTP request, leaking your IP.
+ * Use only for initial bootstrap. For subsequent downloads, use
+ * `DirectoryClient.downloadMicrodescConsensus()` with an existing circuit.
+ *
+ * @see {@link ../directory-client.ts#DirectoryClient.downloadMicrodescConsensus} for the safe alternative
+ */
 export async function dangerouslyDownloadMicrodescFromDirectory(
   directoryServerIpPort: string
 ): Promise<string> {
@@ -154,6 +220,15 @@ function extractMasterKeyEd25519(directoryRecord: string): string {
   return line.slice(linePrefix.length).trim();
 }
 
+/**
+ * Download a relay's full server descriptor via direct HTTP request.
+ *
+ * ⚠️ **DANGEROUS**: This makes a direct HTTP request, leaking your IP.
+ * Use only for initial bootstrap. For subsequent downloads, use
+ * `DirectoryClient.downloadRelayServerDescriptor()` with an existing circuit.
+ *
+ * @see {@link ../directory-client.ts#DirectoryClient.downloadRelayServerDescriptor} for the safe alternative
+ */
 async function dangerouslyDownloadRelayServerDescriptor(
   peerIpPort: string,
   rsaIdDigest: Buffer
@@ -342,7 +417,15 @@ export function parseMicroDescConsensus(microDescContent: string): MicroDescCons
   };
 }
 
-// this is "dangerous" because we're performing it over http
+/**
+ * Look up PeerInfo for a relay by making direct HTTP requests.
+ *
+ * ⚠️ **DANGEROUS**: This makes direct HTTP requests, leaking your IP.
+ * Use only for initial bootstrap. For subsequent lookups, use
+ * `lookupPeerInfo()` from `directory-client.ts` with an existing circuit.
+ *
+ * @see {@link ../directory-client.ts#lookupPeerInfo} for the safe alternative
+ */
 export async function dangerouslyLookupPeerInfo(
   directoryServer: string,
   nodeInfo: MicroDescNodeInfo
@@ -354,6 +437,16 @@ export async function dangerouslyLookupPeerInfo(
   return peerInfo;
 }
 
+/**
+ * Look up PeerInfo with Ed25519 identity by making direct HTTP requests.
+ *
+ * ⚠️ **DANGEROUS**: This makes direct HTTP requests, leaking your IP.
+ * Use only for initial bootstrap. For subsequent lookups, use
+ * `lookupPeerInfoWithEd25519IdentityKey()` from `directory-client.ts`
+ * with an existing circuit.
+ *
+ * @see {@link ../directory-client.ts#lookupPeerInfoWithEd25519IdentityKey} for the safe alternative
+ */
 export async function dangerouslyLookupPeerInfoWithEd25519IdentityKey(
   directoryServer: string,
   nodeInfo: MicroDescNodeInfo

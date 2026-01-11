@@ -1,3 +1,12 @@
+/**
+ * Live Snowflake integration test.
+ *
+ * Uses direct HTTP requests for directory lookups (dangerous* methods).
+ * This is intentional - Snowflake is a bootstrap transport where we're
+ * building the first circuit and don't have an existing circuit for
+ * safe directory lookups.
+ */
+
 import http from 'node:http';
 import https from 'node:https';
 

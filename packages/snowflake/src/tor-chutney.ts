@@ -1,3 +1,26 @@
+/**
+ * Snowflake Chutney testing utilities.
+ *
+ * ## Bootstrap Context
+ *
+ * This module uses direct HTTP requests for directory lookups, which is
+ * acceptable in the Snowflake bootstrap context because:
+ *
+ * 1. Snowflake is specifically designed for users who can't directly connect
+ *    to Tor relays (e.g., censored networks). The user's first circuit is
+ *    established through Snowflake proxies.
+ *
+ * 2. By definition, we don't have an existing circuit to use for safe
+ *    directory lookups - that's what we're trying to establish.
+ *
+ * 3. The direct HTTP requests are to a local Chutney test network, not
+ *    the public Tor network. In production Snowflake, directory information
+ *    would be fetched through the Snowflake connection itself.
+ *
+ * After the initial Snowflake circuit is established, callers can use
+ * the safe `DirectoryClient` from the tor package for subsequent lookups.
+ */
+
 import fs from 'node:fs/promises';
 import path from 'node:path';
 
@@ -43,7 +66,13 @@ async function discoverDirectoryServerIpPort(): Promise<string> {
   return '127.0.0.1:7000';
 }
 
-// Minimal directory helpers (copied from tor/build-circuit/directory.ts and util.ts) without Onionoo dependency.
+// =============================================================================
+// Bootstrap directory helpers
+// =============================================================================
+// These functions make direct HTTP requests to directory servers. This is
+// acceptable in the Snowflake bootstrap context where we don't yet have a
+// circuit. Once a circuit is established, use DirectoryClient from tor package.
+// =============================================================================
 
 type MicroDescNodeInfo = {
   nickname: string;
