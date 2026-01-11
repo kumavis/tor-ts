@@ -458,6 +458,15 @@ export class Circuit extends EventEmitter {
         );
         return;
       }
+      case RelayCell.SENDME: {
+        // Flow control message. We currently don't implement SENDME-based windows,
+        // but we should never crash on it (real relays send it routinely).
+        return;
+      }
+      case RelayCell.DROP: {
+        // Padding / control cell that should be ignored.
+        return;
+      }
       default: {
         throw new Error(`Hop received unknown relay message type ${relayCommand}`);
       }
