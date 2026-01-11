@@ -1,0 +1,34 @@
+{
+  "name": "browser",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "node-forge": "^1.3.1",
+    "snowflake": "0.1.0",
+    "tor": "0.1.0",
+    "web-streams-polyfill": "^4.1.0"
+  },
+  "devDependencies": {
+    "@rollup/plugin-inject": "^5.0.5",
+    "@types/node-forge": "^1.3.11",
+    "@vitest/browser": "^3.2.4",
+    "buffer": "^6.0.3",
+    "playwright": "^1.52.0",
+    "process": "^0.11.10",
+    "typescript": "^5.9.3",
+    "vite": "^6.3.5",
+    "vite-plugin-node-polyfills": "^0.23.0",
+    "vitest": "^3.2.4"
+  },
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "build": "vite build",
+    "test": "vitest run --config vitest.config.ts",
+    "test:live": "vitest run --config vitest.live.config.ts",
+    "test:watch": "vitest --config vitest.config.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  }
+}

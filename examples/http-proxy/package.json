@@ -6,7 +6,8 @@
   "private": true,
   "scripts": {
     "start": "node --experimental-transform-types index.ts",
-    "dev": "pm2 start --name tor-example-http-proxy --watch=../../ --no-daemon --interpreter=node --node-args=--experimental-transform-types index.ts"
+    "dev": "pm2 start --name tor-example-http-proxy --watch=../../ --no-daemon --interpreter=node --node-args=--experimental-transform-types index.ts",
+    "test": "echo 'No tests'"
   },
   "dependencies": {
     "http-proxy": "^1.18.1",

@@ -21,6 +21,8 @@
     "./channel": "./src/channel.ts",
     "./circuit": "./src/circuit.ts",
     "./messaging": "./src/messaging.ts",
+    "./http-parse": "./src/http-parse.ts",
+    "./directory-client": "./src/directory-client.ts",
     "./build-circuit/chutney": "./src/build-circuit/chutney.ts",
     "./build-circuit/directory": "./src/build-circuit/directory.ts",
     "./build-circuit/mainnet": "./src/build-circuit/mainnet.ts",
@@ -29,7 +31,7 @@
   },
   "scripts": {
     "dev": "pm2 start --no-daemon scripts/dev.config.cjs",
-    "test": "ava src/*.spec.ts",
+    "test": "ava src/*.spec.ts src/**/*.spec.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "import:check": "node --experimental-transform-types scripts/import-check.ts",
     "test:dev": "pm2 start --no-daemon scripts/test-dev.config.cjs",

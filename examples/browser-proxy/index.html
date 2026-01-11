@@ -1,0 +1,109 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Tor Browser-in-Browser</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;600&family=Outfit:wght@300;400;500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="app">
+      <header class="header">
+        <div class="logo">
+          <div class="onion-icon">🧅</div>
+          <h1>Tor<span class="accent">Browser</span></h1>
+        </div>
+        <div class="status-container">
+          <div class="status-indicator" id="status-indicator"></div>
+          <span class="status-text" id="status-text">Disconnected</span>
+        </div>
+      </header>
+
+      <main class="main">
+        <div class="url-bar-container">
+          <div class="url-bar">
+            <div class="url-prefix">
+              <span class="lock-icon">🔒</span>
+            </div>
+            <input
+              type="url"
+              id="url-input"
+              placeholder="Enter URL to browse anonymously..."
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button id="browse-btn" class="browse-btn">
+              <span class="btn-text">Browse</span>
+              <span class="btn-loading" hidden>
+                <span class="spinner"></span>
+              </span>
+            </button>
+          </div>
+        </div>
+
+        <div class="circuit-panel" id="circuit-panel" hidden>
+          <div class="circuit-header">
+            <span class="circuit-title">Circuit Path</span>
+          </div>
+          <div class="circuit-path" id="circuit-path">
+            <div class="circuit-node you">
+              <div class="node-icon">💻</div>
+              <div class="node-label">You</div>
+            </div>
+            <div class="circuit-arrow">→</div>
+            <div class="circuit-node snowflake">
+              <div class="node-icon">❄️</div>
+              <div class="node-label">Snowflake</div>
+            </div>
+            <div class="circuit-arrow">→</div>
+            <div class="circuit-node middle" id="middle-node">
+              <div class="node-icon">🔐</div>
+              <div class="node-label">Middle</div>
+            </div>
+            <div class="circuit-arrow">→</div>
+            <div class="circuit-node exit" id="exit-node">
+              <div class="node-icon">🌐</div>
+              <div class="node-label">Exit</div>
+            </div>
+            <div class="circuit-arrow">→</div>
+            <div class="circuit-node destination" id="destination-node">
+              <div class="node-icon">🎯</div>
+              <div class="node-label">Destination</div>
+            </div>
+          </div>
+        </div>
+
+        <div class="log-panel" id="log-panel">
+          <div class="log-header">
+            <span class="log-title">Connection Log</span>
+            <button class="log-clear" id="log-clear">Clear</button>
+          </div>
+          <div class="log-content" id="log-content"></div>
+        </div>
+
+        <div class="content-panel" id="content-panel" hidden>
+          <div class="content-header">
+            <span class="content-url" id="content-url"></span>
+            <button class="content-close" id="content-close">✕</button>
+          </div>
+          <iframe id="content-iframe" sandbox="allow-same-origin" class="content-iframe"></iframe>
+        </div>
+      </main>
+
+      <footer class="footer">
+        <p>
+          Powered by <strong>Snowflake</strong> pluggable transport. Your traffic is routed through
+          the Tor network.
+        </p>
+      </footer>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
