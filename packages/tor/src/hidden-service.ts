@@ -12,13 +12,15 @@ import { Circuit, type CircuitCipherPair, type CircuitStream, type PeerInfo } fr
 import { TlsChannelConnection } from './channel.ts';
 import {
   getChutneyMicrodescConsensus,
-  getRandomChutneyCircuitPathToTarget,
+  getRandomChutneyCircuitPath,
+  getRandomChutneyCircuitPathToTargetSafe,
 } from './build-circuit/chutney.ts';
-import {
-  dangerouslyLookupPeerInfo,
-  dangerouslyLookupPeerInfoWithEd25519IdentityKey,
-} from './build-circuit/directory.ts';
 import { pickRelayWithFlags } from './build-circuit/util.ts';
+import {
+  DirectoryClient,
+  lookupPeerInfo,
+  lookupPeerInfoWithEd25519IdentityKey,
+} from './directory-client.ts';
 
 const HASH_LEN = 32; // SHA3-256
 const MAC_KEY_LEN = 32;
@@ -792,7 +794,8 @@ export async function connectToHiddenServiceOverChutney(params: {
   const descriptorTimeoutMs = Math.min(overallTimeoutMs, 6 * 60_000);
   const perHandshakeTimeoutMs = Math.min(overallTimeoutMs, 120_000);
 
-  const { directoryServer, consensus } = await getChutneyMicrodescConsensus();
+  // Bootstrap: Get consensus using dangerous direct fetch (unavoidable for initial bootstrap)
+  const { consensus } = await getChutneyMicrodescConsensus();
   const hsdirInterval = consensus.params['hsdir-interval'] ?? 1440;
   const hsdirNodes = (consensus.relays ?? []).filter((r) => {
     if (!(r.flags ?? []).includes('HSDir')) return false;
@@ -809,28 +812,58 @@ export async function connectToHiddenServiceOverChutney(params: {
   }
 
   console.log('hs: looking up descriptor (directory stream)');
+
   // Spec-correct HSv3 descriptor location requires the HSDir hash ring, which
   // depends on each HSDir's ed25519 identity key (from its server descriptor).
+  // We use safe lookups via a bootstrap circuit to avoid leaking our IP.
   const localEd25519ByNickname = await tryReadChutneyEd25519IdentityKeyMap();
-  const hsdirCandidates = (
-    await Promise.all(
-      shuffleInPlace([...hsdirNodes]).map(async (n) => {
+
+  // Build HSDir candidates using safe directory lookups via a bootstrap circuit.
+  const hsdirCandidates: HsdirCandidate[] = [];
+  const shuffledHsdirNodes = shuffleInPlace([...hsdirNodes]);
+
+  // We need a bootstrap circuit to do safe directory lookups for the remaining nodes.
+  // Build a random bootstrap circuit using dangerous methods (unavoidable for first circuit).
+  let bootstrapCircuit: Circuit | undefined;
+  try {
+    // Build a random 3-hop circuit for directory lookups
+    const bootstrapPath = await getRandomChutneyCircuitPath();
+    const bootstrapFirst = bootstrapPath[0];
+    if (!bootstrapFirst) throw new Error('Empty bootstrap circuit path');
+
+    const bootstrapChannel = new TlsChannelConnection();
+    await bootstrapChannel.connectPeerInfo(bootstrapFirst);
+    bootstrapCircuit = new Circuit({ path: bootstrapPath, channel: bootstrapChannel });
+    await bootstrapCircuit.connect();
+
+    // Now use safe lookups for HSDir candidates
+    const dirClient = new DirectoryClient(bootstrapCircuit);
+    const results = await Promise.all(
+      shuffledHsdirNodes.map(async (n) => {
         try {
           const localEd25519 = localEd25519ByNickname?.get(n.nickname);
           if (localEd25519) {
-            const peerInfo = await dangerouslyLookupPeerInfo(directoryServer, n);
+            const peerInfo = await lookupPeerInfo(dirClient, n);
             return { peerInfo, ed25519IdentityKey: localEd25519 } satisfies HsdirCandidate;
           }
-          const { peerInfo, ed25519IdentityKey } =
-            await dangerouslyLookupPeerInfoWithEd25519IdentityKey(directoryServer, n);
+          const { peerInfo, ed25519IdentityKey } = await lookupPeerInfoWithEd25519IdentityKey(
+            dirClient,
+            n
+          );
           return { peerInfo, ed25519IdentityKey } satisfies HsdirCandidate;
         } catch {
           return undefined;
         }
       })
-    )
-  ).filter((x): x is HsdirCandidate => Boolean(x));
+    );
+    hsdirCandidates.push(...results.filter((x): x is HsdirCandidate => Boolean(x)));
+  } catch (err) {
+    bootstrapCircuit?.destroy();
+    throw err;
+  }
+
   if (hsdirCandidates.length === 0) {
+    bootstrapCircuit?.destroy();
     throw new Error('Failed to build any HSDir candidates (peerinfo + ed25519 identity)');
   }
 
@@ -897,6 +930,7 @@ export async function connectToHiddenServiceOverChutney(params: {
           const timeLeftMs = deadline - Date.now();
           if (timeLeftMs <= 0) break;
           const got = await fetchHsDescriptorOverChutneyDirectoryStream(
+            bootstrapCircuit!,
             hsdirPeer,
             z,
             Math.min(perHandshakeTimeoutMs, timeLeftMs)
@@ -956,11 +990,17 @@ export async function connectToHiddenServiceOverChutney(params: {
     [],
     []
   );
-  const rendezvousPoint = await dangerouslyLookupPeerInfo(directoryServer, rendNodeInfo);
 
-  // Build rendezvous circuit
+  // Look up rendezvous point PeerInfo safely via bootstrap circuit
+  const dirClient = new DirectoryClient(bootstrapCircuit!);
+  const rendezvousPoint = await lookupPeerInfo(dirClient, rendNodeInfo);
+
+  // Build rendezvous circuit safely using the bootstrap circuit for directory lookups
   console.log('hs: building rendezvous circuit');
-  const rendPath = await getRandomChutneyCircuitPathToTarget(rendezvousPoint);
+  const rendPath = await getRandomChutneyCircuitPathToTargetSafe(
+    bootstrapCircuit!,
+    rendezvousPoint
+  );
   const rendChannel = new TlsChannelConnection();
   const rendFirst = rendPath[0];
   if (!rendFirst) throw new Error('Empty rendezvous circuit path');
@@ -976,10 +1016,10 @@ export async function connectToHiddenServiceOverChutney(params: {
   });
   await waitForRelayCommand(rendCircuit, RelayCell.RENDEZVOUS_ESTABLISHED, perHandshakeTimeoutMs);
 
-  // Build intro circuit
+  // Build intro circuit safely using the bootstrap circuit for directory lookups
   console.log('hs: building intro circuit');
   const introPeer = peerInfoFromIntroPoint(intro);
-  const introPath = await getRandomChutneyCircuitPathToTarget(introPeer, {
+  const introPath = await getRandomChutneyCircuitPathToTargetSafe(bootstrapCircuit!, introPeer, {
     avoidRsaIdDigests: [rendezvousPoint.rsaIdDigest],
   });
   const introChannel = new TlsChannelConnection();
@@ -1014,6 +1054,9 @@ export async function connectToHiddenServiceOverChutney(params: {
   }
   introCircuit.destroy();
 
+  // Clean up the bootstrap circuit now that we've built all needed circuits
+  bootstrapCircuit?.destroy();
+
   // Wait for RENDEZVOUS2 and finish hs-ntor handshake, adding a virtual hop
   console.log('hs: await RENDEZVOUS2');
   const r2 = await waitForRelayCommand(rendCircuit, RelayCell.RENDEZVOUS2, overallTimeoutMs);
@@ -1030,11 +1073,13 @@ export async function connectToHiddenServiceOverChutney(params: {
 }
 
 async function fetchHsDescriptorOverChutneyDirectoryStream(
+  bootstrapCircuit: Circuit,
   hsdirPeer: PeerInfo,
   z: string,
   timeoutMs: number
 ): Promise<string | undefined> {
-  const path = await getRandomChutneyCircuitPathToTarget(hsdirPeer);
+  // Use safe circuit path building via the bootstrap circuit
+  const path = await getRandomChutneyCircuitPathToTargetSafe(bootstrapCircuit, hsdirPeer);
   const first = path[0];
   if (!first) throw new Error('Empty HSDir circuit path');
 

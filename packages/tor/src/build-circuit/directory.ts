@@ -10,11 +10,25 @@
  * 1. The directory server
  * 2. Any network observer between the client and server
  *
- * ### When Dangerous Methods Are Acceptable
+ * ### Safe Bootstrap (Recommended)
  *
- * - **Initial Bootstrap**: When building your very first circuit, you need
- *   directory information but don't have a circuit yet. This is unavoidable.
- *   Real Tor clients solve this with hardcoded fallback directory authorities.
+ * The Tor spec provides a safe bootstrap mechanism using hardcoded fallback
+ * directories (see `fallback-dirs.ts` and `mainnet.ts`):
+ *
+ * ```typescript
+ * import { mainnet } from 'tor';
+ *
+ * // Safe bootstrap: connects via TLS to fallback, uses RELAY_BEGIN_DIR
+ * const circuit = await mainnet.connectRandomCircuitWithSafeBootstrap();
+ * ```
+ *
+ * This is safer because:
+ * - Connection is encrypted (TLS + Tor encryption)
+ * - Relay identity is cryptographically verified
+ * - Traffic looks like normal Tor (not HTTP)
+ * - Directory request content is hidden from network observers
+ *
+ * ### When Dangerous Methods Are Still Used
  *
  * - **Testing/Development**: In controlled test environments like Chutney,
  *   privacy isn't a concern and direct fetches are simpler.
@@ -28,7 +42,9 @@
  * - `lookupPeerInfo()` - Safe equivalent of `dangerouslyLookupPeerInfo()`
  * - `lookupPeerInfoWithEd25519IdentityKey()` - Safe equivalent
  *
- * @see {@link ../directory-client.ts} for safe alternatives
+ * @see {@link ../fallback-dirs.ts} for hardcoded fallback directories
+ * @see {@link ../directory-client.ts} for safe directory lookups
+ * @see {@link ./mainnet.ts#connectRandomCircuitWithSafeBootstrap} for safe bootstrap
  */
 
 import type { PeerInfo } from '../circuit.ts';

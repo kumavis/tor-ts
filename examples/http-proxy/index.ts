@@ -2,7 +2,7 @@ import http from 'http';
 import httpProxy from 'http-proxy';
 import { Circuit } from 'tor';
 import { getTorAgentForUrl, proxyCircuitStreamDuplex } from 'tor/node';
-import { connectRandomCircuit } from 'tor/build-circuit/mainnet';
+import { connectRandomCircuitWithSafeBootstrap } from 'tor/build-circuit/mainnet';
 
 main();
 
@@ -12,7 +12,7 @@ async function main() {
 }
 
 async function setupTor() {
-  const circuit = await connectRandomCircuit();
+  const circuit = await connectRandomCircuitWithSafeBootstrap();
   console.log('circuit established');
   return circuit;
 }
