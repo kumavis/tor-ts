@@ -50,6 +50,11 @@
 import type { PeerInfo } from '../circuit.ts';
 import { AddressTypes, LinkSpecifierTypes, addressAndPortToLinkSpecifier } from '../messaging.ts';
 import type { LinkSpecifier } from '../messaging.ts';
+import {
+  verifyConsensusSignatures,
+  type ConsensusVerificationResult,
+  type AuthorityKeyCertificate,
+} from '../consensus-signature.ts';
 
 export type DirectoryAuthority = {
   dir_address?: string;
@@ -268,13 +273,77 @@ export type MicroDescConsensus = {
   sharedRandPreviousValue: Buffer | undefined;
   sharedRandCurrentValue: Buffer | undefined;
   relays: MicroDescNodeInfo[];
+  /** Signature verification result, if verification was performed */
+  signatureVerification?: ConsensusVerificationResult | undefined;
+};
+
+/**
+ * Options for parsing and verifying a microdesc consensus.
+ */
+export type ParseMicroDescConsensusOptions = {
+  /**
+   * Whether to verify consensus signatures.
+   * Default: true
+   */
+  verifySignatures?: boolean;
+
+  /**
+   * Key certificates for signing key verification.
+   * If not provided, signatures are verified against authority identity keys.
+   */
+  keyCertificates?: AuthorityKeyCertificate[];
+
+  /**
+   * Minimum number of valid signatures required.
+   * Default: majority of known authorities
+   */
+  requiredSignatures?: number;
+
+  /**
+   * Whether to throw if signature verification fails.
+   * Default: true for production security
+   */
+  throwOnVerificationFailure?: boolean;
+
+  /**
+   * Current time for checking certificate validity.
+   * Default: Date.now()
+   */
+  now?: number;
 };
 
 export function parseRelaysFromMicroDesc(microDescContent: string): MicroDescNodeInfo[] {
-  return parseMicroDescConsensus(microDescContent).relays;
+  return parseMicroDescConsensus(microDescContent, { throwOnVerificationFailure: false }).relays;
 }
 
-export function parseMicroDescConsensus(microDescContent: string): MicroDescConsensus {
+/**
+ * Parse a microdesc consensus document and optionally verify signatures.
+ *
+ * By default, this function verifies that the consensus is signed by a
+ * majority of known directory authorities. This is critical for security
+ * as it prevents attacks where a malicious party provides a forged consensus.
+ *
+ * For test environments (like Chutney), you may want to disable verification:
+ * ```typescript
+ * parseMicroDescConsensus(content, { verifySignatures: false });
+ * ```
+ *
+ * @param microDescContent - The raw consensus document text
+ * @param options - Parsing and verification options
+ * @returns Parsed consensus with signature verification result
+ * @throws Error if signature verification fails and throwOnVerificationFailure is true
+ */
+export function parseMicroDescConsensus(
+  microDescContent: string,
+  options: ParseMicroDescConsensusOptions = {}
+): MicroDescConsensus {
+  const {
+    verifySignatures = true,
+    keyCertificates = [],
+    requiredSignatures,
+    throwOnVerificationFailure = true,
+    now = Date.now(),
+  } = options;
   const lines = microDescContent.split('\n');
   let relayInfo: MicroDescNodeInfo | undefined;
   const relayInfos: MicroDescNodeInfo[] = [];
@@ -406,6 +475,35 @@ export function parseMicroDescConsensus(microDescContent: string): MicroDescCons
     }
   }
 
+  // Verify consensus signatures if requested
+  let signatureVerification: ConsensusVerificationResult | undefined;
+
+  if (verifySignatures) {
+    signatureVerification = verifyConsensusSignatures(microDescContent, {
+      keyCertificates,
+      requiredSignatures,
+      allowWithoutCertificates: true,
+      now,
+    });
+
+    if (!signatureVerification.valid && throwOnVerificationFailure) {
+      const validSigs = signatureVerification.signatures
+        .filter((s) => s.valid)
+        .map((s) => s.nickname || s.identityFingerprint.slice(0, 8))
+        .join(', ');
+      const invalidSigs = signatureVerification.signatures
+        .filter((s) => !s.valid)
+        .map((s) => `${s.nickname || s.identityFingerprint.slice(0, 8)}: ${s.error}`)
+        .join('; ');
+
+      throw new Error(
+        `Consensus signature verification failed: ${signatureVerification.error}. ` +
+          `Valid signatures from: [${validSigs || 'none'}]. ` +
+          `Invalid: [${invalidSigs || 'none'}]`
+      );
+    }
+  }
+
   return {
     validAfter,
     freshUntil,
@@ -414,6 +512,7 @@ export function parseMicroDescConsensus(microDescContent: string): MicroDescCons
     sharedRandPreviousValue,
     sharedRandCurrentValue,
     relays: relayInfos,
+    signatureVerification,
   };
 }
 

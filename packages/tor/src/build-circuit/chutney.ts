@@ -71,7 +71,9 @@ export async function getChutneyMicrodescConsensus(): Promise<{
 }> {
   const directoryServer = await discoverDirectoryServerIpPort();
   const microDescContent = await dangerouslyDownloadMicrodescFromDirectory(directoryServer);
-  const consensus = parseMicroDescConsensus(microDescContent);
+  // Disable signature verification for Chutney - test networks use local
+  // directory authorities that don't match the hardcoded mainnet authorities
+  const consensus = parseMicroDescConsensus(microDescContent, { verifySignatures: false });
   return { directoryServer, consensus };
 }
 
@@ -221,7 +223,9 @@ export async function getChutneyMicrodescConsensusSafe(
 ): Promise<MicroDescConsensus> {
   const client = new DirectoryClient(directoryCircuit);
   const microDescContent = await client.downloadMicrodescConsensus();
-  return parseMicroDescConsensus(microDescContent);
+  // Disable signature verification for Chutney - test networks use local
+  // directory authorities that don't match the hardcoded mainnet authorities
+  return parseMicroDescConsensus(microDescContent, { verifySignatures: false });
 }
 
 /**
@@ -234,7 +238,9 @@ export async function getRandomChutneyCircuitPathSafe(
 ): Promise<PeerInfo[]> {
   const client = new DirectoryClient(directoryCircuit);
   const microDescContent = await client.downloadMicrodescConsensus();
-  const consensus = parseMicroDescConsensus(microDescContent);
+  // Disable signature verification for Chutney - test networks use local
+  // directory authorities that don't match the hardcoded mainnet authorities
+  const consensus = parseMicroDescConsensus(microDescContent, { verifySignatures: false });
   const microDescNodeInfos = consensus.relays;
 
   const circuitPlan: Array<MicroDescNodeInfo> = [];
@@ -280,7 +286,9 @@ export async function getRandomChutneyCircuitPathToTargetSafe(
 ): Promise<PeerInfo[]> {
   const client = new DirectoryClient(directoryCircuit);
   const microDescContent = await client.downloadMicrodescConsensus();
-  const consensus = parseMicroDescConsensus(microDescContent);
+  // Disable signature verification for Chutney - test networks use local
+  // directory authorities that don't match the hardcoded mainnet authorities
+  const consensus = parseMicroDescConsensus(microDescContent, { verifySignatures: false });
   const microDescNodeInfos = consensus.relays;
 
   const avoid = new Set<string>([
