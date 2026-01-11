@@ -524,11 +524,7 @@ export function verifyConsensusSignatures(
   consensusText: string,
   options: VerifyConsensusOptions = {}
 ): ConsensusVerificationResult {
-  const {
-    keyCertificates = [],
-    allowWithoutCertificates = true,
-    now = Date.now(),
-  } = options;
+  const { keyCertificates = [], allowWithoutCertificates = true, now = Date.now() } = options;
 
   const totalKnownAuthorities = DIRECTORY_AUTHORITIES.length;
 
@@ -630,7 +626,12 @@ export function verifyConsensusSignatures(
     }
 
     // Verify the signature
-    const valid = verifySignatureWithData(signedPortion, sig.signature, signingKeyPem, sig.algorithm);
+    const valid = verifySignatureWithData(
+      signedPortion,
+      sig.signature,
+      signingKeyPem,
+      sig.algorithm
+    );
 
     if (valid) {
       validCount++;
