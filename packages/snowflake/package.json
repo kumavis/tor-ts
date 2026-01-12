@@ -19,6 +19,9 @@
     "./encapsulation": "./src/encapsulation.ts",
     "./turbotunnel": "./src/turbotunnel.ts",
     "./ws-downlink": "./src/ws-downlink.ts",
+    "./webrtc-downlink": "./src/webrtc-downlink.ts",
+    "./webrtc-stack": "./src/snowflake-webrtc-stack.ts",
+    "./broker": "./src/broker.ts",
     "./kcp": "./src/kcp/index.ts",
     "./smux": "./src/smux/index.ts"
   },

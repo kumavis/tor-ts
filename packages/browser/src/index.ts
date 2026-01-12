@@ -32,6 +32,8 @@ import { fetchHtml } from './http-fetch.ts';
 import { getCachedConsensus, cacheConsensus } from './consensus-cache.ts';
 
 export { SnowflakeBrowserChannel } from './snowflake-channel.ts';
+export { SnowflakeWebRtcBrowserChannel } from './snowflake-webrtc-channel.ts';
+export type { SnowflakeWebRtcBrowserChannelOptions } from './snowflake-webrtc-channel.ts';
 export { fetchViaTor, fetchHtml } from './http-fetch.ts';
 export type { TorFetchResponse } from './http-fetch.ts';
 export { pickRelayWithFlags } from 'tor/build-circuit/util';
