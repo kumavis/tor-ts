@@ -18,6 +18,16 @@ import { parseHttpResponse, type ParsedHttpResponse } from './http-parse.ts';
 // Re-export the response type for external use
 export type { ParsedHttpResponse as DirectoryResponse } from './http-parse.ts';
 
+export type DownloadProgress = {
+  bytesReceived: number;
+  estimatedTotalBytes: number | null;
+  elapsedMs: number;
+  speedBytesPerSec: number;
+  estimatedRemainingMs: number | null;
+};
+
+export type DownloadProgressCallback = (progress: DownloadProgress) => void;
+
 export class DirectoryClient {
   private circuit: Circuit;
   private timeoutMs: number;
@@ -30,13 +40,58 @@ export class DirectoryClient {
   /**
    * Make an HTTP request through the directory stream.
    */
-  private async request(method: string, path: string): Promise<ParsedHttpResponse> {
+  private async request(
+    method: string,
+    path: string,
+    onProgress?: DownloadProgressCallback
+  ): Promise<ParsedHttpResponse> {
     const stream = await this.circuit.openDirectoryStream();
 
     const requestText = `${method} ${path} HTTP/1.0\r\n` + `Host: directory\r\n` + `\r\n`;
 
     const chunks: Buffer[] = [];
-    stream.on('data', (d: Buffer) => chunks.push(Buffer.from(d)));
+    const startTime = Date.now();
+    let bytesReceived = 0;
+    let estimatedTotalBytes: number | null = null;
+    let lastProgressTime = startTime;
+
+    stream.on('data', (d: Buffer) => {
+      const chunk = Buffer.from(d);
+      chunks.push(chunk);
+      bytesReceived += chunk.length;
+
+      // Try to extract Content-Length from first chunk if we don't have it
+      if (estimatedTotalBytes === null && chunks.length <= 3) {
+        const partialResponse = Buffer.concat(chunks).toString('utf8');
+        const match = partialResponse.match(/Content-Length:\s*(\d+)/i);
+        if (match) {
+          // Add header size estimate (~200 bytes)
+          estimatedTotalBytes = parseInt(match[1]!, 10) + 200;
+        }
+      }
+
+      // Throttle progress updates to every 100ms
+      const now = Date.now();
+      if (onProgress && now - lastProgressTime >= 100) {
+        lastProgressTime = now;
+        const elapsedMs = now - startTime;
+        const speedBytesPerSec = elapsedMs > 0 ? (bytesReceived / elapsedMs) * 1000 : 0;
+
+        let estimatedRemainingMs: number | null = null;
+        if (estimatedTotalBytes && speedBytesPerSec > 0) {
+          const remainingBytes = estimatedTotalBytes - bytesReceived;
+          estimatedRemainingMs = (remainingBytes / speedBytesPerSec) * 1000;
+        }
+
+        onProgress({
+          bytesReceived,
+          estimatedTotalBytes,
+          elapsedMs,
+          speedBytesPerSec,
+          estimatedRemainingMs,
+        });
+      }
+    });
 
     const endedP = new Promise<void>((resolve, reject) => {
       stream.once('end', (err?: Error) => {
@@ -52,6 +107,19 @@ export class DirectoryClient {
 
     await Promise.race([endedP, this.timeoutRejection('directory request read timeout')]);
 
+    // Final progress update
+    if (onProgress) {
+      const elapsedMs = Date.now() - startTime;
+      const speedBytesPerSec = elapsedMs > 0 ? (bytesReceived / elapsedMs) * 1000 : 0;
+      onProgress({
+        bytesReceived,
+        estimatedTotalBytes: bytesReceived, // Now we know the exact size
+        elapsedMs,
+        speedBytesPerSec,
+        estimatedRemainingMs: 0,
+      });
+    }
+
     const raw = Buffer.concat(chunks).toString('utf8');
     return parseHttpResponse(raw);
   }
@@ -65,9 +133,15 @@ export class DirectoryClient {
   /**
    * Download the consensus-microdesc document from the directory.
    * Equivalent to: GET /tor/status-vote/current/consensus-microdesc
+   *
+   * @param onProgress - Optional callback for download progress updates
    */
-  async downloadMicrodescConsensus(): Promise<string> {
-    const response = await this.request('GET', '/tor/status-vote/current/consensus-microdesc');
+  async downloadMicrodescConsensus(onProgress?: DownloadProgressCallback): Promise<string> {
+    const response = await this.request(
+      'GET',
+      '/tor/status-vote/current/consensus-microdesc',
+      onProgress
+    );
     if (response.statusCode !== 200) {
       throw new Error(
         `Failed to download consensus-microdesc: ${response.statusCode} ${response.statusText}`
@@ -110,6 +184,41 @@ export class DirectoryClient {
     }
     return response.body;
   }
+
+  /**
+   * Download authority key certificates.
+   * Equivalent to: GET /tor/keys/all
+   *
+   * Returns all available key certificates from the directory cache.
+   */
+  async downloadKeyCertificates(): Promise<string> {
+    const response = await this.request('GET', '/tor/keys/all');
+    if (response.statusCode !== 200) {
+      throw new Error(
+        `Failed to download key certificates: ${response.statusCode} ${response.statusText}`
+      );
+    }
+    return response.body;
+  }
+
+  /**
+   * Download a specific authority's key certificate by fingerprint.
+   * Equivalent to: GET /tor/keys/fp/{fingerprint}
+   *
+   * @param fingerprint - The authority's identity fingerprint (hex, uppercase)
+   */
+  async downloadKeyCertificate(fingerprint: string): Promise<string | null> {
+    const response = await this.request('GET', `/tor/keys/fp/${fingerprint.toUpperCase()}`);
+    if (response.statusCode === 404) {
+      return null;
+    }
+    if (response.statusCode !== 200) {
+      throw new Error(
+        `Failed to download key certificate for ${fingerprint}: ${response.statusCode} ${response.statusText}`
+      );
+    }
+    return response.body;
+  }
 }
 
 /**
@@ -148,10 +257,15 @@ import type {
   MicroDescConsensus,
   ParseMicroDescConsensusOptions,
 } from './build-circuit/directory.ts';
-import { parseMicroDescConsensus, microDescNodeInfoToPeerInfo } from './build-circuit/directory.ts';
+import {
+  parseMicroDescConsensus,
+  parseMicroDescConsensusAsync,
+  microDescNodeInfoToPeerInfo,
+} from './build-circuit/directory.ts';
 
 export {
   parseMicroDescConsensus,
+  parseMicroDescConsensusAsync,
   type MicroDescNodeInfo,
   type MicroDescConsensus,
   type ParseMicroDescConsensusOptions,
@@ -172,6 +286,7 @@ export {
   verifyConsensusSignatures,
   parseConsensusSignatures,
   parseKeyCertificate,
+  parseAllKeyCertificates,
   findAuthorityByFingerprint,
   extractAuthorityFingerprints,
 } from './consensus-signature.ts';

@@ -14,7 +14,12 @@
 
 import { Circuit } from 'tor/circuit';
 import type { PeerInfo } from 'tor/circuit';
-import { DirectoryClient, parseMicroDescConsensus, lookupPeerInfo } from 'tor/directory-client';
+import {
+  DirectoryClient,
+  parseMicroDescConsensusAsync,
+  lookupPeerInfo,
+} from 'tor/directory-client';
+import type { DownloadProgress } from 'tor/directory-client';
 import { pickRelayWithFlags } from 'tor/build-circuit/util';
 import { SnowflakeBrowserChannel } from './snowflake-channel.ts';
 import { fetchHtml } from './http-fetch.ts';
@@ -24,10 +29,26 @@ export { fetchViaTor, fetchHtml } from './http-fetch.ts';
 export type { TorFetchResponse } from './http-fetch.ts';
 export { pickRelayWithFlags } from 'tor/build-circuit/util';
 export type { MicroDescNodeInfo } from 'tor/build-circuit/directory';
+export type { DownloadProgress } from 'tor/directory-client';
 
 export type BrowserCircuitOptions = {
   relayUrl?: string;
   onStatus?: (status: string) => void;
+  onConsensusProgress?: (progress: DownloadProgress) => void;
+  /**
+   * **DANGEROUS**: Skip consensus signature verification entirely.
+   *
+   * WARNING: This disables a critical security check. The consensus document
+   * could be forged by an attacker to direct you to malicious relays.
+   *
+   * Only use this option if:
+   * - You're in a test environment
+   * - You're debugging/developing and understand the risks
+   * - The crypto implementation for your platform is not yet complete
+   *
+   * Default: false
+   */
+  dangerouslySkipSignatureVerification?: boolean;
 };
 
 export type BrowserCircuit = {
@@ -44,7 +65,12 @@ export type BrowserCircuit = {
 export async function connectBrowserCircuit(
   options: BrowserCircuitOptions = {}
 ): Promise<BrowserCircuit> {
-  const { relayUrl = 'wss://snowflake.torproject.net/', onStatus } = options;
+  const {
+    relayUrl = 'wss://snowflake.torproject.net/',
+    onStatus,
+    onConsensusProgress,
+    dangerouslySkipSignatureVerification = false,
+  } = options;
 
   const log = (msg: string) => {
     console.log(`[tor-browser] ${msg}`);
@@ -74,10 +100,15 @@ export async function connectBrowserCircuit(
   await bootstrapCircuit.connect();
 
   // Step 3: Fetch directory consensus over encrypted bootstrap circuit
+  // Use a much longer timeout for browser environment where JS TLS is slower.
+  // The full consensus is ~3.35MB and browser crypto runs at ~4KB/s = ~14 minutes.
   log('Downloading network consensus (via Tor circuit)...');
-  const dirClient = new DirectoryClient(bootstrapCircuit);
-  const microDescContent = await dirClient.downloadMicrodescConsensus();
-  const consensus = parseMicroDescConsensus(microDescContent);
+  const dirClient = new DirectoryClient(bootstrapCircuit, { timeoutMs: 600_000 });
+  const microDescContent = await dirClient.downloadMicrodescConsensus(onConsensusProgress);
+  // Use async version for browser (Web Crypto API is async)
+  const consensus = await parseMicroDescConsensusAsync(microDescContent, {
+    dangerouslySkipSignatureVerification,
+  });
 
   if (consensus.relays.length === 0) {
     bootstrapCircuit.destroy();
@@ -108,8 +139,8 @@ export async function connectBrowserCircuit(
   });
   await fullCircuit.connect();
 
-  // Clean up bootstrap circuit state (channel remains open for fullCircuit)
-  bootstrapCircuit.destroy();
+  // Clean up bootstrap circuit state (preserve channel for fullCircuit)
+  bootstrapCircuit.destroy({ preserveChannel: true });
 
   log('Circuit established!');
 

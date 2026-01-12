@@ -19,6 +19,8 @@ export default defineConfig({
       },
       overrides: {
         'stream/web': 'web-streams-polyfill/dist/ponyfill.mjs',
+        // Override crypto to use our shim that provides webcrypto export
+        crypto: path.resolve(__dirname, 'src/shims/crypto-webcrypto.ts'),
       },
     }),
   ],
@@ -26,6 +28,7 @@ export default defineConfig({
     alias: {
       ws: path.resolve(__dirname, 'src/shims/ws.ts'),
       'node:tls': path.resolve(__dirname, 'src/shims/tls.ts'),
+      'node:crypto': path.resolve(__dirname, 'src/shims/crypto-webcrypto.ts'),
       'stream/web': 'web-streams-polyfill/dist/ponyfill.mjs',
     },
   },
@@ -54,7 +57,7 @@ export default defineConfig({
       instances: [{ browser: 'chromium' }],
       headless: true,
     },
-    testTimeout: 180_000, // 3 minutes for live network tests
-    hookTimeout: 60_000,
+    testTimeout: 600_000, // 10 minutes - consensus download via JS TLS is slow
+    hookTimeout: 600_000,
   },
 });

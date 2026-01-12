@@ -2,6 +2,8 @@ import { defineConfig } from 'vite';
 import { nodePolyfills } from 'vite-plugin-node-polyfills';
 import path from 'path';
 
+const browserShimsPath = path.resolve(__dirname, '../../packages/browser/src/shims');
+
 export default defineConfig({
   // Use base path from env for GitHub Pages deployment
   base: process.env.VITE_BASE_PATH || '/',
@@ -16,15 +18,17 @@ export default defineConfig({
       overrides: {
         // Use web streams polyfill for stream/web
         'stream/web': 'web-streams-polyfill/dist/ponyfill.mjs',
+        // Use our crypto shim that provides webcrypto export for SubtleCrypto TLS
+        crypto: path.resolve(browserShimsPath, 'crypto-webcrypto.ts'),
       },
     }),
   ],
   resolve: {
     alias: {
       // Replace 'ws' package with browser WebSocket shim from browser package
-      ws: path.resolve(__dirname, '../../packages/browser/src/shims/ws.ts'),
+      ws: path.resolve(browserShimsPath, 'ws.ts'),
       // Replace node:tls with @reclaimprotocol/tls-based implementation (TLS 1.3)
-      'node:tls': path.resolve(__dirname, '../../packages/browser/src/shims/tls.ts'),
+      'node:tls': path.resolve(browserShimsPath, 'tls.ts'),
       // Stream/web alias for the circuit.ts import
       'stream/web': 'web-streams-polyfill/dist/ponyfill.mjs',
     },
