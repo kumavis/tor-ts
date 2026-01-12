@@ -1,0 +1,240 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>TamanegiBrowser</title>
+    <link rel="stylesheet" href="/src/styles.css" />
+  </head>
+  <body>
+    <div id="app">
+      <div class="warning-banner" id="warning-banner">
+        <span class="warning-icon">⚠️</span>
+        <span class="warning-text"
+          ><strong>Experimental:</strong> This browser may not safely sandbox content. Do not use
+          for sensitive browsing.</span
+        >
+        <button class="warning-dismiss" id="warning-dismiss">✕</button>
+      </div>
+
+      <header class="header">
+        <div class="logo">
+          <span class="onion-icon">🧅</span>
+          <span class="logo-text">Tamanegi<span class="accent">Browser</span></span>
+        </div>
+        <div class="status-container">
+          <div class="status-indicator" id="status-indicator"></div>
+          <span class="status-text" id="status-text">Disconnected</span>
+        </div>
+      </header>
+
+      <main class="main">
+        <div class="url-bar-container">
+          <div class="nav-buttons">
+            <button class="nav-btn" id="back-btn" disabled title="Go back">◀</button>
+            <button class="nav-btn" id="forward-btn" disabled title="Go forward">▶</button>
+          </div>
+          <div class="url-bar">
+            <div class="url-prefix">
+              <span class="lock-icon">🔒</span>
+            </div>
+            <input
+              type="url"
+              id="url-input"
+              placeholder="Enter URL to browse anonymously..."
+              autocomplete="off"
+              spellcheck="false"
+            />
+            <button id="browse-btn" class="browse-btn">
+              <span class="btn-text">Go</span>
+              <span class="btn-loading" hidden>
+                <span class="spinner"></span>
+              </span>
+            </button>
+          </div>
+          <div class="mode-tabs">
+            <button class="mode-tab active" id="tab-info" data-mode="info">Info</button>
+            <button class="mode-tab" id="tab-browser" data-mode="browser">Browser</button>
+          </div>
+        </div>
+
+        <div class="content-area">
+          <!-- Info Mode -->
+          <div class="mode-panel" id="mode-info">
+            <div class="consensus-panel" id="consensus-panel">
+              <div class="consensus-header">
+                <span class="consensus-title" id="consensus-title">📦 Network Consensus</span>
+                <span class="consensus-status" id="consensus-status-text">Not loaded</span>
+              </div>
+              <!-- Cached state -->
+              <div class="consensus-cached" id="consensus-cached" hidden>
+                <div class="cached-info">
+                  <div class="cached-stat">
+                    <span class="stat-label">Status</span>
+                    <span class="stat-value" id="cached-status-badge">✓ Cached</span>
+                  </div>
+                  <div class="cached-stat">
+                    <span class="stat-label">Expires</span>
+                    <span class="stat-value" id="cached-valid-until">--</span>
+                  </div>
+                  <button class="consensus-refresh" id="consensus-refresh" hidden>↻ Refresh</button>
+                </div>
+              </div>
+              <!-- Downloading state -->
+              <div class="consensus-downloading" id="consensus-downloading" hidden>
+                <div class="progress-bar-container">
+                  <div class="progress-bar" id="progress-bar"></div>
+                </div>
+                <div class="progress-stats">
+                  <div class="progress-stat">
+                    <span class="stat-label">Downloaded</span>
+                    <span class="stat-value" id="progress-bytes">0 KB</span>
+                  </div>
+                  <div class="progress-stat">
+                    <span class="stat-label">Speed</span>
+                    <span class="stat-value" id="progress-speed">-- KB/s</span>
+                  </div>
+                  <div class="progress-stat">
+                    <span class="stat-label">ETA</span>
+                    <span class="stat-value" id="progress-eta">Calculating...</span>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="circuit-panel">
+              <div class="circuit-header">
+                <span class="circuit-title">Circuit Path</span>
+                <span class="circuit-status" id="circuit-status">Not connected</span>
+              </div>
+              <div class="circuit-path" id="circuit-path">
+                <div class="circuit-segment">
+                  <div class="circuit-node you connected">
+                    <div class="node-icon">💻</div>
+                    <div class="node-info">
+                      <div class="node-label">You</div>
+                      <div class="node-name">Local</div>
+                    </div>
+                    <div class="node-status connected"></div>
+                  </div>
+                  <div class="circuit-connection">
+                    <div class="connection-line"></div>
+                    <div class="connection-protocol">WebRTC</div>
+                  </div>
+                </div>
+
+                <div class="circuit-segment">
+                  <div class="circuit-node snowflake" id="node-snowflake">
+                    <div class="node-icon">❄️</div>
+                    <div class="node-info">
+                      <div class="node-label">Snowflake</div>
+                      <div class="node-name" id="snowflake-name">Waiting...</div>
+                    </div>
+                    <div class="node-status" id="snowflake-status"></div>
+                  </div>
+                  <div class="circuit-connection">
+                    <div class="connection-line"></div>
+                    <div class="connection-protocol">Tor</div>
+                  </div>
+                </div>
+
+                <div class="circuit-segment">
+                  <div class="circuit-node guard" id="node-guard">
+                    <div class="node-icon">🛡️</div>
+                    <div class="node-info">
+                      <div class="node-label">Guard</div>
+                      <div class="node-name" id="guard-name">Waiting...</div>
+                    </div>
+                    <div class="node-status" id="guard-status"></div>
+                  </div>
+                  <div class="circuit-connection">
+                    <div class="connection-line"></div>
+                    <div class="connection-protocol">Tor</div>
+                  </div>
+                </div>
+
+                <div class="circuit-segment">
+                  <div class="circuit-node middle" id="node-middle">
+                    <div class="node-icon">🔐</div>
+                    <div class="node-info">
+                      <div class="node-label">Middle</div>
+                      <div class="node-name" id="middle-name">Waiting...</div>
+                    </div>
+                    <div class="node-status" id="middle-status"></div>
+                  </div>
+                  <div class="circuit-connection">
+                    <div class="connection-line"></div>
+                    <div class="connection-protocol">Tor</div>
+                  </div>
+                </div>
+
+                <div class="circuit-segment">
+                  <div class="circuit-node exit" id="node-exit">
+                    <div class="node-icon">🌐</div>
+                    <div class="node-info">
+                      <div class="node-label">Exit</div>
+                      <div class="node-name" id="exit-name">Waiting...</div>
+                    </div>
+                    <div class="node-status" id="exit-status"></div>
+                  </div>
+                  <div class="circuit-connection">
+                    <div class="connection-line"></div>
+                    <div class="connection-protocol" id="dest-protocol">HTTPS</div>
+                  </div>
+                </div>
+
+                <div class="circuit-segment last">
+                  <div class="circuit-node destination" id="node-destination">
+                    <div class="node-icon">🎯</div>
+                    <div class="node-info">
+                      <div class="node-label">Destination</div>
+                      <div class="node-name" id="destination-name">Not set</div>
+                    </div>
+                    <div class="node-status" id="destination-status"></div>
+                  </div>
+                </div>
+              </div>
+            </div>
+
+            <div class="log-panel" id="log-panel">
+              <div class="log-header">
+                <span class="log-title">Connection Log</span>
+                <button class="log-clear" id="log-clear">Clear</button>
+              </div>
+              <div class="log-content" id="log-content"></div>
+            </div>
+          </div>
+
+          <!-- Browser Mode -->
+          <div class="mode-panel" id="mode-browser" hidden>
+            <div class="browser-panel">
+              <div class="browser-info-bar">
+                <span class="browser-info"
+                  >Fetched via Tor · External resources blocked · Links load through Tor</span
+                >
+              </div>
+              <!--
+                Sandbox configuration:
+                - allow-same-origin: Allows parent to access contentDocument for click interception.
+                  This is safe because allow-scripts is NOT set, so no JS runs in the iframe.
+                  Inline event handlers (onclick, etc.) also don't work without allow-scripts.
+                - All other permissions denied: no scripts, forms, popups, navigation, etc.
+              -->
+              <iframe
+                id="content-iframe"
+                sandbox="allow-same-origin"
+                class="content-iframe"
+              ></iframe>
+            </div>
+          </div>
+        </div>
+      </main>
+
+      <footer class="footer">
+        <p>Powered by <strong>Snowflake</strong> · Traffic routed through Tor</p>
+      </footer>
+    </div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

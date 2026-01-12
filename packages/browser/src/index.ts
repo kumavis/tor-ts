@@ -5,11 +5,17 @@
  * BOOTSTRAP FLOW:
  * 1. Connect to Snowflake via WebSocket → get relay identity from TLS handshake
  * 2. Build 1-hop bootstrap circuit using CREATE_FAST (no onion key needed)
- * 3. Fetch directory consensus over encrypted bootstrap circuit
+ * 3. Fetch directory consensus over encrypted bootstrap circuit (or use cached)
  * 4. Build full 3-hop circuit using relay info from consensus
  *
  * This is safe because all directory lookups happen over an encrypted Tor circuit,
  * not via plain HTTP or CORS proxies.
+ *
+ * CONSENSUS CACHING:
+ * The consensus document (~3.5MB) is cached in sessionStorage following Tor spec:
+ * - Cached consensus is used while it's "fresh" (before fresh-until timestamp)
+ * - Expired consensus is automatically re-fetched
+ * - Cache can be manually cleared via clearCachedConsensus()
  */
 
 import { Circuit } from 'tor/circuit';
@@ -23,6 +29,7 @@ import type { DownloadProgress } from 'tor/directory-client';
 import { pickRelayWithFlags } from 'tor/build-circuit/util';
 import { SnowflakeBrowserChannel } from './snowflake-channel.ts';
 import { fetchHtml } from './http-fetch.ts';
+import { getCachedConsensus, cacheConsensus } from './consensus-cache.ts';
 
 export { SnowflakeBrowserChannel } from './snowflake-channel.ts';
 export { fetchViaTor, fetchHtml } from './http-fetch.ts';
@@ -30,6 +37,7 @@ export type { TorFetchResponse } from './http-fetch.ts';
 export { pickRelayWithFlags } from 'tor/build-circuit/util';
 export type { MicroDescNodeInfo } from 'tor/build-circuit/directory';
 export type { DownloadProgress } from 'tor/directory-client';
+export { clearCachedConsensus, getConsensusCacheStatus } from './consensus-cache.ts';
 
 export type BrowserCircuitOptions = {
   relayUrl?: string;
@@ -49,6 +57,13 @@ export type BrowserCircuitOptions = {
    * Default: false
    */
   dangerouslySkipSignatureVerification?: boolean;
+  /**
+   * Skip using cached consensus from sessionStorage.
+   * Forces a fresh download even if a valid cached consensus exists.
+   *
+   * Default: false
+   */
+  skipConsensusCache?: boolean;
 };
 
 export type BrowserCircuit = {
@@ -60,6 +75,7 @@ export type BrowserCircuit = {
 /**
  * Connect to the Tor network via Snowflake and build a 3-hop circuit.
  * Uses safe bootstrap: directory lookups happen over an encrypted circuit.
+ * Caches consensus in sessionStorage following Tor spec validity periods.
  * Returns a circuit that can be used to fetch content anonymously.
  */
 export async function connectBrowserCircuit(
@@ -70,6 +86,7 @@ export async function connectBrowserCircuit(
     onStatus,
     onConsensusProgress,
     dangerouslySkipSignatureVerification = false,
+    skipConsensusCache = false,
   } = options;
 
   const log = (msg: string) => {
@@ -99,12 +116,27 @@ export async function connectBrowserCircuit(
   const bootstrapCircuit = new Circuit({ path: [entryPeerInfo], channel });
   await bootstrapCircuit.connect();
 
-  // Step 3: Fetch directory consensus over encrypted bootstrap circuit
+  // Directory client for fetching consensus and relay descriptors
   // Use a much longer timeout for browser environment where JS TLS is slower.
-  // The full consensus is ~3.35MB and browser crypto runs at ~4KB/s = ~14 minutes.
-  log('Downloading network consensus (via Tor circuit)...');
   const dirClient = new DirectoryClient(bootstrapCircuit, { timeoutMs: 600_000 });
-  const microDescContent = await dirClient.downloadMicrodescConsensus(onConsensusProgress);
+
+  // Step 3: Get consensus - either from cache or download
+  let microDescContent: string;
+  const cachedConsensus = skipConsensusCache ? undefined : getCachedConsensus();
+
+  if (cachedConsensus) {
+    log('Using cached network consensus (still fresh)');
+    microDescContent = cachedConsensus.content;
+  } else {
+    // Fetch directory consensus over encrypted bootstrap circuit
+    // The full consensus is ~3.35MB and browser crypto runs at ~4KB/s = ~14 minutes.
+    log('Downloading network consensus (via Tor circuit)...');
+    microDescContent = await dirClient.downloadMicrodescConsensus(onConsensusProgress);
+
+    // Cache the consensus for future use
+    cacheConsensus(microDescContent);
+  }
+
   // Use async version for browser (Web Crypto API is async)
   const consensus = await parseMicroDescConsensusAsync(microDescContent, {
     dangerouslySkipSignatureVerification,

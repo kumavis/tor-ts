@@ -1,6 +1,6 @@
-# Browser-in-Browser Tor Proxy
+# TamanegiBrowser
 
-A static website that uses Snowflake to browse web pages through Tor entirely in the browser.
+A static website that uses Snowflake to browse web pages through Tor entirely in the browser. ("Tamanegi" 🧅 is Japanese for "onion")
 
 ## Features
 
@@ -32,7 +32,7 @@ A static website that uses Snowflake to browse web pages through Tor entirely in
 yarn install
 
 # Start development server
-cd examples/browser-proxy
+cd examples/tamanegi-browser
 yarn dev
 ```
 
