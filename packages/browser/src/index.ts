@@ -39,6 +39,22 @@ export type { MicroDescNodeInfo } from 'tor/build-circuit/directory';
 export type { DownloadProgress } from 'tor/directory-client';
 export { clearCachedConsensus, getConsensusCacheStatus } from './consensus-cache.ts';
 
+// Hidden service (.onion) support
+export {
+  connectToHiddenService,
+  parseOnionV3Address,
+  isOnionAddress,
+  computeTimePeriod,
+  deriveBlindedPublicKey,
+  deriveSubcredential,
+} from './hidden-service.ts';
+export type {
+  HiddenServiceConnection,
+  HiddenServiceConnectionOptions,
+  HiddenServiceDescriptor,
+  IntroPoint,
+} from './hidden-service.ts';
+
 export type BrowserCircuitOptions = {
   relayUrl?: string;
   onStatus?: (status: string) => void;
