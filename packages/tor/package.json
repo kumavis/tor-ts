@@ -24,6 +24,7 @@
     "./messaging": "./src/messaging.ts",
     "./http-parse": "./src/http-parse.ts",
     "./directory-client": "./src/directory-client.ts",
+    "./socks": "./src/socks.ts",
     "./build-circuit/chutney": "./src/build-circuit/chutney.ts",
     "./build-circuit/directory": "./src/build-circuit/directory.ts",
     "./build-circuit/mainnet": "./src/build-circuit/mainnet.ts",
@@ -39,7 +40,7 @@
     "import:check": "node --experimental-transform-types scripts/import-check.ts",
     "test:dev": "pm2 start --no-daemon scripts/test-dev.config.cjs",
     "update:fallback-dirs": "node --experimental-transform-types scripts/update-fallback-dirs.ts",
-    "test:live": "echo 'No live tests'"
+    "test:live": "TOR_LIVE_TEST=1 node --experimental-transform-types scripts/live-socks-test.ts"
   },
   "ava": {
     "extensions": {
