@@ -46,8 +46,8 @@ jobs:
       - name: Install dependencies
         run: yarn install --frozen-lockfile
 
-      - name: Build browser-proxy example
-        run: yarn workspace browser-proxy build
+      - name: Build tamanegi-browser example
+        run: yarn workspace tamanegi-browser build
         env:
           # Set base path for GitHub Pages (will be /<repo-name>/)
           VITE_BASE_PATH: /${{ github.event.repository.name }}/
@@ -58,7 +58,7 @@ jobs:
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
         with:
-          path: examples/browser-proxy/dist
+          path: examples/tamanegi-browser/dist
 
   deploy:
     environment:
