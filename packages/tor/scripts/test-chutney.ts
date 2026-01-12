@@ -70,13 +70,11 @@ server.on('connection', async (socket) => {
     console.log(`Received data from end: ${data.length}`);
     socket.write(data);
   });
-  circuitStream.on('end', (err) => {
-    if (err) {
-      console.log('circuit disconnected with error');
-      console.error(err);
-      socket.end();
-      return;
-    }
+  circuitStream.on('error', (err) => {
+    console.log('circuit disconnected with error:', err.message);
+    socket.end();
+  });
+  circuitStream.on('end', () => {
     console.log('circuit disconnected');
     socket.end();
   });
