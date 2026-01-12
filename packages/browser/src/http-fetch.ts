@@ -196,7 +196,7 @@ async function wrapWithTLS(stream: CircuitStream, host: string): Promise<Transpo
           });
         }
       },
-      on(event: string, listener: (arg?: unknown) => void) {
+      on: ((event: string, listener: (...args: unknown[]) => void) => {
         if (event === 'data') {
           dataListeners.push(listener as (chunk: Buffer) => void);
           // Flush any queued data to the new listener
@@ -214,7 +214,7 @@ async function wrapWithTLS(stream: CircuitStream, host: string): Promise<Transpo
         } else if (event === 'error') {
           errorListeners.push(listener as (err: Error) => void);
         }
-      },
+      }) as Transport['on'],
       removeAllListeners() {
         dataListeners.length = 0;
         endListeners.length = 0;
@@ -248,9 +248,9 @@ function wrapRawStream(stream: CircuitStream): Transport {
         stream.emit('error', err);
       });
     },
-    on(event: string, listener: (arg?: unknown) => void) {
+    on: ((event: string, listener: (...args: unknown[]) => void) => {
       stream.on(event, listener);
-    },
+    }) as Transport['on'],
     removeAllListeners() {
       stream.removeAllListeners();
     },

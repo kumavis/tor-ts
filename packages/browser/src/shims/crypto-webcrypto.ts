@@ -166,17 +166,17 @@ class BrowserPublicKey {
     if (this.pem.includes('RSA PUBLIC KEY')) {
       // Convert PKCS#1 to SPKI format
       const spkiDer = this.pkcs1ToSpki(this.der);
-      return crypto.subtle.importKey('spki', spkiDer, algorithm, true, ['verify']);
+      return crypto.subtle.importKey('spki', spkiDer as BufferSource, algorithm, true, ['verify']);
     }
 
     // Otherwise try as SPKI directly
-    return crypto.subtle.importKey('spki', this.der, algorithm, true, ['verify']);
+    return crypto.subtle.importKey('spki', this.der as BufferSource, algorithm, true, ['verify']);
   }
 
   private async tryImportPkcs1(algorithm: RsaHashedImportParams): Promise<CryptoKey> {
     // Convert PKCS#1 to SPKI and import
     const spkiDer = this.pkcs1ToSpki(this.der);
-    return crypto.subtle.importKey('spki', spkiDer, algorithm, true, ['verify']);
+    return crypto.subtle.importKey('spki', spkiDer as BufferSource, algorithm, true, ['verify']);
   }
 
   /**
@@ -338,7 +338,7 @@ class BrowserVerifier {
       const result = await crypto.subtle.verify(
         'RSASSA-PKCS1-v1_5',
         cryptoKey,
-        signature,
+        signature as BufferSource,
         combined
       );
       return result;
