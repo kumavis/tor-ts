@@ -7,7 +7,6 @@
  */
 
 import test from 'ava';
-import { SnowflakeWsStack } from '../snowflake-ws-stack.ts';
 import { SnowflakeTlsChannelConnection } from '../tor-channel.ts';
 import { Circuit } from 'tor/circuit';
 import type { PeerInfo } from 'tor/circuit';
@@ -18,14 +17,9 @@ import type { DownloadProgress } from 'tor/directory-client';
 test('downloads full consensus via circuit SENDME flow control', async (t) => {
   const relayUrl = 'wss://snowflake.torproject.net/';
 
-  console.log('[test] Connecting to Snowflake...');
-  const stack = new SnowflakeWsStack({ relayUrl });
-  await stack.connect();
-  console.log('[test] Snowflake connected');
-
   console.log('[test] Creating Tor channel...');
-  const channel = new SnowflakeTlsChannelConnection(stack);
-  await channel.connect();
+  const channel = new SnowflakeTlsChannelConnection();
+  await channel.connect({ relayUrl });
   console.log('[test] Tor channel connected');
 
   const entryRsaIdDigest = channel.peerIdentity?.rsaIdDigest;

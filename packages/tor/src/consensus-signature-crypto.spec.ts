@@ -458,7 +458,7 @@ test.failing('Browser shim - full verification flow', async (t) => {
       const valid = await crypto.subtle.verify(
         'RSASSA-PKCS1-v1_5',
         cryptoKey,
-        sig.signature,
+        new Uint8Array(sig.signature),
         signedData
       );
 
