@@ -47,6 +47,31 @@
           </div>
         </div>
 
+        <div class="consensus-panel" id="consensus-panel" hidden>
+          <div class="consensus-header">
+            <span class="consensus-title">📥 Downloading Network Consensus</span>
+          </div>
+          <div class="consensus-content">
+            <div class="progress-bar-container">
+              <div class="progress-bar" id="progress-bar"></div>
+            </div>
+            <div class="progress-stats">
+              <div class="progress-stat">
+                <span class="stat-label">Downloaded</span>
+                <span class="stat-value" id="progress-bytes">0 KB</span>
+              </div>
+              <div class="progress-stat">
+                <span class="stat-label">Speed</span>
+                <span class="stat-value" id="progress-speed">-- KB/s</span>
+              </div>
+              <div class="progress-stat">
+                <span class="stat-label">ETA</span>
+                <span class="stat-value" id="progress-eta">Calculating...</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
         <div class="circuit-panel" id="circuit-panel" hidden>
           <div class="circuit-header">
             <span class="circuit-title">Circuit Path</span>

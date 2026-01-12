@@ -36,7 +36,8 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "import:check": "node --experimental-transform-types scripts/import-check.ts",
     "test:dev": "pm2 start --no-daemon scripts/test-dev.config.cjs",
-    "update:fallback-dirs": "node --experimental-transform-types scripts/update-fallback-dirs.ts"
+    "update:fallback-dirs": "node --experimental-transform-types scripts/update-fallback-dirs.ts",
+    "test:live": "echo 'No live tests'"
   },
   "ava": {
     "extensions": {

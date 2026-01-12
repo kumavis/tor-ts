@@ -7,7 +7,8 @@
   "scripts": {
     "start": "node --experimental-transform-types index.ts",
     "dev": "pm2 start --name tor-example-node-fetch --watch=../../ --no-daemon --interpreter=node --node-args=--experimental-transform-types index.ts",
-    "test": "echo 'No tests'"
+    "test": "echo 'No tests'",
+    "test:live": "echo 'No live tests'"
   },
   "dependencies": {
     "node-fetch": "^3.3.2",

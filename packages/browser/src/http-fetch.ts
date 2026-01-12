@@ -2,6 +2,11 @@
  * HTTP/1.1 fetch implementation over Tor circuit streams.
  * Manually constructs HTTP requests and parses responses.
  *
+ * ARCHITECTURE:
+ * For HTTPS URLs, TLS is performed INSIDE the Tor stream (not by the exit node).
+ * This matches how Tor works: the exit node opens a raw TCP connection, and
+ * the client is responsible for TLS if connecting to port 443.
+ *
  * LIMITATIONS:
  * - Responses are decoded as UTF-8 text. Binary responses (images, etc.) will be corrupted.
  *   This is intentional for the HTML-fetching use case. For binary data, use a Buffer-based API.
@@ -17,6 +22,11 @@ import {
   decodeChunked,
   isChunkedComplete,
 } from 'tor/http-parse';
+import { makeTLSClient, setCryptoImplementation } from '@reclaimprotocol/tls';
+import { webcryptoCrypto } from '@reclaimprotocol/tls/webcrypto';
+
+// Use the webcrypto implementation for TLS
+setCryptoImplementation(webcryptoCrypto);
 
 export interface TorFetchResponse {
   status: number;
@@ -26,8 +36,233 @@ export interface TorFetchResponse {
 }
 
 /**
+ * Interface for a readable/writable transport (either raw stream or TLS-wrapped).
+ */
+interface Transport {
+  write(data: Buffer): void;
+  on(event: 'data', listener: (chunk: Buffer) => void): void;
+  on(event: 'end', listener: () => void): void;
+  on(event: 'error', listener: (err: Error) => void): void;
+  removeAllListeners(): void;
+  destroy(err?: Error): void;
+}
+
+/**
+ * Wrap a CircuitStream with TLS, returning a transport that can be used for HTTP.
+ * This performs the TLS handshake inside the Tor stream.
+ */
+async function wrapWithTLS(stream: CircuitStream, host: string): Promise<Transport> {
+  return new Promise((resolve, reject) => {
+    const dataListeners: Array<(chunk: Buffer) => void> = [];
+    const endListeners: Array<() => void> = [];
+    const errorListeners: Array<(err: Error) => void> = [];
+    // Queue for data that arrives before any listeners are registered
+    const pendingDataQueue: Buffer[] = [];
+    let handshakeComplete = false;
+    let ended = false;
+    let endPending = false; // Track if end should be fired when listeners are added
+    let rejected = false; // Prevent double-rejection
+
+    const safeReject = (err: Error) => {
+      if (!rejected && !handshakeComplete) {
+        rejected = true;
+        reject(err);
+      }
+    };
+
+    const tls = makeTLSClient({
+      host,
+      // For external HTTPS sites, we DO want to verify certificates
+      // (unlike Tor relay connections which use self-signed certs)
+      verifyServerCertificate: true,
+
+      // Write TLS packets to the Tor stream
+      write: async (packet) => {
+        const data = Buffer.concat([Buffer.from(packet.header), Buffer.from(packet.content)]);
+        await stream.write(data);
+      },
+
+      // Handle handshake completion
+      onHandshake: () => {
+        handshakeComplete = true;
+        resolve(transport);
+      },
+
+      // Handle decrypted application data
+      onApplicationData: (plaintext: Uint8Array) => {
+        const buf = Buffer.from(plaintext);
+        if (dataListeners.length > 0) {
+          for (const listener of dataListeners) {
+            listener(buf);
+          }
+        } else {
+          // Queue data if no listeners registered yet
+          pendingDataQueue.push(buf);
+        }
+      },
+
+      // Handle TLS end
+      onTlsEnd: (error?: Error) => {
+        if (error && !handshakeComplete) {
+          safeReject(error);
+        } else if (error) {
+          for (const listener of errorListeners) {
+            listener(error);
+          }
+        }
+        if (!ended) {
+          ended = true;
+          if (endListeners.length > 0) {
+            for (const listener of endListeners) {
+              listener();
+            }
+          } else {
+            // Mark that end should be fired when listeners are added
+            endPending = true;
+          }
+        }
+      },
+
+      // Ignore certificate events and session tickets
+      onRecvCertificates: () => {},
+      onSessionTicket: () => {},
+    });
+
+    // Queue to serialize TLS processing (handleReceivedBytes is async)
+    let processingQueue: Promise<void> = Promise.resolve();
+
+    // Forward data from the Tor stream to the TLS client
+    stream.on('data', (chunk: Buffer) => {
+      if (!ended) {
+        // Chain processing to ensure order and completion
+        processingQueue = processingQueue.then(async () => {
+          if (!ended) {
+            try {
+              await tls.handleReceivedBytes(chunk);
+            } catch (err) {
+              if (!handshakeComplete) {
+                safeReject(err as Error);
+              } else {
+                for (const listener of errorListeners) {
+                  listener(err as Error);
+                }
+              }
+            }
+          }
+        });
+      }
+    });
+
+    stream.on('end', () => {
+      if (!ended) {
+        // Wait for any pending TLS processing to complete before firing 'end'
+        processingQueue.then(() => {
+          if (!ended) {
+            ended = true;
+            // If handshake not complete, this is an error
+            if (!handshakeComplete) {
+              safeReject(new Error('Connection closed before TLS handshake completed'));
+            }
+            if (endListeners.length > 0) {
+              for (const listener of endListeners) {
+                listener();
+              }
+            } else {
+              endPending = true;
+            }
+          }
+        });
+      }
+    });
+
+    stream.on('error', (err: Error) => {
+      if (!handshakeComplete) {
+        safeReject(err);
+      } else {
+        for (const listener of errorListeners) {
+          listener(err);
+        }
+      }
+    });
+
+    // Create the transport interface
+    const transport: Transport = {
+      write(data: Buffer) {
+        if (!ended) {
+          tls.write(data).catch((err) => {
+            for (const listener of errorListeners) {
+              listener(err);
+            }
+          });
+        }
+      },
+      on(event: string, listener: (arg?: unknown) => void) {
+        if (event === 'data') {
+          dataListeners.push(listener as (chunk: Buffer) => void);
+          // Flush any queued data to the new listener
+          while (pendingDataQueue.length > 0) {
+            const data = pendingDataQueue.shift()!;
+            (listener as (chunk: Buffer) => void)(data);
+          }
+        } else if (event === 'end') {
+          endListeners.push(listener as () => void);
+          // Fire end if it was pending
+          if (endPending) {
+            endPending = false;
+            (listener as () => void)();
+          }
+        } else if (event === 'error') {
+          errorListeners.push(listener as (err: Error) => void);
+        }
+      },
+      removeAllListeners() {
+        dataListeners.length = 0;
+        endListeners.length = 0;
+        errorListeners.length = 0;
+        pendingDataQueue.length = 0;
+        stream.removeAllListeners();
+      },
+      destroy(err?: Error) {
+        ended = true;
+        tls.end().catch(() => {});
+        stream.destroy(err);
+      },
+    };
+
+    // Start the TLS handshake
+    tls.startHandshake().catch((err) => {
+      if (!handshakeComplete) {
+        safeReject(err);
+      }
+    });
+  });
+}
+
+/**
+ * Create a simple transport wrapper around a raw CircuitStream (for HTTP).
+ */
+function wrapRawStream(stream: CircuitStream): Transport {
+  return {
+    write(data: Buffer) {
+      stream.write(data).catch((err) => {
+        stream.emit('error', err);
+      });
+    },
+    on(event: string, listener: (arg?: unknown) => void) {
+      stream.on(event, listener);
+    },
+    removeAllListeners() {
+      stream.removeAllListeners();
+    },
+    destroy(err?: Error) {
+      stream.destroy(err);
+    },
+  };
+}
+
+/**
  * Fetch a URL over a Tor circuit.
- * Supports HTTP and HTTPS (TLS is handled by the exit node).
+ * Supports HTTP and HTTPS (TLS is performed inside the Tor stream for HTTPS).
  *
  * Note: Does not follow redirects. Check response.status for 3xx codes
  * and handle manually if redirect-following is needed.
@@ -39,7 +274,8 @@ export async function fetchViaTor(
 ): Promise<TorFetchResponse> {
   const parsedUrl = new URL(url);
   const host = parsedUrl.hostname;
-  const port = parsedUrl.port || (parsedUrl.protocol === 'https:' ? '443' : '80');
+  const isHttps = parsedUrl.protocol === 'https:';
+  const port = parsedUrl.port || (isHttps ? '443' : '80');
   const path = parsedUrl.pathname + parsedUrl.search;
   const method = options.method || 'GET';
 
@@ -49,6 +285,14 @@ export async function fetchViaTor(
 
   // Wait for connection
   await stream.connectionPromiseKit.promise;
+
+  // For HTTPS, wrap with TLS. For HTTP, use raw stream.
+  let transport: Transport;
+  if (isHttps) {
+    transport = await wrapWithTLS(stream, host);
+  } else {
+    transport = wrapRawStream(stream);
+  }
 
   // Build HTTP request
   const requestHeaders: Record<string, string> = {
@@ -67,20 +311,20 @@ export async function fetchViaTor(
   request += '\r\n';
 
   // Send request
-  await stream.write(Buffer.from(request, 'utf-8'));
+  transport.write(Buffer.from(request, 'utf-8'));
 
   // Read response with timeout
   const timeout = options.timeout || 30000;
-  const response = await readHttpResponse(stream, timeout);
+  const response = await readHttpResponse(transport, timeout);
 
   return response;
 }
 
 /**
- * Read and parse HTTP response from a circuit stream.
+ * Read and parse HTTP response from a transport (raw or TLS-wrapped stream).
  * Uses shared parsing utilities from tor/http-parse.
  */
-async function readHttpResponse(stream: CircuitStream, timeout: number): Promise<TorFetchResponse> {
+async function readHttpResponse(transport: Transport, timeout: number): Promise<TorFetchResponse> {
   return new Promise<TorFetchResponse>((resolve, reject) => {
     let data = Buffer.alloc(0);
     let headersComplete = false;
@@ -92,16 +336,16 @@ async function readHttpResponse(stream: CircuitStream, timeout: number): Promise
     let bodyStart = 0;
 
     const timeoutId = setTimeout(() => {
-      stream.destroy(new Error('Response timeout'));
+      transport.destroy(new Error('Response timeout'));
       reject(new Error('Response timeout'));
     }, timeout);
 
     const cleanup = () => {
       clearTimeout(timeoutId);
-      stream.removeAllListeners();
+      transport.removeAllListeners();
     };
 
-    stream.on('data', (chunk: Buffer) => {
+    transport.on('data', (chunk: Buffer) => {
       data = Buffer.concat([data, chunk]);
 
       if (!headersComplete) {
@@ -163,7 +407,7 @@ async function readHttpResponse(stream: CircuitStream, timeout: number): Promise
       }
     });
 
-    stream.on('end', () => {
+    transport.on('end', () => {
       cleanup();
       if (headersComplete) {
         const bodyData = data.subarray(bodyStart);
@@ -178,7 +422,7 @@ async function readHttpResponse(stream: CircuitStream, timeout: number): Promise
       }
     });
 
-    stream.on('error', (err: Error) => {
+    transport.on('error', (err: Error) => {
       cleanup();
       reject(err);
     });

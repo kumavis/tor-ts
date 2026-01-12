@@ -18,6 +18,8 @@ export default defineConfig({
       },
       overrides: {
         'stream/web': 'web-streams-polyfill/dist/ponyfill.mjs',
+        // Use our crypto shim that provides webcrypto export for SubtleCrypto TLS
+        crypto: path.resolve(__dirname, 'src/shims/crypto-webcrypto.ts'),
       },
     }),
   ],

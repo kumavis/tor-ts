@@ -5,28 +5,28 @@
  * Modern Tor relays require TLS 1.3, which this implementation fully supports.
  *
  * Key features:
- * - Pure JavaScript TLS 1.3 implementation (no WASM required)
- * - Uses WebCrypto for cryptographic operations where available
+ * - TLS 1.3 implementation using browser's native SubtleCrypto for performance
+ * - Hardware-accelerated AES-GCM encryption/decryption
  * - Provides Node.js-compatible TLS socket interface
  * - Extracts raw DER certificates for Tor CERTS cell verification
+ *
+ * Note: @reclaimprotocol/tls offers two crypto backends:
+ * - webcryptoCrypto: Uses SubtleCrypto (faster, hardware-accelerated)
+ * - pureJsCrypto: Uses @noble libraries (slower, pure JS)
+ *
+ * We use webcryptoCrypto with a shim that provides the browser's native
+ * crypto.subtle as webcrypto.subtle (matching Node.js's crypto module export).
+ * The Tor relay uses TLS_AES_256_GCM_SHA384 which is fully supported.
  */
 
 import { makeTLSClient, setCryptoImplementation } from '@reclaimprotocol/tls';
 import type { TLSClientOptions, TLSSessionTicket, X509Certificate } from '@reclaimprotocol/tls';
-import { pureJsCrypto } from '@reclaimprotocol/tls/purejs-crypto';
+import { webcryptoCrypto } from '@reclaimprotocol/tls/webcrypto';
 import { EventEmitter } from 'events';
 import { Duplex } from 'stream';
 
-// Initialize crypto implementation with browser-compatible random
-const cryptoImpl = {
-  ...pureJsCrypto,
-  randomBytes: (length: number): Uint8Array => {
-    const array = new Uint8Array(length);
-    crypto.getRandomValues(array);
-    return array;
-  },
-};
-setCryptoImplementation(cryptoImpl);
+// Use the webcrypto implementation (our shim provides browser's crypto as webcrypto)
+setCryptoImplementation(webcryptoCrypto);
 
 export interface TLSConnectOptions {
   socket?: Duplex;

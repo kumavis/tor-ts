@@ -169,6 +169,68 @@ class Hop {
     const integrity = this.cipherPair.forward.digest.copy().digest().subarray(0, 4);
     return integrity;
   }
+
+  // Track cell counts for circuit SENDME
+  private backwardCellCount = 0; // All relay cells received
+  private dataCellsSinceLastCircuitSendme = 0; // Only DATA cells, for triggering SENDME
+
+  /**
+   * Update the backward digest after receiving a relay cell.
+   * Per proposal 289, the digest is computed over ALL relay cell payloads.
+   *
+   * IMPORTANT: Per tor-spec 6.1 and the C/Rust implementations, ONLY the digest
+   * field (bytes 5-8) is zeroed for digest computation. The recognized field
+   * (bytes 1-2) is NOT zeroed - it's included as-is in the hash (and will be 0
+   * since that's how we detected the cell was for us).
+   *
+   * This updates the digest but does NOT trigger SENDME. Use recordDataCellReceived()
+   * for that.
+   */
+  witnessBackwardPayload(relayCellPayload: Buffer): void {
+    this.backwardCellCount++;
+
+    // Update running digest with the payload, zeroing ONLY the digest field.
+    // Per tor-spec 6.1 and proposal 289: digest is computed with the digest
+    // field (bytes 5-8) zeroed. The recognized field is NOT zeroed.
+    const payloadForDigest = Buffer.from(relayCellPayload);
+    // Zero ONLY the digest/integrity field (bytes 5-8)
+    payloadForDigest[5] = 0;
+    payloadForDigest[6] = 0;
+    payloadForDigest[7] = 0;
+    payloadForDigest[8] = 0;
+    this.cipherPair.backward.digest.update(payloadForDigest);
+  }
+
+  /**
+   * Record that a DATA cell was received for circuit-level flow control.
+   * Per tor-spec 7.3, circuit SENDME is triggered by DATA cells only,
+   * not all relay cells. But the SENDME digest comes from the running
+   * digest which includes ALL cells.
+   *
+   * Returns the digest to use for circuit SENDME if we've hit 100 DATA cells.
+   */
+  recordDataCellReceived(): Buffer | undefined {
+    this.dataCellsSinceLastCircuitSendme++;
+
+    // Check if we need to send circuit SENDME (every 100 DATA cells)
+    // Per proposal 289, the digest to use is from the current running digest
+    // which includes ALL relay cells received so far.
+    if (this.dataCellsSinceLastCircuitSendme >= CIRCUIT_SENDME_INCREMENT) {
+      this.dataCellsSinceLastCircuitSendme = 0;
+      const digest = this.cipherPair.backward.digest.copy().digest();
+      return digest;
+    }
+
+    return undefined;
+  }
+
+  /**
+   * Get the current backward digest for SENDME authentication.
+   * Per proposal 289, this is the last 20 bytes of the running digest.
+   */
+  getBackwardDigest(): Buffer {
+    return this.cipherPair.backward.digest.copy().digest();
+  }
   createClientHandshake(): HopClientHandshake {
     // If we don't have the peer's ntor onion key, fall back to CREATE_FAST.
     if (this.peerInfo.onionKey.length !== 32) {
@@ -240,6 +302,19 @@ class VirtualHop extends Hop {
   }
 }
 
+// Flow control constants (per Tor spec section 7.3)
+// Stream-level window: start at 500, send SENDME every 50 cells
+const STREAM_WINDOW_START = 500;
+const STREAM_SENDME_INCREMENT = 50;
+
+// Circuit-level window: start at 1000
+// Per proposal 289, send SENDME every 100 cells (but some relays may use different values)
+const CIRCUIT_WINDOW_START = 1000;
+const CIRCUIT_SENDME_INCREMENT = 100;
+
+// SENDME v1 authentication (proposal 289)
+const SENDME_VERSION = 0x01;
+const SENDME_DIGEST_LEN = 20;
 export class CircuitStream extends EventEmitter {
   streamId!: number;
   destination!: string;
@@ -247,20 +322,50 @@ export class CircuitStream extends EventEmitter {
   connectionPromiseKit = deferred<void>();
   source: ReadableStream;
   sink: WritableStream;
+
+  // Flow control: track cells received since last SENDME
+  deliverWindow = STREAM_WINDOW_START;
+  cellsSinceLastSendme = 0;
+
   constructor() {
     super();
     const { source, sink } = createSourceAndSinkForCircuit(this);
     this.source = source;
     this.sink = sink;
+    // Prevent unhandled error events - errors are also reported via connectionPromiseKit
+    this.on('error', (err) => {
+      console.warn(`[CircuitStream ${this.streamId}] error:`, err.message);
+    });
+    // Note: deferred() now includes a built-in catch handler to prevent unhandled rejection warnings.
   }
   write!: (data: Buffer) => Promise<void>;
+
+  // Called by Circuit when a DATA cell is received for this stream
+  // Returns true if we should send a SENDME
+  recordDeliveredCell(): boolean {
+    this.cellsSinceLastSendme++;
+    this.deliverWindow--;
+
+    // Send SENDME every STREAM_SENDME_INCREMENT cells
+    if (this.cellsSinceLastSendme >= STREAM_SENDME_INCREMENT) {
+      this.cellsSinceLastSendme = 0;
+      this.deliverWindow += STREAM_SENDME_INCREMENT;
+      return true; // Signal that we should send a SENDME
+    }
+    return false;
+  }
+
   close() {
     this.destroy();
   }
   destroy(err?: Error) {
-    if (err) this.connectionPromiseKit.reject(err);
+    if (this.destroyed) return;
     this.destroyed = true;
-    this.emit('end', err);
+    if (err) {
+      this.connectionPromiseKit.reject(err);
+      this.emit('error', err);
+    }
+    this.emit('end');
   }
 }
 
@@ -273,6 +378,21 @@ export class Circuit extends EventEmitter {
   lastStreamId = 0;
   streams: Array<CircuitStream> = [];
   private loggedIgnoredRelayCommands = new Set<number>();
+
+  // Circuit-level flow control
+  private circuitDeliverWindow = CIRCUIT_WINDOW_START;
+  private circuitCellsSinceLastSendme = 0;
+  private circuitSendmeCount = 0;
+
+  // SENDME queue to prevent race conditions
+  // For circuit SENDME, we include the digest captured at queue time
+  private sendmeQueue: Array<{
+    type: 'stream' | 'circuit';
+    stream?: CircuitStream;
+    hop: Hop;
+    digest?: Buffer; // For circuit SENDME: digest at time of queueing
+  }> = [];
+  private sendmeProcessing = false;
 
   constructor({ path, channel }: { path: Array<PeerInfo>; channel: ChannelConnection }) {
     super();
@@ -385,7 +505,11 @@ export class Circuit extends EventEmitter {
   receiveMessage(message: MessageCell) {
     switch (message.command) {
       case MessageCellType.RELAY: {
-        this.receiveRelayMessage(message.message as CellRelayUnparsed);
+        // Note: receiveRelayMessage is async but we don't await it here to avoid
+        // blocking the message processing loop. Errors are handled within the method.
+        this.receiveRelayMessage(message.message as CellRelayUnparsed).catch((err) => {
+          console.warn('Error in receiveRelayMessage:', err.message);
+        });
         break;
       }
       case MessageCellType.CREATED_FAST: {
@@ -436,8 +560,10 @@ export class Circuit extends EventEmitter {
       const looksRecognized = checkRelayCellRecognized(currentPayload);
       if (looksRecognized) {
         targetHop = hop;
-        // TODO: check digest
-        // TODO: update backward digest
+        // Update backward digest for SENDME authentication (proposal 289)
+        // This must be called for every recognized cell BEFORE parsing.
+        // The digest includes ALL relay cells, but SENDME is triggered by DATA cells only.
+        hop.witnessBackwardPayload(currentPayload);
         break;
       }
     }
@@ -487,7 +613,20 @@ export class Circuit extends EventEmitter {
           throw new Error(`Got DATA for unknown streamId=${streamId}`);
         }
         console.log(`got ${data.length} bytes of data for stream ${streamId}`);
-        // console.log(data.toString('hex'))
+
+        // Stream-level flow control
+        const shouldSendStreamSendme = stream.recordDeliveredCell();
+        if (shouldSendStreamSendme) {
+          this.queueSendme('stream', targetHop, stream);
+        }
+
+        // Circuit-level flow control: count DATA cells only, but use the running
+        // digest which includes ALL relay cells.
+        const sendmeDigest = targetHop.recordDataCellReceived();
+        if (sendmeDigest) {
+          this.queueSendme('circuit', targetHop, undefined, sendmeDigest);
+        }
+
         stream.emit('data', data);
         return;
       }
@@ -556,6 +695,93 @@ export class Circuit extends EventEmitter {
     }
   }
 
+  /**
+   * Queue a SENDME to be sent and start processing if not already running.
+   * For circuit SENDME, capture the digest NOW (not when we actually send).
+   */
+  private queueSendme(
+    type: 'stream' | 'circuit',
+    hop: Hop,
+    stream?: CircuitStream,
+    digest?: Buffer
+  ): void {
+    const item: (typeof this.sendmeQueue)[number] = { type, hop };
+    if (stream !== undefined) item.stream = stream;
+    if (digest !== undefined) item.digest = digest;
+    this.sendmeQueue.push(item);
+    this.processSendmeQueue();
+  }
+
+  /**
+   * Process the SENDME queue sequentially to avoid race conditions.
+   */
+  private async processSendmeQueue(): Promise<void> {
+    if (this.sendmeProcessing) return;
+    this.sendmeProcessing = true;
+
+    while (this.sendmeQueue.length > 0) {
+      const sendme = this.sendmeQueue.shift()!;
+      try {
+        if (sendme.type === 'stream' && sendme.stream) {
+          await this.doSendStreamSendme(sendme.stream, sendme.hop);
+        } else if (sendme.type === 'circuit' && sendme.digest) {
+          await this.doSendCircuitSendme(sendme.hop, sendme.digest);
+        }
+      } catch (err) {
+        console.warn(`Failed to send ${sendme.type} SENDME:`, err);
+      }
+    }
+
+    this.sendmeProcessing = false;
+  }
+
+  /**
+   * Send a stream-level SENDME to acknowledge received cells and allow more data.
+   * Per Tor spec section 7.3, SENDME is sent after every 50 cells received.
+   */
+  private async doSendStreamSendme(stream: CircuitStream, targetHop: Hop): Promise<void> {
+    const { streamId } = stream;
+    // Stream-level SENDME has the streamId set, and empty data
+    console.log(`sending stream SENDME for stream ${streamId}`);
+    await this.sendRelayMessage(
+      {
+        streamId,
+        relayCommand: RelayCell.SENDME,
+        data: Buffer.alloc(0),
+      },
+      targetHop
+    );
+  }
+
+  /**
+   * Send a circuit-level SENDME to acknowledge received cells on the circuit.
+   * Per Tor spec section 7.3, circuit SENDME is sent after every 100 DATA cells.
+   * Per proposal 289, SENDME v1 includes authentication digest.
+   *
+   * @param targetHop - The hop to send the SENDME to
+   * @param digest - The 20-byte SHA1 digest for authentication (includes ALL relay cells)
+   */
+  private async doSendCircuitSendme(targetHop: Hop, digest: Buffer): Promise<void> {
+    this.circuitSendmeCount++;
+
+    // For SENDME v1 (authenticated), the data field contains:
+    // - VERSION (1 byte)
+    // - DATA_LEN (2 bytes)
+    // - DATA (20 bytes) = digest captured when SENDME was triggered
+    const sendmeData = Buffer.alloc(1 + 2 + SENDME_DIGEST_LEN);
+    sendmeData[0] = SENDME_VERSION;
+    sendmeData.writeUInt16BE(SENDME_DIGEST_LEN, 1);
+    digest.copy(sendmeData, 3, 0, SENDME_DIGEST_LEN);
+    await this.sendRelayMessage(
+      {
+        streamId: 0,
+        relayCommand: RelayCell.SENDME,
+        data: sendmeData,
+      },
+      targetHop
+    );
+  }
+
   // TODO: delete?
   async open(destination: string): Promise<CircuitStream> {
     const stream = this.createStream(destination);
@@ -617,11 +843,18 @@ export class Circuit extends EventEmitter {
     await stream.connectionPromiseKit.promise;
   }
 
-  destroy() {
+  /**
+   * Destroy this circuit.
+   * @param options.preserveChannel - If true, don't destroy the underlying channel.
+   *   Use this when the channel is shared with another circuit.
+   */
+  destroy(options?: { preserveChannel?: boolean }) {
     if (this.unsubscribeFromChannel) {
       this.unsubscribeFromChannel();
     }
-    this.channel.destroy();
+    if (!options?.preserveChannel) {
+      this.channel.destroy();
+    }
   }
 
   /**
@@ -670,7 +903,8 @@ function createSourceAndSinkForCircuit(circuitStream: CircuitStream) {
   // and it gets forwarded to the circuit
   const sink = new WritableStream({
     write: (chunk) => {
-      circuitStream.write(chunk);
+      // Must return the promise to properly propagate errors to the WritableStream
+      return circuitStream.write(chunk);
     },
     close: () => {
       circuitStream.close();
@@ -681,13 +915,26 @@ function createSourceAndSinkForCircuit(circuitStream: CircuitStream) {
   });
   // stream consumer can read from this
   // and it gets data forwarded from the circuit
+  let streamErrored = false;
   const source = new ReadableStream({
     start: (controller) => {
       circuitStream.on('data', (data) => {
-        controller.enqueue(data);
+        if (!streamErrored) {
+          controller.enqueue(data);
+        }
       });
       circuitStream.on('end', () => {
-        controller.close();
+        // Only close if we haven't already errored
+        if (!streamErrored) {
+          controller.close();
+        }
+      });
+      // Handle errors from the circuit stream
+      circuitStream.on('error', (err) => {
+        if (!streamErrored) {
+          streamErrored = true;
+          controller.error(err);
+        }
       });
     },
     cancel: () => {

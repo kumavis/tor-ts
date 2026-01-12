@@ -4,7 +4,7 @@
  */
 
 import { connectBrowserCircuit, fetchHtml } from 'browser';
-import type { BrowserCircuit } from 'browser';
+import type { BrowserCircuit, DownloadProgress } from 'browser';
 
 // DOM Elements
 const urlInput = document.getElementById('url-input') as HTMLInputElement;
@@ -13,6 +13,11 @@ const btnText = browseBtn.querySelector('.btn-text') as HTMLElement;
 const btnLoading = browseBtn.querySelector('.btn-loading') as HTMLElement;
 const statusIndicator = document.getElementById('status-indicator') as HTMLElement;
 const statusText = document.getElementById('status-text') as HTMLElement;
+const consensusPanel = document.getElementById('consensus-panel') as HTMLElement;
+const progressBar = document.getElementById('progress-bar') as HTMLElement;
+const progressBytes = document.getElementById('progress-bytes') as HTMLElement;
+const progressSpeed = document.getElementById('progress-speed') as HTMLElement;
+const progressEta = document.getElementById('progress-eta') as HTMLElement;
 const circuitPanel = document.getElementById('circuit-panel') as HTMLElement;
 const _middleNode = document
   .getElementById('middle-node')
@@ -69,6 +74,54 @@ function setLoading(loading: boolean): void {
   btnLoading.hidden = !loading;
 }
 
+// Format bytes to human-readable string
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+}
+
+// Format milliseconds to human-readable time
+function formatTime(ms: number): string {
+  if (ms < 1000) return 'less than 1s';
+  const seconds = Math.floor(ms / 1000);
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainingSeconds = seconds % 60;
+  return `${minutes}m ${remainingSeconds}s`;
+}
+
+// Update consensus download progress UI
+function updateConsensusProgress(progress: DownloadProgress): void {
+  consensusPanel.hidden = false;
+
+  // Update progress bar
+  // Consensus is typically ~3.35MB, use that as estimate if not provided
+  const estimatedTotal = progress.estimatedTotalBytes ?? 3.35 * 1024 * 1024;
+  const percent = Math.min((progress.bytesReceived / estimatedTotal) * 100, 100);
+  progressBar.style.width = `${percent}%`;
+
+  // Update stats
+  progressBytes.textContent = formatBytes(progress.bytesReceived);
+  progressSpeed.textContent = `${formatBytes(progress.speedBytesPerSec)}/s`;
+
+  if (progress.estimatedRemainingMs !== null && progress.estimatedRemainingMs > 0) {
+    progressEta.textContent = formatTime(progress.estimatedRemainingMs);
+  } else if (progress.speedBytesPerSec > 0) {
+    // Calculate our own ETA if not provided
+    const remainingBytes = estimatedTotal - progress.bytesReceived;
+    const etaMs = (remainingBytes / progress.speedBytesPerSec) * 1000;
+    progressEta.textContent = etaMs > 0 ? formatTime(etaMs) : 'Almost done...';
+  } else {
+    progressEta.textContent = 'Calculating...';
+  }
+}
+
+// Hide consensus panel
+function hideConsensusProgress(): void {
+  consensusPanel.hidden = true;
+}
+
 // Circuit connection
 async function connectToTor(): Promise<BrowserCircuit> {
   if (currentCircuit) {
@@ -81,9 +134,21 @@ async function connectToTor(): Promise<BrowserCircuit> {
   const circuit = await connectBrowserCircuit({
     onStatus: (status) => {
       log(status, 'info');
+      // Show consensus panel when starting download
+      if (status.includes('Downloading network consensus')) {
+        consensusPanel.hidden = false;
+      }
     },
+    onConsensusProgress: (progress) => {
+      updateConsensusProgress(progress);
+    },
+    // TODO: Browser signature verification not yet fully implemented
+    // (Web Crypto API doesn't support Tor's unprefixed PKCS#1 v1.5 signatures)
+    dangerouslySkipSignatureVerification: true,
   });
 
+  // Hide consensus panel, show circuit panel
+  hideConsensusProgress();
   currentCircuit = circuit;
   setStatus('connected', 'Connected');
   log('Successfully connected to Tor network!', 'success');
@@ -121,9 +186,15 @@ async function browsePage(url: string): Promise<void> {
     // Update destination in circuit display
     destinationNode.textContent = parsedUrl.hostname;
 
-    // Fetch the page
+    // Fetch the page with timeout
     log('Sending request through Tor circuit...', 'info');
-    const html = await fetchHtml(circuit, parsedUrl.href);
+
+    // Add a race with timeout for better error reporting
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error('Request timeout after 60s')), 60000);
+    });
+
+    const html = await Promise.race([fetchHtml(circuit, parsedUrl.href), timeoutPromise]);
 
     log(`Received ${html.length} bytes`, 'success');
 

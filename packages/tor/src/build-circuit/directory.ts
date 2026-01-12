@@ -52,6 +52,7 @@ import { AddressTypes, LinkSpecifierTypes, addressAndPortToLinkSpecifier } from 
 import type { LinkSpecifier } from '../messaging.ts';
 import {
   verifyConsensusSignatures,
+  verifyConsensusSignaturesAsync,
   type ConsensusVerificationResult,
   type AuthorityKeyCertificate,
 } from '../consensus-signature.ts';
@@ -288,6 +289,21 @@ export type ParseMicroDescConsensusOptions = {
   verifySignatures?: boolean;
 
   /**
+   * **DANGEROUS**: Skip consensus signature verification entirely.
+   *
+   * WARNING: This disables a critical security check. The consensus document
+   * could be forged by an attacker to direct you to malicious relays.
+   *
+   * Only use this option if:
+   * - You're in a test environment (like Chutney)
+   * - You're debugging/developing and understand the risks
+   * - The crypto implementation for your platform is not yet complete
+   *
+   * Default: false
+   */
+  dangerouslySkipSignatureVerification?: boolean;
+
+  /**
    * Key certificates for signing key verification.
    * If not provided, signatures are verified against authority identity keys.
    */
@@ -339,11 +355,15 @@ export function parseMicroDescConsensus(
 ): MicroDescConsensus {
   const {
     verifySignatures = true,
+    dangerouslySkipSignatureVerification = false,
     keyCertificates = [],
     requiredSignatures,
     throwOnVerificationFailure = true,
     now = Date.now(),
   } = options;
+
+  // dangerouslySkipSignatureVerification takes precedence
+  const shouldVerify = !dangerouslySkipSignatureVerification && verifySignatures;
   const lines = microDescContent.split('\n');
   let relayInfo: MicroDescNodeInfo | undefined;
   const relayInfos: MicroDescNodeInfo[] = [];
@@ -478,7 +498,7 @@ export function parseMicroDescConsensus(
   // Verify consensus signatures if requested
   let signatureVerification: ConsensusVerificationResult | undefined;
 
-  if (verifySignatures) {
+  if (shouldVerify) {
     signatureVerification = verifyConsensusSignatures(microDescContent, {
       keyCertificates,
       requiredSignatures,
@@ -512,6 +532,72 @@ export function parseMicroDescConsensus(
     sharedRandPreviousValue,
     sharedRandCurrentValue,
     relays: relayInfos,
+    signatureVerification,
+  };
+}
+
+/**
+ * Async version of parseMicroDescConsensus for browser environments.
+ * Uses Web Crypto API for RSA signature verification.
+ *
+ * @param microDescContent - The raw microdesc consensus content
+ * @param options - Optional parsing options
+ * @returns Promise resolving to parsed consensus data
+ */
+export async function parseMicroDescConsensusAsync(
+  microDescContent: string,
+  options: ParseMicroDescConsensusOptions = {}
+): Promise<MicroDescConsensus> {
+  const {
+    verifySignatures = true,
+    dangerouslySkipSignatureVerification = false,
+    keyCertificates = [],
+    requiredSignatures,
+    throwOnVerificationFailure = true,
+    now = Date.now(),
+  } = options;
+
+  // dangerouslySkipSignatureVerification takes precedence
+  const shouldVerify = !dangerouslySkipSignatureVerification && verifySignatures;
+
+  // Parse the consensus content (same as sync version)
+  const syncResult = parseMicroDescConsensus(microDescContent, {
+    ...options,
+    verifySignatures: false, // Skip sync verification
+    dangerouslySkipSignatureVerification: true, // Ensure no sync verification
+  });
+
+  // Verify signatures asynchronously if requested
+  let signatureVerification: ConsensusVerificationResult | undefined;
+
+  if (shouldVerify) {
+    signatureVerification = await verifyConsensusSignaturesAsync(microDescContent, {
+      keyCertificates,
+      requiredSignatures,
+      allowWithoutCertificates: true,
+      now,
+    });
+
+    if (!signatureVerification.valid && throwOnVerificationFailure) {
+      const validSigs = signatureVerification.signatures
+        .filter((s) => s.valid)
+        .map((s) => s.nickname || s.identityFingerprint.slice(0, 8))
+        .join(', ');
+      const invalidSigs = signatureVerification.signatures
+        .filter((s) => !s.valid)
+        .map((s) => `${s.nickname || s.identityFingerprint.slice(0, 8)}: ${s.error}`)
+        .join('; ');
+
+      throw new Error(
+        `Consensus signature verification failed: ${signatureVerification.error}. ` +
+          `Valid signatures from: [${validSigs || 'none'}]. ` +
+          `Invalid: [${invalidSigs || 'none'}]`
+      );
+    }
+  }
+
+  return {
+    ...syncResult,
     signatureVerification,
   };
 }
