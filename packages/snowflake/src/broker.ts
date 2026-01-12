@@ -15,15 +15,22 @@
 export type BrokerClientOptions = {
   /**
    * URL of the Snowflake broker.
-   * Defaults to the Tor Project's production broker.
+   * Defaults to the Tor Project's production broker via Fastly CDN.
    */
   brokerUrl?: string;
 
   /**
-   * Front domain for domain fronting (e.g., 'www.fastly.com').
+   * Front domain for domain fronting.
    * When set, requests go through the front domain for censorship resistance.
+   * Defaults to Fastly CDN (cdn.sstatic.net) matching the Snowflake browser extension.
    */
   frontDomain?: string;
+
+  /**
+   * Disable domain fronting (use direct broker connection).
+   * Default: false (domain fronting enabled)
+   */
+  disableDomainFronting?: boolean;
 
   /**
    * NAT type reported to broker.
@@ -45,11 +52,19 @@ export type BrokerAnswer = {
   error?: string;
 };
 
+// Default broker URL (Tor Project's Snowflake broker)
 const DEFAULT_BROKER_URL = 'https://snowflake-broker.torproject.net/';
+
+// Default front domain for domain fronting (Fastly CDN, same as Snowflake browser extension)
+// This is StackExchange's CDN which fronts through Fastly
+const DEFAULT_FRONT_DOMAIN = 'cdn.sstatic.net';
 
 /**
  * Client for the Snowflake broker rendezvous service.
  * Handles signaling between Snowflake clients and volunteer proxies.
+ *
+ * By default, uses domain fronting through Fastly CDN (cdn.sstatic.net)
+ * matching the configuration of the Snowflake browser extension.
  */
 export class SnowflakeBrokerClient {
   readonly brokerUrl: string;
@@ -59,7 +74,10 @@ export class SnowflakeBrokerClient {
 
   constructor(opts: BrokerClientOptions = {}) {
     this.brokerUrl = opts.brokerUrl ?? DEFAULT_BROKER_URL;
-    this.frontDomain = opts.frontDomain ?? undefined;
+    // Enable domain fronting by default (matching Snowflake browser extension)
+    this.frontDomain = opts.disableDomainFronting
+      ? undefined
+      : (opts.frontDomain ?? DEFAULT_FRONT_DOMAIN);
     this.natType = opts.natType ?? 'unknown';
     this.numRelayAddresses = opts.numRelayAddresses ?? 1;
   }

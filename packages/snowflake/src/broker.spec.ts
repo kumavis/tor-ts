@@ -8,6 +8,12 @@ test('SnowflakeBrokerClient defaults to Tor Project broker URL', (t) => {
   t.is(client.numRelayAddresses, 1);
 });
 
+test('SnowflakeBrokerClient defaults to Fastly CDN domain fronting', (t) => {
+  const client = new SnowflakeBrokerClient();
+  // Default matches Snowflake browser extension (Fastly CDN via StackExchange)
+  t.is(client.frontDomain, 'cdn.sstatic.net');
+});
+
 test('SnowflakeBrokerClient accepts custom broker URL', (t) => {
   const client = new SnowflakeBrokerClient({
     brokerUrl: 'https://custom-broker.example.com/',
@@ -15,11 +21,18 @@ test('SnowflakeBrokerClient accepts custom broker URL', (t) => {
   t.is(client.brokerUrl, 'https://custom-broker.example.com/');
 });
 
-test('SnowflakeBrokerClient accepts domain fronting config', (t) => {
+test('SnowflakeBrokerClient accepts custom domain fronting config', (t) => {
   const client = new SnowflakeBrokerClient({
     frontDomain: 'www.fastly.com',
   });
   t.is(client.frontDomain, 'www.fastly.com');
+});
+
+test('SnowflakeBrokerClient can disable domain fronting', (t) => {
+  const client = new SnowflakeBrokerClient({
+    disableDomainFronting: true,
+  });
+  t.is(client.frontDomain, undefined);
 });
 
 test('SnowflakeBrokerClient accepts NAT type config', (t) => {
