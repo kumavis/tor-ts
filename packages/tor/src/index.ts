@@ -18,6 +18,24 @@ export * as mainnet from './build-circuit/mainnet.ts';
 export { Circuit } from './circuit.ts';
 export { TlsChannelConnection } from './channel.ts';
 export * as hiddenService from './hidden-service.ts';
+export * as hiddenServiceHost from './hidden-service-host.ts';
+export {
+  HiddenServiceHost,
+  generateHiddenServiceKeys,
+  loadHiddenServiceKeys,
+  deriveTimePeriodKeys,
+  generateIntroPointKeys,
+  generateDescriptor,
+  buildEstablishIntroPayload,
+  parseIntroduce2,
+  decryptIntroduce2,
+  completeHsNtorServer,
+  type HiddenServiceKeys,
+  type TimePeriodKeys,
+  type IntroductionPoint,
+  type Introduce2Parsed,
+  type Introduce2Decrypted,
+} from './hidden-service-host.ts';
 export {
   DirectoryClient,
   lookupOnionKey,

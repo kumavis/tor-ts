@@ -223,7 +223,7 @@ echo ""
 
 cd "${ROOT_DIR}"
 
-TOR_TS_CHUTNEY_TESTS="${TOR_TS_CHUTNEY_TESTS:-exit,hidden-service}"
+TOR_TS_CHUTNEY_TESTS="${TOR_TS_CHUTNEY_TESTS:-exit,hidden-service,hidden-service-host}"
 IFS=',' read -ra TESTS <<< "${TOR_TS_CHUTNEY_TESTS}"
 for t in "${TESTS[@]}"; do
   case "${t}" in
@@ -237,6 +237,12 @@ for t in "${TESTS[@]}"; do
       echo "=== running chutney integration test: hidden-service ==="
       timeout 10m node --experimental-transform-types "${ROOT_DIR}/scripts/chutney-hidden-service-ci.ts"
       echo "=== chutney integration test: hidden-service finished at $(date -Is) ==="
+      ;;
+    hidden-service-host)
+      echo ""
+      echo "=== running chutney integration test: hidden-service-host ==="
+      timeout 12m node --experimental-transform-types "${ROOT_DIR}/scripts/chutney-hidden-service-host-ci.ts"
+      echo "=== chutney integration test: hidden-service-host finished at $(date -Is) ==="
       ;;
     *)
       echo "Unknown TOR_TS_CHUTNEY_TESTS entry: ${t}"

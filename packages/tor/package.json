@@ -24,6 +24,8 @@
     "./messaging": "./src/messaging.ts",
     "./http-parse": "./src/http-parse.ts",
     "./directory-client": "./src/directory-client.ts",
+    "./hidden-service": "./src/hidden-service.ts",
+    "./hidden-service-host": "./src/hidden-service-host.ts",
     "./build-circuit/chutney": "./src/build-circuit/chutney.ts",
     "./build-circuit/directory": "./src/build-circuit/directory.ts",
     "./build-circuit/mainnet": "./src/build-circuit/mainnet.ts",
