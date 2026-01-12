@@ -1242,6 +1242,15 @@ __metadata:
   languageName: node
   linkType: hard
 
+"@types/http-proxy@npm:^1.17.16":
+  version: 1.17.17
+  resolution: "@types/http-proxy@npm:1.17.17"
+  dependencies:
+    "@types/node": "npm:*"
+  checksum: 10c0/547e322a5eecf0b50d08f6a46bd89c8c8663d67dbdcd472da5daf968b03e63a82f6b3650443378abe6c10a46475dac52015f30e8c74ba2ea5820dd4e9cdef2d4
+  languageName: node
+  linkType: hard
+
 "@types/json-schema@npm:^7.0.15":
   version: 7.0.15
   resolution: "@types/json-schema@npm:7.0.15"
@@ -7293,8 +7302,12 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "tor-example-http-proxy@workspace:examples/http-proxy"
   dependencies:
+    "@types/http-proxy": "npm:^1.17.16"
+    "@types/node": "npm:^22.0.0"
+    ava: "npm:^6.4.1"
     http-proxy: "npm:^1.18.1"
-    tor: "npm:^0.1.0"
+    tor: "npm:0.1.0"
+    typescript: "npm:^5.9.3"
   languageName: unknown
   linkType: soft
 
@@ -7302,8 +7315,11 @@ __metadata:
   version: 0.0.0-use.local
   resolution: "tor-example-node-fetch@workspace:examples/node-fetch"
   dependencies:
+    "@types/node": "npm:^22.0.0"
+    ava: "npm:^6.4.1"
     node-fetch: "npm:^3.3.2"
-    tor: "npm:^0.1.0"
+    tor: "npm:0.1.0"
+    typescript: "npm:^5.9.3"
   languageName: unknown
   linkType: soft
 
@@ -7322,7 +7338,7 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"tor@npm:0.1.0, tor@npm:^0.1.0, tor@workspace:packages/tor":
+"tor@npm:0.1.0, tor@workspace:packages/tor":
   version: 0.0.0-use.local
   resolution: "tor@workspace:packages/tor"
   dependencies:

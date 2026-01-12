@@ -4,14 +4,30 @@
   "main": "index.js",
   "license": "MIT",
   "private": true,
+  "type": "module",
   "scripts": {
     "start": "node --experimental-transform-types index.ts",
     "dev": "pm2 start --name tor-example-http-proxy --watch=../../ --no-daemon --interpreter=node --node-args=--experimental-transform-types index.ts",
     "test": "echo 'No tests'",
-    "test:live": "echo 'No live tests'"
+    "test:live": "ava *.live.test.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
     "http-proxy": "^1.18.1",
-    "tor": "^0.1.0"
+    "tor": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/http-proxy": "^1.17.16",
+    "@types/node": "^22.0.0",
+    "ava": "^6.4.1",
+    "typescript": "^5.9.3"
+  },
+  "ava": {
+    "extensions": {
+      "ts": "module"
+    },
+    "nodeArguments": [
+      "--experimental-transform-types"
+    ]
   }
 }

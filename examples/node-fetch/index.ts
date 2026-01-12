@@ -1,5 +1,6 @@
 import { connectRandomCircuitWithSafeBootstrap } from 'tor/build-circuit/mainnet';
 import { getTorAgentForUrl } from 'tor/node';
+import type { Circuit } from 'tor';
 
 import fetch from 'node-fetch';
 
@@ -21,7 +22,7 @@ async function setupTor() {
   return circuit;
 }
 
-async function makeWebRequest(circuit, target) {
+async function makeWebRequest(circuit: Circuit, target: string) {
   // "agent" is a non-standard fetch option supported by node-fetch and http.get/https.get
   const agent = getTorAgentForUrl(circuit, target);
   const response = await fetch(target, { agent });

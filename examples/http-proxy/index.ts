@@ -1,4 +1,7 @@
 import http from 'http';
+import type { IncomingMessage, ServerResponse } from 'http';
+import type { Duplex } from 'stream';
+import type { Socket } from 'net';
 import httpProxy from 'http-proxy';
 import { Circuit } from 'tor';
 import { getTorAgentForUrl, proxyCircuitStreamDuplex } from 'tor/node';
@@ -19,22 +22,22 @@ async function setupTor() {
 
 function setupCircuitProxyServer(circuit: Circuit) {
   const port = 1234;
-  const proxy = new httpProxy.createProxyServer();
+  const proxy = httpProxy.createProxyServer();
 
-  const proxyHttpRequest = (req, res) => {
-    const target = req.url;
+  const proxyHttpRequest = (req: IncomingMessage, res: ServerResponse) => {
+    const target = req.url as string;
     console.log(`Proxying HTTP request to: ${target}`);
     const agent = getTorAgentForUrl(circuit, target);
     // forward request to target and back
     proxy.web(req, res, { target, agent });
   };
 
-  const proxyWsRequest = (req, socket, head) => {
+  const proxyWsRequest = (req: IncomingMessage, socket: Duplex, head: Buffer) => {
     proxy.ws(req, socket, head);
   };
 
-  const proxyHttpsRequest = (req, res) => {
-    const target = req.url;
+  const proxyHttpsRequest = (req: IncomingMessage, res: Socket) => {
+    const target = req.url as string;
     console.log(`Proxying TCP connection to: ${target}`);
     const circuitStream = circuit.openStream(target);
 
