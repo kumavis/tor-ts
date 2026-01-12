@@ -39,10 +39,10 @@ export type BrokerClientOptions = {
   natType?: 'unknown' | 'unrestricted' | 'restricted';
 
   /**
-   * Number of relay addresses to request from broker.
-   * Defaults to 1.
+   * Bridge fingerprint to connect to.
+   * Defaults to the original Snowflake bridge fingerprint.
    */
-  numRelayAddresses?: number;
+  bridgeFingerprint?: string;
 };
 
 export type BrokerAnswer = {
@@ -52,6 +52,9 @@ export type BrokerAnswer = {
   error?: string;
 };
 
+// Protocol version for client-broker communication
+const CLIENT_VERSION = '1.0';
+
 // Default broker URL (Tor Project's Snowflake broker)
 const DEFAULT_BROKER_URL = 'https://snowflake-broker.torproject.net/';
 
@@ -59,18 +62,24 @@ const DEFAULT_BROKER_URL = 'https://snowflake-broker.torproject.net/';
 // This is StackExchange's CDN which fronts through Fastly
 const DEFAULT_FRONT_DOMAIN = 'cdn.sstatic.net';
 
+// Default bridge fingerprint (the original Snowflake bridge)
+// Used when client doesn't specify a fingerprint
+const DEFAULT_BRIDGE_FINGERPRINT = '2B280B23E1107BB62ABFC40DDCC8824814F80A72';
+
 /**
  * Client for the Snowflake broker rendezvous service.
  * Handles signaling between Snowflake clients and volunteer proxies.
  *
  * By default, uses domain fronting through Fastly CDN (cdn.sstatic.net)
  * matching the configuration of the Snowflake browser extension.
+ *
+ * Protocol compatible with Snowflake v1.0 client-broker protocol.
  */
 export class SnowflakeBrokerClient {
   readonly brokerUrl: string;
   readonly frontDomain: string | undefined;
   readonly natType: string;
-  readonly numRelayAddresses: number;
+  readonly bridgeFingerprint: string;
 
   constructor(opts: BrokerClientOptions = {}) {
     this.brokerUrl = opts.brokerUrl ?? DEFAULT_BROKER_URL;
@@ -79,26 +88,29 @@ export class SnowflakeBrokerClient {
       ? undefined
       : (opts.frontDomain ?? DEFAULT_FRONT_DOMAIN);
     this.natType = opts.natType ?? 'unknown';
-    this.numRelayAddresses = opts.numRelayAddresses ?? 1;
+    this.bridgeFingerprint = opts.bridgeFingerprint ?? DEFAULT_BRIDGE_FINGERPRINT;
   }
 
   /**
    * Send an SDP offer to the broker and receive a proxy's SDP answer.
    * This initiates the WebRTC rendezvous process.
    *
+   * Uses the Snowflake v1.0 client-broker protocol:
+   * Request: `1.0\n{"offer": "...", "nat": "...", "fingerprint": "..."}`
+   * Response: `{"answer": "...", "error": "..."}`
+   *
    * @param sdpOffer - The SDP offer string from RTCPeerConnection.createOffer()
    * @returns The broker's response containing the proxy's SDP answer
    */
   async negotiate(sdpOffer: string): Promise<BrokerAnswer> {
-    // Build the request body following Snowflake broker protocol
-    const body = JSON.stringify({
-      Sid: generateSessionId(),
-      Offer: sdpOffer,
-      NatType: this.natType,
-      Fingerprint: '', // Empty for clients
-      RelayFingerprint: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', // Required for broker
-      RelayAddr: '', // Let broker choose relay
-    });
+    // Build the request body following Snowflake v1.0 protocol
+    // Format: version + newline + JSON body
+    const pollRequest = {
+      offer: sdpOffer,
+      nat: this.natType,
+      fingerprint: this.bridgeFingerprint,
+    };
+    const body = CLIENT_VERSION + '\n' + JSON.stringify(pollRequest);
 
     // Determine target URL (apply domain fronting if configured)
     const targetUrl = new URL('/client', this.brokerUrl);
@@ -127,36 +139,28 @@ export class SnowflakeBrokerClient {
 
     const text = await response.text();
 
-    // The broker returns plain SDP answer text, or an error message
-    // Check for common error patterns
-    if (text.startsWith('no')) {
-      // "no proxies available" or similar
-      return { answer: '', error: text };
+    // Parse the JSON response
+    try {
+      const pollResponse = JSON.parse(text) as { answer?: string; error?: string };
+
+      if (pollResponse.error) {
+        return { answer: '', error: pollResponse.error };
+      }
+
+      if (pollResponse.answer) {
+        return { answer: pollResponse.answer };
+      }
+
+      return { answer: '', error: 'received empty broker response' };
+    } catch {
+      // Fallback: old-style plain text response
+      if (text.startsWith('no')) {
+        return { answer: '', error: text };
+      }
+      if (!text.includes('v=0') && !text.includes('a=ice')) {
+        return { answer: '', error: text };
+      }
+      return { answer: text };
     }
-
-    if (!text.includes('v=0') && !text.includes('a=ice')) {
-      // Doesn't look like SDP, treat as error
-      return { answer: '', error: text };
-    }
-
-    return { answer: text };
   }
-}
-
-/**
- * Generate a unique session ID for broker communication.
- * This helps the broker track client sessions.
- */
-function generateSessionId(): string {
-  const bytes = new Uint8Array(16);
-  if (typeof globalThis.crypto !== 'undefined') {
-    globalThis.crypto.getRandomValues(bytes);
-  } else {
-    // Node.js fallback
-    // eslint-disable-next-line @typescript-eslint/no-require-imports
-    require('crypto').randomFillSync(bytes);
-  }
-  return Array.from(bytes)
-    .map((b) => b.toString(16).padStart(2, '0'))
-    .join('');
 }

@@ -16,6 +16,25 @@ import { buildTurbotunnelPreamble, newClientId } from './turbotunnel.ts';
 import { SnowflakeBrokerClient } from './broker.ts';
 import type { BrokerClientOptions } from './broker.ts';
 
+/**
+ * Generate a unique data channel ID (matching official Snowflake format).
+ * Format: "snowflake-{random hex}"
+ */
+function generateChannelId(): string {
+  const bytes = new Uint8Array(8);
+  if (typeof globalThis.crypto !== 'undefined') {
+    globalThis.crypto.getRandomValues(bytes);
+  } else {
+    // Node.js fallback
+    // eslint-disable-next-line @typescript-eslint/no-require-imports
+    require('crypto').randomFillSync(bytes);
+  }
+  const hex = Array.from(bytes)
+    .map((b) => b.toString(16).padStart(2, '0'))
+    .join('');
+  return `snowflake-${hex}`;
+}
+
 export type SnowflakeWebRtcDownlinkOptions = {
   /**
    * Client ID for turbotunnel multiplexing.
@@ -148,10 +167,11 @@ export class SnowflakeWebRtcDownlink extends EventEmitter {
     this.peerConnection = pc;
 
     // Create the data channel before creating the offer
-    // The Snowflake protocol uses an unreliable, unordered data channel
-    const dc = pc.createDataChannel('snowflake', {
-      ordered: false,
-      maxRetransmits: 0, // Unreliable delivery
+    // The Snowflake protocol uses an ordered, reliable data channel
+    // (matching the official Snowflake client implementation)
+    const channelId = generateChannelId();
+    const dc = pc.createDataChannel(channelId, {
+      ordered: true,
     });
     dc.binaryType = 'arraybuffer';
     this.dataChannel = dc;

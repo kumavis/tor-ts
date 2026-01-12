@@ -5,7 +5,7 @@ test('SnowflakeBrokerClient defaults to Tor Project broker URL', (t) => {
   const client = new SnowflakeBrokerClient();
   t.is(client.brokerUrl, 'https://snowflake-broker.torproject.net/');
   t.is(client.natType, 'unknown');
-  t.is(client.numRelayAddresses, 1);
+  t.is(client.bridgeFingerprint, '2B280B23E1107BB62ABFC40DDCC8824814F80A72');
 });
 
 test('SnowflakeBrokerClient defaults to Fastly CDN domain fronting', (t) => {
