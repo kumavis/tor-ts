@@ -40,9 +40,7 @@ beforeAll(async () => {
         );
       }
     },
-    // Browser signature verification not yet implemented
-    // (Web Crypto API doesn't support Tor's unprefixed PKCS#1 v1.5 signatures)
-    dangerouslySkipSignatureVerification: true,
+    // Signature verification is enabled - uses pure-JS RSA for Tor's unprefixed PKCS#1 v1.5 signatures
   });
 
   console.log('[test] Shared circuit established!');
@@ -132,8 +130,8 @@ describe('Snowflake Live: Error Handling', () => {
   }, 180_000);
 });
 
-// Note: Consensus Signature Verification tests are in a separate file
-// (consensus-signature-crypto.spec.ts) and run in Node.js where the
-// crypto implementation is complete. Browser signature verification
-// is not yet implemented because Web Crypto API only supports standard
-// RSASSA-PKCS1-v1_5 with DigestInfo, but Tor uses unprefixed PKCS#1 v1.5.
+// Note: Consensus Signature Verification uses pure-JS RSA (BigInt modular exponentiation)
+// to verify Tor's unprefixed PKCS#1 v1.5 signatures. Web Crypto API only supports standard
+// RSASSA-PKCS1-v1_5 with DigestInfo, but Tor uses unprefixed PKCS#1 v1.5, so we implement
+// the verification using raw RSA operations in the browser shim (crypto-webcrypto.ts).
+// Additional tests for the signature verification are in consensus-signature-crypto.spec.ts.

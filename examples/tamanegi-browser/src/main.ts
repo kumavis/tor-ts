@@ -420,9 +420,7 @@ async function connectToTor(): Promise<BrowserCircuit> {
     onConsensusProgress: (progress) => {
       updateConsensusProgress(progress);
     },
-    // TODO: Browser signature verification not yet fully implemented
-    // (Web Crypto API doesn't support Tor's unprefixed PKCS#1 v1.5 signatures)
-    dangerouslySkipSignatureVerification: true,
+    // Signature verification uses pure-JS RSA for Tor's unprefixed PKCS#1 v1.5 signatures
   });
 
   // Update consensus panel to show cached state
@@ -728,7 +726,7 @@ consensusRefreshBtn.addEventListener('click', async () => {
       onConsensusProgress: (progress) => {
         updateConsensusProgress(progress);
       },
-      dangerouslySkipSignatureVerification: true,
+      // Signature verification uses pure-JS RSA for Tor's unprefixed PKCS#1 v1.5 signatures
       skipConsensusCache: true, // Force fresh download
     });
 
