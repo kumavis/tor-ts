@@ -16,6 +16,7 @@ import {
   parseAllKeyCertificates,
   findAuthorityByFingerprint,
   verifySignatureWithData,
+  verifySignatureWithDataAsync,
   verifyConsensusSignatures,
   verifyConsensusSignaturesAsync,
 } from './consensus-signature.ts';
@@ -406,7 +407,6 @@ test('verifySignatureWithDataAsync - pure-JS RSA verification', async (t) => {
     const name = authority?.nickname ?? sig.identityFingerprint.slice(0, 8);
 
     // Use the async verification function which handles both Node.js and browser paths
-    const { verifySignatureWithDataAsync } = await import('./consensus-signature.ts');
     const valid = await verifySignatureWithDataAsync(
       signedPortion,
       sig.signature,
