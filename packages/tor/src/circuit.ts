@@ -798,7 +798,13 @@ export class Circuit extends EventEmitter {
   openStream(destination: string): CircuitStream {
     const stream = this.createStream(destination);
     // kick off handshake, but dont wait for it
-    this.performStreamHandshake(stream);
+    // Note: we intentionally don't await here. Errors are handled via:
+    // 1. The connectionPromiseKit.promise rejection (for callers who await it)
+    // 2. The 'error' event on the stream
+    // We catch here to prevent unhandled promise rejection from performStreamHandshake.
+    this.performStreamHandshake(stream).catch(() => {
+      // Errors are already emitted via stream 'error' event and connectionPromiseKit rejection
+    });
     return stream;
   }
 

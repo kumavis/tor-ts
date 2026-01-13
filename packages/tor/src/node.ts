@@ -98,14 +98,12 @@ export function proxyCircuitStream(
     // console.log(`Received data from end: ${data.length}`)
     outStream.write(data);
   });
-  circuitStream.on('end', (err) => {
-    if (err) {
-      console.log('circuitstream  disconnected with error');
-      console.error(err);
-      outStream.end();
-      return;
-    }
-    console.log('circuitstream  disconnected');
+  circuitStream.on('error', (err) => {
+    console.log('circuitstream disconnected with error:', err.message);
+    outStream.end();
+  });
+  circuitStream.on('end', () => {
+    console.log('circuitstream disconnected');
     outStream.end();
   });
   inStream.on('data', (data) => {
@@ -143,25 +141,31 @@ export const circuitStreamToNodeDuplex = (circuitStream: CircuitStream): Duplex 
   });
   // read from circuitStream
   const reader = circuitStream.source.getReader();
-  reader.read().then(async (result) => {
-    let { value, done } = result as ReadableStreamReadResult<Uint8Array>;
-    while (!done) {
-      nodeDuplexStream.push(value);
-      console.log('reading value from circuitStream');
-      ({ done, value } = (await reader.read()) as ReadableStreamReadResult<Uint8Array>);
-    }
-    console.log('done reading from circuitStream');
+  reader
+    .read()
+    .then(async (result) => {
+      let { value, done } = result as ReadableStreamReadResult<Uint8Array>;
+      while (!done) {
+        nodeDuplexStream.push(value);
+        console.log('reading value from circuitStream');
+        ({ done, value } = (await reader.read()) as ReadableStreamReadResult<Uint8Array>);
+      }
+      console.log('done reading from circuitStream');
 
-    nodeDuplexStream.push(null);
-    reader.releaseLock();
-  });
-  circuitStream.on('end', (err) => {
-    if (err) {
-      console.log('circuit stream disconnected with error');
-      console.error(err);
+      nodeDuplexStream.push(null);
+      reader.releaseLock();
+    })
+    .catch((err) => {
+      // Handle errors from reader.read() - e.g., stream was destroyed with an error
+      console.log('circuit stream reader error:', err.message);
       nodeDuplexStream.destroy(err);
-      return;
-    }
+    });
+  // Handle errors emitted by the circuit stream
+  circuitStream.on('error', (err) => {
+    console.log('circuit stream error:', err.message);
+    nodeDuplexStream.destroy(err);
+  });
+  circuitStream.on('end', () => {
     console.log('circuit stream disconnected');
     nodeDuplexStream.destroy();
   });
@@ -173,15 +177,25 @@ export const circuitStreamToNodeDuplex = (circuitStream: CircuitStream): Duplex 
 // window.ReadableStream to Node.js Readable
 export const webRSToNodeRS = (rs: ReadableStream<Uint8Array>) => {
   const reader = rs.getReader();
-  const out = new Readable();
-  reader.read().then(async (result) => {
-    let { value, done } = result as ReadableStreamReadResult<Uint8Array>;
-    while (!done) {
-      out.push(value);
-      ({ done, value } = (await reader.read()) as ReadableStreamReadResult<Uint8Array>);
-    }
-    out.push(null);
+  const out = new Readable({
+    read() {
+      // no means of triggering read - data is pushed as it arrives
+    },
   });
+  reader
+    .read()
+    .then(async (result) => {
+      let { value, done } = result as ReadableStreamReadResult<Uint8Array>;
+      while (!done) {
+        out.push(value);
+        ({ done, value } = (await reader.read()) as ReadableStreamReadResult<Uint8Array>);
+      }
+      out.push(null);
+    })
+    .catch((err) => {
+      // Handle errors from reader.read()
+      out.destroy(err);
+    });
   return out;
 };
 
