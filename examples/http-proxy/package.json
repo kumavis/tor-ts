@@ -10,11 +10,9 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "http-proxy": "^1.18.1",
     "tor": "0.1.0"
   },
   "devDependencies": {
-    "@types/http-proxy": "^1.17.16",
     "@types/node": "^22.0.0",
     "ava": "^6.4.1",
     "typescript": "^5.9.3"

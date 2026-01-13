@@ -15,7 +15,7 @@ import { connectRandomCircuitWithSafeBootstrap } from 'tor/build-circuit/mainnet
 import { getTorAgentForUrl } from 'tor/node';
 
 test('fetch through Tor circuit', async (t) => {
-  t.timeout(180_000); // 3 minutes - Tor bootstrap can be slow
+  t.timeout(300_000); // 5 minutes - Tor bootstrap can be slow
 
   // Step 1: Establish a Tor circuit
   // This connects to a fallback directory, downloads the consensus,
@@ -29,7 +29,8 @@ test('fetch through Tor circuit', async (t) => {
 
   // Step 2: Create an agent for the target URL
   // The agent handles routing traffic through the Tor circuit
-  const target = 'http://captive.apple.com';
+  // Using example.com - the IANA-reserved domain guaranteed to always work
+  const target = 'http://example.com';
   const agent = getTorAgentForUrl(circuit, target);
 
   // Step 3: Make the request using node-fetch with the Tor agent
@@ -40,8 +41,8 @@ test('fetch through Tor circuit', async (t) => {
   t.is(response.status, 200);
 
   const body = await response.text();
-  console.log(`Response body: ${body.trim()}`);
+  console.log(`Response length: ${body.length} bytes`);
 
-  // captive.apple.com returns "Success" when internet is accessible
-  t.true(body.includes('Success'));
+  // example.com returns a simple HTML page with "Example Domain" in the title
+  t.true(body.includes('Example Domain'), 'Response should contain "Example Domain"');
 });

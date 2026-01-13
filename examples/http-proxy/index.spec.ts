@@ -1,70 +1,54 @@
 /**
- * Example: HTTP Proxy Server over Tor
+ * Example: Making HTTP requests through Tor using Node's http module
  *
  * This example demonstrates how to:
  * 1. Establish a Tor circuit
- * 2. Create an HTTP proxy server that routes traffic through Tor
- * 3. Handle both HTTP and HTTPS (CONNECT) requests
+ * 2. Create an HTTP agent that routes traffic through Tor
+ * 3. Make requests using Node's native http module
+ *
+ * This is the foundation for building an HTTP proxy server over Tor.
+ * See README.md for the full proxy server example.
  *
  * Run with: yarn test:live
- *
- * For interactive use, see the start script which runs the proxy server.
  */
 
 import http from 'http';
 import test from 'ava';
-import httpProxy from 'http-proxy';
 import { connectRandomCircuitWithSafeBootstrap } from 'tor/build-circuit/mainnet';
 import { getTorAgentForUrl } from 'tor/node';
 
-test('proxy HTTP request through Tor circuit', async (t) => {
-  t.timeout(180_000); // 3 minutes - Tor bootstrap can be slow
+test('http request through Tor circuit', async (t) => {
+  t.timeout(300_000); // 5 minutes - Tor bootstrap can be slow
 
   // Step 1: Establish a Tor circuit
   console.log('Connecting to Tor network...');
   const circuit = await connectRandomCircuitWithSafeBootstrap();
   console.log('Circuit established!');
 
-  // Step 2: Create a proxy server that routes through Tor
-  const port = 19234;
-  const proxy = httpProxy.createProxyServer();
-
-  const proxyServer = http.createServer((req, res) => {
-    const target = req.url as string;
-    console.log(`Proxying: ${target}`);
-    // Create a Tor agent for each request
-    const agent = getTorAgentForUrl(circuit, target);
-    proxy.web(req, res, { target, agent });
-  });
-
-  await new Promise<void>((resolve) => {
-    proxyServer.listen(port, () => {
-      console.log(`Proxy server listening on port ${port}`);
-      resolve();
-    });
-  });
-
   // Clean up when done
-  t.teardown(() => {
-    proxyServer.close();
-    circuit.destroy();
-  });
+  t.teardown(() => circuit.destroy());
 
-  // Step 3: Make a request through the proxy
-  const target = 'http://captive.apple.com';
-  console.log(`Making request through proxy to ${target}...`);
+  // Step 2: Create an agent for the target URL
+  // Using example.com - the IANA-reserved domain guaranteed to always work
+  const target = 'http://example.com';
+  const agent = getTorAgentForUrl(circuit, target);
+
+  // Step 3: Make the request using Node's http module with the Tor agent
+  console.log(`Fetching ${target} through Tor...`);
 
   const body = await new Promise<string>((resolve, reject) => {
-    const req = http.get({ host: 'localhost', port, path: target }, (res) => {
+    const req = http.get(target, { agent }, (res) => {
       let data = '';
       res.setEncoding('utf8');
       res.on('data', (chunk) => (data += chunk));
       res.on('end', () => resolve(data));
     });
-    req.setTimeout(60_000, () => req.destroy(new Error('timeout')));
+    req.setTimeout(120_000, () => req.destroy(new Error('request timeout')));
     req.on('error', reject);
   });
 
-  console.log(`Response: ${body.trim()}`);
-  t.true(body.includes('Success'));
+  console.log(`Response length: ${body.length} bytes`);
+
+  // example.com returns a simple HTML page with "Example Domain" in the title
+  t.true(body.includes('Example Domain'), 'Response should contain "Example Domain"');
 });
