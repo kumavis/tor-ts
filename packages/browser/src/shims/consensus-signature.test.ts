@@ -13,255 +13,256 @@
 import { describe, it, expect } from 'vitest';
 import crypto, { publicDecrypt, constants, createPublicKey } from './crypto-webcrypto.ts';
 
-// Pre-computed test data from a real Tor consensus document
-// This is the SHA-256 hash of the signed portion of the consensus
-const EXPECTED_HASH_HEX = 'b012bbf546016eb68d094558e3d668f3dd72360590bcf87e4aaacdf5b60ca430';
+// Import fixture data using Vite's ?raw suffix
+import consensusText from '../../../tor/src/fixtures/consensus-microdesc.txt?raw';
+import authorityKeysText from '../../../tor/src/fixtures/authority-keys.txt?raw';
 
-// The signing key PEM for directory authority "dannenberg"
-// (identity fingerprint: 0232AF901C31A04EE9848595AF9BB7620D4C5B2E)
-const SIGNING_KEY_PEM = `-----BEGIN RSA PUBLIC KEY-----
-MIIBCgKCAQEAoUlOIijVazsyQ8Ou44IBtJUQigiosmyzXEawNiegdA5UyC5YLRV3
-9eKkw0A0AzXOxpmpUIw2woJFQaXjP/gNroRtpXUDX7RR6JEEvK34DnH1eI5LUX9E
-pyjEI5tr2NeB3EOUN4pcFcbmG4EPihTS9vOvdgSWNgwAQ12AotBRjezUSefCMhSs
-vauvo5UcRuN/8AQtWgt4RkB9AlvP9jvxzR2G/dZ/C8z6FvwrLiCmpsox8Rc6xF39
-BZahQb4o67/jUiudFMqzpe7n2IUePWs8lRxnWaA60vyw1X9vmJuwZofj3PuELSk5
-aCtI5/nzQqXtEakGj5nenxghEZuuFoZMXwIDAQAB
------END RSA PUBLIC KEY-----`;
-
-// The signature from dannenberg on the consensus
-const SIGNATURE_BASE64 =
-  'ZFUi6N1XpvMWqUXfRG1xWHVGaSyI4Ya1S2X4YFj3KnLWKkWc3LfRRCpeYKY/hsWj' +
-  'iAVE0JqgRQBrIdrpa1zXT58Ur8byZTzdUsJ39mFeaT3ZYnpA6jAVAIk3vbpUeum2' +
-  '2qsVLXf45SVDF924CTXXffFP0mlhAFJSJc8SnIpY0f5ZS+ezuLrTjiGnkH/jCv20' +
-  '4Z+QA+GJNi/LmYDuGW23oK4wllKWrSJgm41T2RzoAFkUhuX7EavIL3rEKJBjMJQ2' +
-  'Rvm24ZCD4NulntUN9HjpfN7oETUuLZtfUiUAWfnkjilBtStzo9NcgJhZFkFfMxsj' +
-  'AAm9DWALJEgYjgMq9qSnng==';
+// Import the consensus signature verification functions from the tor package
+import {
+  parseConsensusSignatures,
+  getConsensusSignedPortion,
+  parseAllKeyCertificates,
+  findAuthorityByFingerprint,
+  verifyConsensusSignaturesAsync,
+  type AuthorityKeyCertificate,
+} from '../../../tor/src/consensus-signature.ts';
 
 describe('Browser consensus signature verification', () => {
-  it('crypto shim exports required functions', () => {
-    expect(typeof publicDecrypt).toBe('function');
-    expect(typeof createPublicKey).toBe('function');
-    expect(constants.RSA_PKCS1_PADDING).toBe(1);
+  describe('Crypto shim basics', () => {
+    it('exports required functions', () => {
+      expect(typeof publicDecrypt).toBe('function');
+      expect(typeof createPublicKey).toBe('function');
+      expect(constants.RSA_PKCS1_PADDING).toBe(1);
+    });
+
+    it('createHash computes correct SHA-256', () => {
+      const testData = 'Hello, World!';
+      const hash = crypto.createHash('sha256').update(testData).digest();
+
+      const expectedHex = 'dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f';
+      const hashBuffer = hash as Buffer;
+      const actualHex = Array.from(new Uint8Array(hashBuffer))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+
+      expect(actualHex).toBe(expectedHex);
+    });
+
+    it('createHash computes correct SHA-1', () => {
+      const testData = 'Hello, World!';
+      const hash = crypto.createHash('sha1').update(testData).digest();
+
+      const expectedHex = '0a0a9f2a6772942557ab5355d76af442f8f65e01';
+      const hashBuffer = hash as Buffer;
+      const actualHex = Array.from(new Uint8Array(hashBuffer))
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
+
+      expect(actualHex).toBe(expectedHex);
+    });
   });
 
-  it('createPublicKey creates key from PEM', () => {
-    const key = createPublicKey(SIGNING_KEY_PEM);
-    expect(key).toBeDefined();
-    // Verify export works
-    const der = key.export({ type: 'pkcs1', format: 'der' });
-    expect(der).toBeInstanceOf(Uint8Array);
-    expect(der.length).toBeGreaterThan(0);
-  });
+  describe('Fixture data loading', () => {
+    it('loads consensus fixture', () => {
+      expect(consensusText).toBeDefined();
+      expect(consensusText.length).toBeGreaterThan(0);
+      expect(consensusText).toContain('network-status-version');
+    });
 
-  it('publicDecrypt throws AsyncPublicDecryptRequired', async () => {
-    const key = createPublicKey(SIGNING_KEY_PEM);
-    const signature = Uint8Array.from(atob(SIGNATURE_BASE64), (c) => c.charCodeAt(0));
+    it('loads authority keys fixture', () => {
+      expect(authorityKeysText).toBeDefined();
+      expect(authorityKeysText.length).toBeGreaterThan(0);
+      expect(authorityKeysText).toContain('dir-key-certificate-version');
+    });
 
-    let asyncError: unknown = null;
+    it('parses consensus signatures', () => {
+      const signatures = parseConsensusSignatures(consensusText);
+      expect(signatures.length).toBeGreaterThanOrEqual(8);
 
-    try {
-      publicDecrypt({ key, padding: constants.RSA_PKCS1_PADDING }, signature);
-    } catch (err) {
-      asyncError = err;
-    }
-
-    // In browser, publicDecrypt throws AsyncPublicDecryptRequired
-    expect(asyncError).not.toBeNull();
-    expect((asyncError as Error).name).toBe('AsyncPublicDecryptRequired');
-    expect((asyncError as { promise: Promise<Uint8Array> }).promise).toBeInstanceOf(Promise);
-  });
-
-  it('publicDecrypt recovers correct hash from signature', async () => {
-    const key = createPublicKey(SIGNING_KEY_PEM);
-    const signature = Uint8Array.from(atob(SIGNATURE_BASE64), (c) => c.charCodeAt(0));
-
-    let decryptedHash: Uint8Array | undefined;
-
-    try {
-      publicDecrypt({ key, padding: constants.RSA_PKCS1_PADDING }, signature);
-    } catch (err: unknown) {
-      if (
-        err &&
-        typeof err === 'object' &&
-        'name' in err &&
-        err.name === 'AsyncPublicDecryptRequired' &&
-        'promise' in err
-      ) {
-        // Await the async result
-        decryptedHash = await (err as unknown as { promise: Promise<Uint8Array> }).promise;
-      } else {
-        throw err;
+      for (const sig of signatures) {
+        expect(sig.algorithm).toBe('sha256');
+        expect(sig.identityFingerprint.length).toBe(40);
+        expect(sig.signingKeyFingerprint.length).toBe(40);
+        expect(sig.signature.length).toBeGreaterThan(0);
       }
-    }
+    });
 
-    expect(decryptedHash).toBeDefined();
-    expect(decryptedHash!.length).toBe(32); // SHA-256 is 32 bytes
+    it('parses authority key certificates', () => {
+      const certificates = parseAllKeyCertificates(authorityKeysText);
+      expect(certificates.length).toBeGreaterThanOrEqual(8);
 
-    // Convert to hex and compare
-    const decryptedHex = Array.from(decryptedHash!)
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
+      for (const cert of certificates) {
+        expect(cert.identityFingerprint.length).toBe(40);
+        expect(cert.signingKeyFingerprint.length).toBe(40);
+        expect(cert.signingKeyPem).toContain('-----BEGIN RSA PUBLIC KEY-----');
+      }
+    });
 
-    expect(decryptedHex).toBe(EXPECTED_HASH_HEX);
-  });
+    it('certificates match consensus signatures', () => {
+      const signatures = parseConsensusSignatures(consensusText);
+      const certificates = parseAllKeyCertificates(authorityKeysText);
 
-  it('publicDecrypt fails gracefully with wrong signature', async () => {
-    const key = createPublicKey(SIGNING_KEY_PEM);
-    // Corrupt the signature
-    const corruptedSig = Uint8Array.from(atob(SIGNATURE_BASE64), (c) => c.charCodeAt(0));
-    corruptedSig[0] ^= 0xff;
-
-    let error: Error | undefined;
-
-    try {
-      publicDecrypt({ key, padding: constants.RSA_PKCS1_PADDING }, corruptedSig);
-    } catch (err: unknown) {
-      if (
-        err &&
-        typeof err === 'object' &&
-        'name' in err &&
-        err.name === 'AsyncPublicDecryptRequired' &&
-        'promise' in err
-      ) {
-        try {
-          await (err as unknown as { promise: Promise<Uint8Array> }).promise;
-        } catch (e) {
-          error = e as Error;
+      let matchCount = 0;
+      for (const sig of signatures) {
+        const cert = certificates.find(
+          (c) =>
+            c.identityFingerprint.toUpperCase() === sig.identityFingerprint.toUpperCase() &&
+            c.signingKeyFingerprint.toUpperCase() === sig.signingKeyFingerprint.toUpperCase()
+        );
+        if (cert) {
+          matchCount++;
         }
       }
-    }
 
-    // Should fail with padding error
-    expect(error).toBeDefined();
+      // All 9 signatures should have matching certificates
+      expect(matchCount).toBe(signatures.length);
+    });
   });
 
-  it('createHash computes correct SHA-256', () => {
-    // Test that our hash function works correctly
-    const testData = 'Hello, World!';
-    const hash = crypto.createHash('sha256').update(testData).digest();
+  describe('Full consensus verification with all authorities', () => {
+    let keyCertificates: AuthorityKeyCertificate[];
 
-    // Known SHA-256 of "Hello, World!"
-    const expectedHex = 'dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f';
-    // digest() returns Buffer when no encoding is specified, but the type is Buffer | string
-    const hashBuffer = hash as Buffer;
-    const actualHex = Array.from(new Uint8Array(hashBuffer))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
+    // Parse certificates once for all tests
+    keyCertificates = parseAllKeyCertificates(authorityKeysText);
 
-    expect(actualHex).toBe(expectedHex);
-  });
+    it('verifies all consensus signatures using browser crypto', async () => {
+      // Use a fixed time that's within the certificate validity period
+      // The certificates have various expiry dates, we use a time when most are valid
+      const testTime = new Date('2026-01-13T00:00:00Z').getTime();
 
-  it('createHash computes correct SHA-1', () => {
-    const testData = 'Hello, World!';
-    const hash = crypto.createHash('sha1').update(testData).digest();
+      const result = await verifyConsensusSignaturesAsync(consensusText, {
+        keyCertificates,
+        requiredSignatures: 5,
+        now: testTime,
+      });
 
-    // Known SHA-1 of "Hello, World!"
-    const expectedHex = '0a0a9f2a6772942557ab5355d76af442f8f65e01';
-    // digest() returns Buffer when no encoding is specified, but the type is Buffer | string
-    const hashBuffer = hash as Buffer;
-    const actualHex = Array.from(new Uint8Array(hashBuffer))
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
+      // Log the results for debugging
+      console.log(`Verification result: valid=${result.valid}`);
+      console.log(
+        `Valid signatures: ${result.validSignatureCount}/${result.requiredSignatureCount} required`
+      );
 
-    expect(actualHex).toBe(expectedHex);
-  });
-});
-
-describe('Tor consensus signature verification integration', () => {
-  /**
-   * This test simulates the full consensus signature verification flow
-   * as it would happen in the browser, using pre-computed digest.
-   */
-  it('verifies signature with pre-computed digest', async () => {
-    const key = createPublicKey(SIGNING_KEY_PEM);
-    const signature = Uint8Array.from(atob(SIGNATURE_BASE64), (c) => c.charCodeAt(0));
-
-    // The expected digest (pre-computed hash of consensus signed portion)
-    const expectedDigest = Uint8Array.from(
-      EXPECTED_HASH_HEX.match(/.{2}/g)!.map((byte) => parseInt(byte, 16))
-    );
-
-    let decryptedHash: Uint8Array | undefined;
-
-    try {
-      publicDecrypt({ key, padding: constants.RSA_PKCS1_PADDING }, signature);
-    } catch (err: unknown) {
-      if (
-        err &&
-        typeof err === 'object' &&
-        'name' in err &&
-        err.name === 'AsyncPublicDecryptRequired' &&
-        'promise' in err
-      ) {
-        decryptedHash = await (err as unknown as { promise: Promise<Uint8Array> }).promise;
-      } else {
-        throw err;
+      for (const sig of result.signatures) {
+        const status = sig.valid ? '✓' : '✗';
+        const name = sig.nickname ?? sig.identityFingerprint.slice(0, 8);
+        console.log(`  ${status} ${name}: ${sig.valid ? 'OK' : sig.error}`);
       }
-    }
 
-    // Verify the decrypted hash matches the expected digest
-    expect(decryptedHash).toBeDefined();
-    expect(decryptedHash!.length).toBe(expectedDigest.length);
+      // The consensus should be valid with at least 5 valid signatures
+      expect(result.valid).toBe(true);
+      expect(result.validSignatureCount).toBeGreaterThanOrEqual(5);
+    });
 
-    // Compare byte by byte
-    for (let i = 0; i < expectedDigest.length; i++) {
-      expect(decryptedHash![i]).toBe(expectedDigest[i]);
-    }
-  });
+    it('verifies each authority signature individually', async () => {
+      const signatures = parseConsensusSignatures(consensusText);
+      const signedPortion = getConsensusSignedPortion(consensusText);
 
-  /**
-   * Additional test with a different authority to ensure the verification
-   * is not specific to one key/signature combination.
-   */
-  it('verifies signature from different authority (longclaw)', async () => {
-    // Signing key for longclaw (23D15D965BC35114467363C165C4F724B64B4F66)
-    const longclawKeyPem = `-----BEGIN RSA PUBLIC KEY-----
-MIIBCgKCAQEAq/DVJAbGZivOFEtzRaeGD4VxAO6dVIkTeS0YTNSUw0pttlAcFgFU
-+owfKTg/eH8ecI7ugABiX0cosuI1S8Za7qLKnqnuQUbLSUrIRqyx+l6CnYiW4MrG
-oac97wOg9kQ8b3UEbeGgfl4qmL6OfRxdXlLmafM6p0q65m9lJOr3TATSuIUqga1z
-J1GdXXzRIO19QnY6QtW9TvMoo0BgjqfAyHAs9focGO7mru4qr21ySkoZyfIk2/Jb
-ijIc0evuvD5kmJ/XukhYYzW7mDdT2J6r97tOK8xLAX7l8eFm4N73MCscq8DOAVO0
-4ssMBDf5sKlQ0JkOz6xoJ+4ayuSDlwsXYQIDAQAB
------END RSA PUBLIC KEY-----`;
+      // Compute expected hash
+      const hashObj = crypto.createHash('sha256').update(signedPortion).digest();
+      const expectedHash = new Uint8Array(hashObj as Buffer);
+      const expectedHashHex = Array.from(expectedHash)
+        .map((b) => b.toString(16).padStart(2, '0'))
+        .join('');
 
-    // Signature from longclaw on the same consensus
-    const longclawSigBase64 =
-      'TofqXjLMRIHkeALfypvT4SjDeMAQtcSVAvMonE2i8RlReg/LcddRPLNFGgAKhUwF' +
-      'xHk8jT8MnkwRRgg3FAy3g76Org8HbctDZ2Lo2BTZOWGbPGbKwywai4V4Ti4zT4qH' +
-      'sTddo5JHWO0BzqiariL6cT3puu9+ffoTxYoL1rRyWy6VN+GBmQGuNb2y1v3PGTSQ' +
-      'pzrhYimjroUUboDxZIP7B1J8FNHfSzjfuKDNc+Mi8fQhvs/Yf27iOeiUdSxqZRtg' +
-      'nRGqHIUNZnIu4vhuIVlsa9LcubijEc21qE7LNgY/KfhRyEU40U9VYFJbIFpgFYoQ' +
-      'Sb4zO4080iq6fsMmPn9/Bw==';
+      console.log(`Signed portion length: ${signedPortion.length}`);
+      console.log(`Expected hash: ${expectedHashHex.slice(0, 32)}...`);
 
-    const key = createPublicKey(longclawKeyPem);
-    const signature = Uint8Array.from(atob(longclawSigBase64), (c) => c.charCodeAt(0));
+      let validCount = 0;
 
-    let decryptedHash: Uint8Array | undefined;
+      for (const sig of signatures) {
+        const cert = keyCertificates.find(
+          (c) =>
+            c.identityFingerprint.toUpperCase() === sig.identityFingerprint.toUpperCase() &&
+            c.signingKeyFingerprint.toUpperCase() === sig.signingKeyFingerprint.toUpperCase()
+        );
 
-    try {
-      publicDecrypt({ key, padding: constants.RSA_PKCS1_PADDING }, signature);
-    } catch (err: unknown) {
-      if (
-        err &&
-        typeof err === 'object' &&
-        'name' in err &&
-        err.name === 'AsyncPublicDecryptRequired' &&
-        'promise' in err
-      ) {
-        decryptedHash = await (err as unknown as { promise: Promise<Uint8Array> }).promise;
-      } else {
-        throw err;
+        if (!cert) {
+          console.log(`No certificate for ${sig.identityFingerprint.slice(0, 8)}`);
+          continue;
+        }
+
+        const authority = findAuthorityByFingerprint(sig.identityFingerprint);
+        const name = authority?.nickname ?? sig.identityFingerprint.slice(0, 8);
+
+        // Verify using browser crypto shim's publicDecrypt
+        const key = createPublicKey(cert.signingKeyPem);
+        const signatureBytes = new Uint8Array(sig.signature);
+
+        let decryptedHash: Uint8Array | undefined;
+        let error: string | undefined;
+
+        try {
+          publicDecrypt({ key, padding: constants.RSA_PKCS1_PADDING }, signatureBytes);
+        } catch (err: unknown) {
+          if (
+            err &&
+            typeof err === 'object' &&
+            'name' in err &&
+            err.name === 'AsyncPublicDecryptRequired' &&
+            'promise' in err
+          ) {
+            try {
+              decryptedHash = await (err as unknown as { promise: Promise<Uint8Array> }).promise;
+            } catch (e) {
+              error = (e as Error).message;
+            }
+          } else {
+            error = (err as Error).message;
+          }
+        }
+
+        if (decryptedHash) {
+          const decryptedHex = Array.from(decryptedHash)
+            .map((b) => b.toString(16).padStart(2, '0'))
+            .join('');
+
+          const isValid = decryptedHex === expectedHashHex;
+          console.log(`${name}: ${isValid ? 'VALID' : 'INVALID'}`);
+
+          if (isValid) {
+            validCount++;
+          }
+        } else {
+          console.log(`${name}: ERROR - ${error}`);
+        }
       }
-    }
 
-    expect(decryptedHash).toBeDefined();
-    expect(decryptedHash!.length).toBe(32);
+      // At least 5 signatures should be valid
+      expect(validCount).toBeGreaterThanOrEqual(5);
+    });
 
-    // Should produce the same hash (both signatures are for the same consensus)
-    const decryptedHex = Array.from(decryptedHash!)
-      .map((b) => b.toString(16).padStart(2, '0'))
-      .join('');
+    it('fails verification with corrupted consensus', async () => {
+      // Corrupt the consensus by modifying some content
+      const corruptedConsensus = consensusText.replace(
+        'network-status-version',
+        'corrupted-header'
+      );
 
-    expect(decryptedHex).toBe(EXPECTED_HASH_HEX);
+      const testTime = new Date('2026-01-13T00:00:00Z').getTime();
+
+      const result = await verifyConsensusSignaturesAsync(corruptedConsensus, {
+        keyCertificates,
+        requiredSignatures: 5,
+        now: testTime,
+      });
+
+      // Corrupted consensus should fail verification
+      expect(result.valid).toBe(false);
+      expect(result.validSignatureCount).toBe(0);
+    });
+
+    it('requires minimum number of valid signatures', async () => {
+      const testTime = new Date('2026-01-13T00:00:00Z').getTime();
+
+      // Require more signatures than available
+      const result = await verifyConsensusSignaturesAsync(consensusText, {
+        keyCertificates,
+        requiredSignatures: 100,
+        now: testTime,
+      });
+
+      expect(result.valid).toBe(false);
+      expect(result.requiredSignatureCount).toBe(100);
+    });
   });
 });
