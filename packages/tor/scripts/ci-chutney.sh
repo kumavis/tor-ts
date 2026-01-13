@@ -142,12 +142,13 @@ EOF
 timeout 10m ./chutney bootstrap "${CHUTNEY_NETWORK}"
 ./chutney status "${CHUTNEY_NETWORK}"
 
-# If we plan to run the hidden-service test, wait until the hidden service has actually
-# uploaded its descriptor to HSDirs. The hostname file can exist before descriptor
-# upload is complete, which can cause flaky 404s when the client looks up /tor/hs/3/<z>.
+# If we plan to run the hidden-service test, wait until the hidden service has:
+# 1. Established at least one intro point (INTRO_ESTABLISHED received)
+# 2. Uploaded its descriptor to HSDirs
+# This prevents flakiness where the client tries to use an intro point before it's ready.
 if [[ ",${TOR_TS_CHUTNEY_TESTS:-exit,hidden-service}," == *",hidden-service,"* ]]; then
   echo ""
-  echo "Waiting for hidden service descriptor upload (to reduce flakiness)..."
+  echo "Waiting for hidden service intro points + descriptor upload (to reduce flakiness)..."
   python3 - <<'PY'
 import glob
 import os
@@ -164,20 +165,42 @@ if not hs_nodes:
 
 hs_log = os.path.join(hs_nodes[0], "info.log")
 deadline = time.time() + 180  # seconds
-needle1 = "HS descriptor stored successfully."
-needle2 = "Uploading hidden service descriptor: finished with status 200"
 
+# Conditions to check:
+# 1. Intro point established - the relay has registered the service
+intro_established_needle = "Successfully received an INTRO_ESTABLISHED cell"
+# 2. Descriptor uploaded - clients can now fetch it
+desc_upload_needle1 = "HS descriptor stored successfully."
+desc_upload_needle2 = "Uploading hidden service descriptor: finished with status 200"
+
+intro_ready = False
+desc_uploaded = False
 last_size = -1
+
 while time.time() <= deadline:
-    # Ensure hostname exists too (helps diagnostics)
     if os.path.exists(hostname_path) and os.path.exists(hs_log):
         try:
             txt = open(hs_log, "r", encoding="utf-8", errors="replace").read()
         except Exception:
             txt = ""
-        if needle1 in txt or needle2 in txt:
-            print("Hidden service descriptor upload confirmed.")
+        
+        # Check intro point establishment
+        if not intro_ready and intro_established_needle in txt:
+            print("Intro point established (INTRO_ESTABLISHED received).")
+            intro_ready = True
+        
+        # Check descriptor upload
+        if not desc_uploaded and (desc_upload_needle1 in txt or desc_upload_needle2 in txt):
+            print("Descriptor upload confirmed.")
+            desc_uploaded = True
+        
+        # Both conditions met - add a small grace period for relay-side processing
+        if intro_ready and desc_uploaded:
+            print("Both intro points and descriptor ready. Waiting 2s grace period...")
+            time.sleep(2)
+            print("Hidden service fully ready.")
             raise SystemExit(0)
+        
         try:
             sz = os.path.getsize(hs_log)
         except OSError:
@@ -186,9 +209,10 @@ while time.time() <= deadline:
             last_size = sz
     time.sleep(1)
 
-print("Timed out waiting for hidden service descriptor upload.")
-print(f"hostname_path={hostname_path}")
-print(f"hs_log={hs_log}")
+print("Timed out waiting for hidden service readiness.")
+print(f"  intro_ready={intro_ready}, desc_uploaded={desc_uploaded}")
+print(f"  hostname_path={hostname_path}")
+print(f"  hs_log={hs_log}")
 try:
     tail = open(hs_log, "r", encoding="utf-8", errors="replace").read().splitlines()[-40:]
     print("Last 40 lines of hs info.log:")
