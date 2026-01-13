@@ -135,7 +135,7 @@ HiddenServiceDir ${CHUTNEY_DATA_DIR}/hs_service
 HiddenServicePort 80 127.0.0.1:${TOR_TS_HS_TARGET_PORT}
 """)
 
-NODES = Authority.getN(4) + Relay.getN(6) + ExitRelay.getN(1) + Client.getN(1) + HiddenService.getN(1)
+NODES = Authority.getN(4) + Relay.getN(2) + ExitRelay.getN(1) + Client.getN(1) + HiddenService.getN(1)
 ConfigureNodes(NODES)
 EOF
 
