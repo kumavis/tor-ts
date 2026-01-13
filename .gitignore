@@ -1,6 +1,9 @@
 # Dependencies
 node_modules/
 
+# Yarn
+.yarn/install-state.gz
+
 # Build outputs
 dist/
 *.tsbuildinfo
