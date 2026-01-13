@@ -271,11 +271,38 @@ function aes256CtrXor(key: Buffer, iv: Buffer, data: Buffer): Buffer {
   return Buffer.concat([cipher.update(data), cipher.final()]);
 }
 
-function toBase64UrlNoPad(buf: Buffer): string {
+/**
+ * Browser-compatible async AES-256-CTR XOR using Web Crypto.
+ * This version works in both Node.js (18+) and browsers.
+ */
+export async function aes256CtrXorAsync(key: Buffer, iv: Buffer, data: Buffer): Promise<Buffer> {
+  const cryptoKey = await crypto.subtle.importKey(
+    'raw',
+    Uint8Array.from(key),
+    { name: 'AES-CTR' },
+    false,
+    ['encrypt', 'decrypt']
+  );
+  const result = await crypto.subtle.encrypt(
+    {
+      name: 'AES-CTR',
+      counter: Uint8Array.from(iv),
+      length: 64,
+    },
+    cryptoKey,
+    Uint8Array.from(data)
+  );
+  return Buffer.from(result);
+}
+
+export function toBase64UrlNoPad(buf: Buffer): string {
   return buf.toString('base64').replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 }
 
-function computeDisasterSrv(params: { periodLengthMinutes: bigint; periodNum: bigint }): Buffer {
+export function computeDisasterSrv(params: {
+  periodLengthMinutes: bigint;
+  periodNum: bigint;
+}): Buffer {
   // Tor-compatible disaster SRV (see tor hs_common.c compute_disaster_srv()):
   // SHA3-256("shared-random-disaster" | INT_8(period_length) | INT_8(period_num))
   const prefix = Buffer.from('shared-random-disaster', 'ascii');
@@ -319,12 +346,12 @@ function hsBuildHsdirIndex(params: {
   );
 }
 
-type HsdirCandidate = {
+export type HsdirCandidate = {
   peerInfo: PeerInfo;
   ed25519IdentityKey: Buffer;
 };
 
-function selectHsdirsForFetch(params: {
+export function selectHsdirsForFetch(params: {
   hsdirs: HsdirCandidate[];
   sharedRandomValue: Buffer;
   blindedPublicKey: Buffer;
@@ -420,6 +447,13 @@ export function parseOnionV3Address(onion: string): { publicIdentityKey: Buffer 
     throw new Error('Invalid v3 onion checksum');
   }
   return { publicIdentityKey: Buffer.from(pub) };
+}
+
+/**
+ * Check if a hostname is a .onion address.
+ */
+export function isOnionAddress(hostname: string): boolean {
+  return hostname.toLowerCase().endsWith('.onion');
 }
 
 export function computeTimePeriod(params: {
@@ -551,6 +585,37 @@ function decryptHsLayer(params: {
   return aes256CtrXor(secretKey, secretIv, encrypted);
 }
 
+/**
+ * Async version of decryptHsLayer using Web Crypto (browser-compatible).
+ */
+async function decryptHsLayerAsync(params: {
+  ciphertext: Buffer;
+  secretData: Buffer;
+  subcred: Buffer;
+  revisionCounter: bigint;
+  stringConstant: string;
+}): Promise<Buffer> {
+  const { ciphertext, secretData, subcred, revisionCounter, stringConstant } = params;
+  if (ciphertext.length < 16 + 32) throw new Error('Encrypted layer too short');
+  const salt = ciphertext.subarray(0, 16);
+  const macIn = ciphertext.subarray(ciphertext.length - 32);
+  const encrypted = ciphertext.subarray(16, ciphertext.length - 32);
+
+  const secretInput = Buffer.concat([secretData, subcred, u64be(revisionCounter)]);
+  const keys = kdfShake256(
+    Buffer.concat([secretInput, salt, Buffer.from(stringConstant, 'ascii')]),
+    S_KEY_LEN + S_IV_LEN + MAC_KEY_LEN
+  );
+  const secretKey = keys.subarray(0, S_KEY_LEN);
+  const secretIv = keys.subarray(S_KEY_LEN, S_KEY_LEN + S_IV_LEN);
+  const macKey = keys.subarray(S_KEY_LEN + S_IV_LEN);
+  const macExpected = dMac(macKey, salt, encrypted);
+  if (!macIn.equals(macExpected)) {
+    throw new Error('Descriptor layer MAC check failed');
+  }
+  return await aes256CtrXorAsync(secretKey, secretIv, encrypted);
+}
+
 function trimTrailingNuls(b: Buffer): Buffer {
   let end = b.length;
   while (end > 0 && b[end - 1] === 0x00) end--;
@@ -663,6 +728,94 @@ function parseSecondLayerPlaintext(text: string): HiddenServiceDescriptor {
 }
 
 /**
+ * Fetch and decrypt a hidden service descriptor via a directory stream.
+ * This is the browser-compatible version that uses async Web Crypto.
+ *
+ * @param circuit - An existing circuit to use for the directory stream
+ * @param hsdirPeer - The HSDir peer info (used for logging, not for connection)
+ * @param blindedPublicKey - The blinded public key for the HS
+ * @param subcred - The subcredential for decryption
+ * @param timeoutMs - Timeout for the request
+ */
+export async function fetchHsDescriptorOverDirectoryStream(
+  circuit: Circuit,
+  _hsdirPeer: PeerInfo,
+  blindedPublicKey: Buffer,
+  subcred: Buffer,
+  timeoutMs: number
+): Promise<HiddenServiceDescriptor | undefined> {
+  const z = toBase64UrlNoPad(blindedPublicKey);
+
+  try {
+    const stream = await circuit.openDirectoryStream();
+
+    const requestText =
+      `GET /tor/hs/3/${encodeURIComponent(z)} HTTP/1.0\r\n` +
+      `Host: hsdir\r\n` +
+      `Connection: close\r\n` +
+      `\r\n`;
+
+    const chunks: Buffer[] = [];
+    stream.on('data', (d: Buffer) => chunks.push(Buffer.from(d)));
+
+    const endedP = new Promise<void>((resolve, reject) => {
+      stream.once('end', (err?: Error) => {
+        if (err) reject(err);
+        else resolve();
+      });
+    });
+
+    await Promise.race([
+      stream.write(Buffer.from(requestText, 'ascii')),
+      new Promise<never>((_r, rej) =>
+        setTimeout(() => rej(new Error('dir request write timeout')), timeoutMs)
+      ),
+    ]);
+
+    await Promise.race([
+      endedP,
+      new Promise<never>((_r, rej) =>
+        setTimeout(() => rej(new Error('dir request read timeout')), timeoutMs)
+      ),
+    ]);
+
+    const resp = Buffer.concat(chunks).toString('utf8');
+    if (!resp.startsWith('HTTP/')) return undefined;
+    if (!resp.includes(' 200 ')) return undefined;
+
+    const split = resp.split('\r\n\r\n');
+    if (split.length < 2) return undefined;
+    const outerText = split.slice(1).join('\r\n\r\n');
+
+    // Parse and decrypt the descriptor
+    const outer = parseHsDescriptorOuter(outerText);
+    const firstPlain = trimTrailingNuls(
+      await decryptHsLayerAsync({
+        ciphertext: outer.superencrypted,
+        secretData: blindedPublicKey,
+        subcred,
+        revisionCounter: outer.revisionCounter,
+        stringConstant: 'hsdir-superencrypted-data',
+      })
+    );
+    const firstText = firstPlain.toString('utf8');
+    const { innerEncrypted } = parseFirstLayerPlaintext(firstText);
+    const secondPlain = trimTrailingNuls(
+      await decryptHsLayerAsync({
+        ciphertext: innerEncrypted,
+        secretData: blindedPublicKey,
+        subcred,
+        revisionCounter: outer.revisionCounter,
+        stringConstant: 'hsdir-encrypted-data',
+      })
+    );
+    return parseSecondLayerPlaintext(secondPlain.toString('utf8'));
+  } catch {
+    return undefined;
+  }
+}
+
+/**
  * WARNING: This function fetches the hidden service descriptor using a direct (non-Tor) HTTP request
  * to HSDir `ip:dirPort` via Node’s global `fetch()`.
  *
@@ -761,7 +914,7 @@ export async function dangerouslyLookupHiddenServiceDescriptor(params: {
   return { blindedPublicKey, subcred, descriptor };
 }
 
-type HsNtorClientState = {
+export type HsNtorClientState = {
   x: Buffer;
   X: Buffer;
   B: Buffer;
@@ -789,7 +942,7 @@ function hsNtorDeriveEncAndMac(params: {
   return { ENC_KEY, MAC_KEY };
 }
 
-function hsNtorComplete(params: { state: HsNtorClientState; Y: Buffer; auth: Buffer }): {
+export function hsNtorComplete(params: { state: HsNtorClientState; Y: Buffer; auth: Buffer }): {
   NTOR_KEY_SEED: Buffer;
 } {
   const PROTOID = Buffer.from('tor-hs-ntor-curve25519-sha3-256-1', 'ascii');
@@ -819,7 +972,7 @@ function hsNtorComplete(params: { state: HsNtorClientState; Y: Buffer; auth: Buf
   return { NTOR_KEY_SEED };
 }
 
-function makeHsRendezvousCipherPairFromKeySeed(NTOR_KEY_SEED: Buffer) {
+export function makeHsRendezvousCipherPairFromKeySeed(NTOR_KEY_SEED: Buffer) {
   const PROTOID = Buffer.from('tor-hs-ntor-curve25519-sha3-256-1', 'ascii');
   const m_hsexpand = Buffer.from(`${PROTOID.toString('ascii')}:hs_key_expand`, 'ascii');
   const K = kdfShake256(Buffer.concat([NTOR_KEY_SEED, m_hsexpand]), HASH_LEN * 2 + S_KEY_LEN * 2);
@@ -845,7 +998,7 @@ function makeHsRendezvousCipherPairFromKeySeed(NTOR_KEY_SEED: Buffer) {
   return cipherPair;
 }
 
-function peerInfoFromIntroPoint(intro: IntroPoint): PeerInfo {
+export function peerInfoFromIntroPoint(intro: IntroPoint): PeerInfo {
   const legacyId = intro.linkSpecifiers.find((ls) => ls.type === 2 /* LegacyId */);
   if (!legacyId) throw new Error('Introduction point link specifiers missing legacy identity');
   return {
@@ -855,13 +1008,13 @@ function peerInfoFromIntroPoint(intro: IntroPoint): PeerInfo {
   };
 }
 
-function buildIntroduce1Payload(params: {
+export async function buildIntroduce1Payload(params: {
   introAuthKeyEd25519: Buffer;
   serviceEncKey: Buffer;
   N_hs_subcred: Buffer;
   rendezvousCookie: Buffer;
   rendezvousPoint: PeerInfo;
-}): { payload: Buffer; state: HsNtorClientState } {
+}): Promise<{ payload: Buffer; state: HsNtorClientState }> {
   const AUTH_KEY = params.introAuthKeyEd25519;
   const legacyKeyId = Buffer.alloc(20, 0);
   const AUTH_KEY_TYPE = Buffer.from([0x02]); // ed25519
@@ -914,7 +1067,8 @@ function buildIntroduce1Payload(params: {
     N_hs_subcred: params.N_hs_subcred,
   });
   const iv0 = Buffer.alloc(16, 0);
-  const C = aes256CtrXor(ENC_KEY, iv0, paddedPlaintext);
+  // Use async Web Crypto version for browser compatibility
+  const C = await aes256CtrXorAsync(ENC_KEY, iv0, paddedPlaintext);
   const macInput = Buffer.concat([header, X, C]);
   const M = mac(MAC_KEY, macInput);
 
@@ -1216,7 +1370,7 @@ export async function connectToHiddenServiceOverChutney(params: {
       await introCircuit.connect();
 
       console.log(`hs: send INTRODUCE1 (attempt ${attempt + 1}/${maxIntroAttempts})`);
-      const { payload: introducePayload, state } = buildIntroduce1Payload({
+      const { payload: introducePayload, state } = await buildIntroduce1Payload({
         introAuthKeyEd25519: intro.authKeyEd25519,
         serviceEncKey: intro.serviceEncKey,
         N_hs_subcred: subcred,
