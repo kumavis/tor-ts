@@ -683,7 +683,6 @@ export class Circuit extends EventEmitter {
       throw new Error('stream is destroyed');
     }
     for (const chunk of chunkDataForRelayDataCells(data)) {
-      console.log(`writing ${chunk.length} bytes to stream ${streamId}`);
       const relayCell = {
         streamId,
         relayCommand: RelayCell.DATA,
