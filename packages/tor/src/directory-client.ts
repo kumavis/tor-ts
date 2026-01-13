@@ -219,6 +219,38 @@ export class DirectoryClient {
     }
     return response.body;
   }
+
+  /**
+   * Download microdescriptors by their base64-encoded digests.
+   * Equivalent to: GET /tor/micro/d/{hash1}-{hash2}-...
+   *
+   * Microdescriptors contain the exit policy summary (p line) and other info.
+   * The hashes are the base64-encoded SHA256 digests from the consensus 'm' lines.
+   *
+   * @param digestsBase64 - Array of base64-encoded microdescriptor digests (without padding)
+   * @returns Raw microdescriptor content (may contain multiple descriptors)
+   */
+  async downloadMicrodescriptors(digestsBase64: string[]): Promise<string> {
+    if (digestsBase64.length === 0) {
+      return '';
+    }
+
+    // Convert base64 digests to the format expected by the directory server
+    // The digests need to be joined with hyphens
+    const digestList = digestsBase64.join('-');
+    const path = `/tor/micro/d/${digestList}`;
+
+    const response = await this.request('GET', path);
+    if (response.statusCode === 404) {
+      return ''; // No microdescriptors found
+    }
+    if (response.statusCode !== 200) {
+      throw new Error(
+        `Failed to download microdescriptors: ${response.statusCode} ${response.statusText}`
+      );
+    }
+    return response.body;
+  }
 }
 
 /**
@@ -249,6 +281,120 @@ export function extractEd25519IdentityFromDescriptor(descriptorText: string): Bu
     throw new Error(`Expected 32-byte ed25519 identity, got ${key.length}`);
   }
   return key;
+}
+
+import { parseExitPolicySummary, type ExitPolicy } from './exit-policy.ts';
+
+/**
+ * Parsed microdescriptor containing exit policy and other info.
+ */
+export type ParsedMicrodescriptor = {
+  /** The onion-key line (RSA public key, PEM format) - optional in newer microdescriptors */
+  onionKey?: string;
+  /** The ntor-onion-key (curve25519 public key, base64) */
+  ntorOnionKey?: Buffer;
+  /** Exit policy summary */
+  exitPolicy?: ExitPolicy;
+  /** IPv6 exit policy summary */
+  exitPolicyV6?: ExitPolicy;
+  /** Ed25519 identity key */
+  ed25519Identity?: Buffer;
+  /** Family IDs */
+  familyIds?: string[];
+};
+
+/**
+ * Parse a single microdescriptor.
+ *
+ * Microdescriptor format:
+ * ```
+ * onion-key
+ * -----BEGIN RSA PUBLIC KEY-----
+ * ...
+ * -----END RSA PUBLIC KEY-----
+ * ntor-onion-key <base64>
+ * p accept 80,443
+ * p6 accept 80,443
+ * id ed25519 <base64>
+ * ```
+ */
+export function parseMicrodescriptor(content: string): ParsedMicrodescriptor {
+  const result: ParsedMicrodescriptor = {};
+  const lines = content.split('\n');
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i]!;
+
+    if (line.startsWith('ntor-onion-key ')) {
+      const keyB64 = line.slice('ntor-onion-key '.length).trim();
+      result.ntorOnionKey = Buffer.from(keyB64, 'base64');
+    } else if (line.startsWith('p ')) {
+      const policy = parseExitPolicySummary(line);
+      if (policy) result.exitPolicy = policy;
+    } else if (line.startsWith('p6 ')) {
+      // IPv6 policy - similar format but prefixed with p6
+      const policyLine = 'p ' + line.slice(3); // Convert to standard format for parsing
+      const policy = parseExitPolicySummary(policyLine);
+      if (policy) result.exitPolicyV6 = policy;
+    } else if (line.startsWith('id ed25519 ')) {
+      const keyB64 = line.slice('id ed25519 '.length).trim();
+      result.ed25519Identity = Buffer.from(keyB64, 'base64');
+    } else if (line.startsWith('family ')) {
+      result.familyIds = line.slice('family '.length).trim().split(' ');
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Parse multiple microdescriptors from a batch response.
+ *
+ * Microdescriptors are separated by "onion-key" lines (or "ntor-onion-key" if no RSA key).
+ * Returns a map from microdescriptor digest to parsed descriptor.
+ */
+export function parseMicrodescriptorBatch(
+  content: string,
+  digestsBase64: string[]
+): Map<string, ParsedMicrodescriptor> {
+  const result = new Map<string, ParsedMicrodescriptor>();
+
+  if (!content || content.trim() === '') {
+    return result;
+  }
+
+  // Split on @last annotation or on "onion-key" / "ntor-onion-key" at start of line
+  // Microdescriptors are separated by the start of a new one
+  const descriptorTexts: string[] = [];
+  let currentDescriptor: string[] = [];
+
+  for (const line of content.split('\n')) {
+    // A new microdescriptor starts with "onion-key" or "ntor-onion-key"
+    if (
+      (line === 'onion-key' || line.startsWith('ntor-onion-key ')) &&
+      currentDescriptor.length > 0
+    ) {
+      descriptorTexts.push(currentDescriptor.join('\n'));
+      currentDescriptor = [];
+    }
+    currentDescriptor.push(line);
+  }
+
+  // Don't forget the last descriptor
+  if (currentDescriptor.length > 0) {
+    descriptorTexts.push(currentDescriptor.join('\n'));
+  }
+
+  // Parse each descriptor and match to digests
+  // Note: The order of descriptors in the response matches the order of digests requested
+  for (let i = 0; i < descriptorTexts.length && i < digestsBase64.length; i++) {
+    const text = descriptorTexts[i]!;
+    const digest = digestsBase64[i]!;
+    const parsed = parseMicrodescriptor(text);
+    result.set(digest, parsed);
+  }
+
+  return result;
 }
 
 // Re-export types from directory.ts for convenience
@@ -335,4 +481,60 @@ export async function lookupPeerInfoWithEd25519IdentityKey(
   const ed25519IdentityKey = extractEd25519IdentityFromDescriptor(descriptor);
   const peerInfo = microDescNodeInfoToPeerInfo(nodeInfo, onionKey);
   return { peerInfo, ed25519IdentityKey };
+}
+
+/**
+ * Fetch exit policies for a list of relay nodes by downloading their microdescriptors.
+ *
+ * This mutates the input nodeInfos by setting their exitPolicy field.
+ * Only fetches policies for nodes that have an mKey (microdescriptor digest).
+ *
+ * @param client - DirectoryClient to use for downloads
+ * @param nodeInfos - Array of relay nodes to fetch policies for
+ * @returns The number of policies successfully fetched
+ */
+export async function fetchExitPolicies(
+  client: DirectoryClient,
+  nodeInfos: MicroDescNodeInfo[]
+): Promise<number> {
+  // Filter to nodes with mKey and build digest list
+  const nodesWithMKey = nodeInfos.filter((n) => n.mKey);
+  if (nodesWithMKey.length === 0) {
+    return 0;
+  }
+
+  // Convert mKey buffers to base64 (without padding, as used in directory requests)
+  const digestsBase64 = nodesWithMKey.map((n) => n.mKey!.toString('base64').replace(/=+$/, ''));
+
+  // Build a map from digest to node for quick lookup
+  const digestToNode = new Map<string, MicroDescNodeInfo>();
+  for (let i = 0; i < nodesWithMKey.length; i++) {
+    digestToNode.set(digestsBase64[i]!, nodesWithMKey[i]!);
+  }
+
+  // Download microdescriptors in batches (directory servers may limit request size)
+  const BATCH_SIZE = 92; // ~92 base64 digests fit in reasonable URL length
+  let fetchedCount = 0;
+
+  for (let i = 0; i < digestsBase64.length; i += BATCH_SIZE) {
+    const batchDigests = digestsBase64.slice(i, i + BATCH_SIZE);
+    try {
+      const content = await client.downloadMicrodescriptors(batchDigests);
+      const parsed = parseMicrodescriptorBatch(content, batchDigests);
+
+      // Update node infos with exit policies
+      for (const [digest, microdesc] of parsed) {
+        const node = digestToNode.get(digest);
+        if (node && microdesc.exitPolicy) {
+          node.exitPolicy = microdesc.exitPolicy;
+          fetchedCount++;
+        }
+      }
+    } catch {
+      // Continue with other batches if one fails
+      continue;
+    }
+  }
+
+  return fetchedCount;
 }

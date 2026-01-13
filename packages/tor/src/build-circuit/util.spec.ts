@@ -3,8 +3,16 @@
  */
 
 import test from 'ava';
-import { filterRelaysByFlags, pickRelayWithFlags } from './util.ts';
+import {
+  filterRelaysByFlags,
+  pickRelayWithFlags,
+  filterExitsByPolicy,
+  computeRelayWeights,
+  pickRelayWeighted,
+  getBandwidthWeightMultiplier,
+} from './util.ts';
 import type { MicroDescNodeInfo } from './directory.ts';
+import { parseExitPolicySummary } from '../exit-policy.ts';
 
 function createMockRelay(nickname: string, flags: string[] = []): MicroDescNodeInfo {
   return {
@@ -148,4 +156,173 @@ test('pickRelayWithFlags: picks from available relays randomly', (t) => {
 
   // With 100 relays and 50 picks, we should get at least a few different ones
   t.true(picked.size > 1, 'Expected multiple different relays to be picked');
+});
+
+// Tests for exit policy filtering
+
+function createMockRelayWithPolicy(
+  nickname: string,
+  flags: string[],
+  policyLine?: string,
+  bandwidth?: number
+): MicroDescNodeInfo {
+  const relay: MicroDescNodeInfo = {
+    nickname,
+    rsaIdDigest: Buffer.from(nickname.padEnd(20, '0')),
+    publication_date: new Date(),
+    ip_address: '127.0.0.1',
+    onion_router_port: 9001,
+    directory_server_port: 9030,
+    flags,
+    protocols: {},
+  };
+  if (policyLine) {
+    const policy = parseExitPolicySummary(policyLine);
+    if (policy) relay.exitPolicy = policy;
+  }
+  if (bandwidth !== undefined) {
+    relay.bandwidthStats = { Bandwidth: bandwidth };
+  }
+  return relay;
+}
+
+test('filterExitsByPolicy: filters exits by accept policy', (t) => {
+  const relays = [
+    createMockRelayWithPolicy('exit1', ['Exit'], 'p accept 80,443'),
+    createMockRelayWithPolicy('exit2', ['Exit'], 'p accept 80'),
+    createMockRelayWithPolicy('exit3', ['Exit'], 'p accept 443'),
+  ];
+
+  // Port 80 only
+  const result80 = filterExitsByPolicy(relays, [80]);
+  t.is(result80.length, 2);
+  t.true(result80.some((r) => r.nickname === 'exit1'));
+  t.true(result80.some((r) => r.nickname === 'exit2'));
+
+  // Port 443 only
+  const result443 = filterExitsByPolicy(relays, [443]);
+  t.is(result443.length, 2);
+  t.true(result443.some((r) => r.nickname === 'exit1'));
+  t.true(result443.some((r) => r.nickname === 'exit3'));
+
+  // Both ports required
+  const resultBoth = filterExitsByPolicy(relays, [80, 443]);
+  t.is(resultBoth.length, 1);
+  t.is(resultBoth[0]!.nickname, 'exit1');
+});
+
+test('filterExitsByPolicy: filters exits by reject policy', (t) => {
+  const relays = [
+    createMockRelayWithPolicy('exit1', ['Exit'], 'p reject 25,445'),
+    createMockRelayWithPolicy('exit2', ['Exit'], 'p reject 80'),
+    createMockRelayWithPolicy('exit3', ['Exit'], 'p reject 1-65535'),
+  ];
+
+  const result = filterExitsByPolicy(relays, [80, 443]);
+  t.is(result.length, 1);
+  t.is(result[0]!.nickname, 'exit1');
+});
+
+test('filterExitsByPolicy: includes relays without policy info', (t) => {
+  const relays = [
+    createMockRelayWithPolicy('exit1', ['Exit'], 'p accept 80,443'),
+    createMockRelayWithPolicy('exit2', ['Exit'], undefined), // No policy
+  ];
+
+  const result = filterExitsByPolicy(relays, [80]);
+  t.is(result.length, 2); // Both included - no policy = permissive
+});
+
+test('filterExitsByPolicy: empty target ports excludes reject-all', (t) => {
+  const relays = [
+    createMockRelayWithPolicy('exit1', ['Exit'], 'p accept 80'),
+    createMockRelayWithPolicy('exit2', ['Exit'], 'p reject 1-65535'),
+  ];
+
+  const result = filterExitsByPolicy(relays, []);
+  t.is(result.length, 1);
+  t.is(result[0]!.nickname, 'exit1');
+});
+
+// Tests for bandwidth-weighted selection
+
+test('computeRelayWeights: computes weights based on bandwidth', (t) => {
+  const relays = [
+    createMockRelayWithPolicy('relay1', ['Exit'], undefined, 1000),
+    createMockRelayWithPolicy('relay2', ['Exit'], undefined, 2000),
+    createMockRelayWithPolicy('relay3', ['Exit'], undefined, 3000),
+  ];
+
+  const bandwidthWeights = { Wee: 10000 }; // Full weight for exits
+  const weights = computeRelayWeights(relays, 'exit', bandwidthWeights);
+
+  t.is(weights.length, 3);
+  t.is(weights[0], 1000);
+  t.is(weights[1], 2000);
+  t.is(weights[2], 3000);
+});
+
+test('computeRelayWeights: applies position-specific weight multipliers', (t) => {
+  const relay = createMockRelayWithPolicy('relay1', ['Guard', 'Exit'], undefined, 1000);
+
+  const bandwidthWeights = {
+    Wgd: 5000, // Guard+Exit in guard position = 0.5
+    Wmd: 3000, // Guard+Exit in middle position = 0.3
+    Wed: 8000, // Guard+Exit in exit position = 0.8
+  };
+
+  t.is(getBandwidthWeightMultiplier(relay, 'guard', bandwidthWeights), 0.5);
+  t.is(getBandwidthWeightMultiplier(relay, 'middle', bandwidthWeights), 0.3);
+  t.is(getBandwidthWeightMultiplier(relay, 'exit', bandwidthWeights), 0.8);
+});
+
+test('pickRelayWeighted: selects based on weights', (t) => {
+  const relays = [
+    createMockRelayWithPolicy('heavy', ['Exit'], undefined, 9000),
+    createMockRelayWithPolicy('light', ['Exit'], undefined, 1000),
+  ];
+
+  const weights = [9000, 1000];
+
+  // With random = 0.1, should select first relay (9000/10000 = 0.9 threshold)
+  const picked1 = pickRelayWeighted(relays, weights, 0.1);
+  t.is(picked1.nickname, 'heavy');
+
+  // With random = 0.95, should select second relay (past 9000/10000 threshold)
+  const picked2 = pickRelayWeighted(relays, weights, 0.95);
+  t.is(picked2.nickname, 'light');
+});
+
+test('pickRelayWeighted: handles zero weights', (t) => {
+  const relays = [
+    createMockRelayWithPolicy('relay1', ['Exit'], undefined),
+    createMockRelayWithPolicy('relay2', ['Exit'], undefined),
+  ];
+
+  const weights = [0, 0];
+
+  // Should fall back to uniform random
+  const picked = pickRelayWeighted(relays, weights, 0.5);
+  t.truthy(picked); // Just verify it doesn't crash
+});
+
+test('pickRelayWeighted: throws on empty relay list', (t) => {
+  t.throws(() => pickRelayWeighted([], []), {
+    message: /No relays to pick from/,
+  });
+});
+
+test('pickRelayWeighted: throws on mismatched arrays', (t) => {
+  const relays = [createMockRelayWithPolicy('relay1', ['Exit'])];
+  t.throws(() => pickRelayWeighted(relays, [1, 2]), {
+    message: /same length/,
+  });
+});
+
+test('getBandwidthWeightMultiplier: uses default for missing weights', (t) => {
+  const relay = createMockRelayWithPolicy('relay1', ['Guard'], undefined, 1000);
+
+  // Empty bandwidth weights - should use defaults
+  const multiplier = getBandwidthWeightMultiplier(relay, 'guard', {});
+  t.is(multiplier, 1); // Default weight / default scale = 10000/10000 = 1
 });
