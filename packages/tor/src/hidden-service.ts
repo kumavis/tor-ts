@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { x25519, ed25519 } from '@noble/curves/ed25519';
 import { sha3_256, shake256 } from '@noble/hashes/sha3';
-import { BytesReader } from './util.ts';
+import { BytesReader, Mutex } from './util.ts';
 import type { LinkSpecifier } from './messaging.ts';
 import { RelayCell } from './relay-cell.ts';
 import { makeAes256CtrKey } from './aes.ts';
@@ -18,6 +18,7 @@ import {
 import { TlsChannelConnection } from './channel.ts';
 import {
   getChutneyMicrodescConsensus,
+  getChutneyMicrodescConsensusSafe,
   getRandomChutneyCircuitPath,
   getRandomChutneyCircuitPathToTargetSafe,
 } from './build-circuit/chutney.ts';
@@ -27,6 +28,7 @@ import {
   lookupPeerInfo,
   lookupPeerInfoWithEd25519IdentityKey,
 } from './directory-client.ts';
+import type { MicroDescConsensus } from './build-circuit/directory.ts';
 
 const HASH_LEN = 32; // SHA3-256
 const MAC_KEY_LEN = 32;
@@ -34,6 +36,138 @@ const S_KEY_LEN = 32; // AES-256 key
 const S_IV_LEN = 16; // AES block/iv length
 
 const RELAY_PAYLOAD_LEN = 509 - 11;
+
+/**
+ * Checks if a consensus is still considered "fresh" for HS operations.
+ * A consensus is fresh if the current time is before its `freshUntil` timestamp.
+ * If `freshUntil` is not available, we estimate it as `validAfter + votingInterval`.
+ */
+function isConsensusFresh(consensus: MicroDescConsensus): boolean {
+  const now = Date.now();
+  if (consensus.freshUntil) {
+    return now < consensus.freshUntil.getTime();
+  }
+  // If freshUntil is missing, estimate based on validAfter + 1 voting interval.
+  // On mainnet this is 1 hour; on Chutney it's typically 20 seconds.
+  // Use a conservative default of 1 hour if validAfter is also missing.
+  if (consensus.validAfter) {
+    // Default voting interval is 1 hour (3600s), but Chutney uses ~20s.
+    // Without freshUntil, assume the consensus becomes stale after 1 voting interval.
+    const votingIntervalMs = 3600 * 1000;
+    return now < consensus.validAfter.getTime() + votingIntervalMs;
+  }
+  // No timing info available; consider stale to be safe
+  return false;
+}
+
+/**
+ * Time period information derived from a consensus, used for HS descriptor location.
+ */
+export interface TimePeriodInfo {
+  periodLengthMinutes: bigint;
+  periodCandidates: bigint[];
+  nReplicas: number;
+  spreadFetch: number;
+}
+
+/**
+ * Manages consensus state for hidden service operations.
+ *
+ * This class:
+ * - Holds the current consensus and refreshes it when stale
+ * - Uses a mutex to prevent concurrent refresh attempts
+ * - Computes time period information from the consensus
+ * - Fetches new consensus safely over the bootstrap circuit
+ */
+export class ChutneyConsensusManager {
+  private readonly mutex = new Mutex();
+  private readonly bootstrapCircuit: Circuit;
+  private readonly hsdirInterval: number;
+  private consensus: MicroDescConsensus;
+
+  constructor(bootstrapCircuit: Circuit, initialConsensus: MicroDescConsensus) {
+    this.bootstrapCircuit = bootstrapCircuit;
+    this.consensus = initialConsensus;
+    this.hsdirInterval = initialConsensus.params['hsdir-interval'] ?? 1440;
+  }
+
+  /**
+   * Returns a fresh consensus, fetching a new one if the current is stale.
+   * Uses mutex to prevent concurrent fetches.
+   */
+  async getConsensus(): Promise<MicroDescConsensus> {
+    // Quick check without lock
+    if (isConsensusFresh(this.consensus)) {
+      return this.consensus;
+    }
+
+    // Acquire mutex to prevent concurrent refreshes
+    const unlock = await this.mutex.lock();
+    try {
+      // Double-check after acquiring lock
+      if (isConsensusFresh(this.consensus)) {
+        return this.consensus;
+      }
+
+      // Actually refresh the consensus
+      console.log('hs: consensus stale, refreshing...');
+      const newConsensus = await getChutneyMicrodescConsensusSafe(this.bootstrapCircuit);
+      this.consensus = newConsensus;
+      console.log(
+        `hs: refreshed consensus valid-after=${newConsensus.validAfter?.toISOString() ?? 'unknown'}`
+      );
+      return this.consensus;
+    } finally {
+      unlock();
+    }
+  }
+
+  /**
+   * Computes time period information from the current consensus.
+   * Call this after getConsensus() to get derived HS timing values.
+   */
+  computeTimePeriodInfo(): TimePeriodInfo {
+    const c = this.consensus;
+    if (!c.validAfter) {
+      throw new Error('Consensus missing valid-after; cannot compute HS time period');
+    }
+
+    const timeArgs: Parameters<typeof computeTimePeriod>[0] = { validAfter: c.validAfter };
+    if (c.freshUntil) timeArgs.freshUntil = c.freshUntil;
+
+    // On mainnet, hsdir-interval == derived (votingIntervalSec * 24)/60 because the voting interval is 1h.
+    // On testing networks (including Chutney), Tor ignores hsdir-interval and derives the period length from
+    // the voting interval, which is typically much shorter than 1h. To match Tor behavior across both cases,
+    // only pass hsdir-interval when it matches the derived value; otherwise let computeTimePeriod derive it.
+    const votingIntervalSec = c.freshUntil
+      ? Math.floor((c.freshUntil.getTime() - c.validAfter.getTime()) / 1000)
+      : 3600;
+    const derivedPeriodMinutes = Math.max(1, Math.floor((votingIntervalSec * 24) / 60));
+    if (this.hsdirInterval === derivedPeriodMinutes) {
+      timeArgs.hsdirIntervalMinutes = this.hsdirInterval;
+    }
+
+    const { periodNum: basePeriodNum, periodLengthMinutes } = computeTimePeriod(timeArgs);
+    const periodCandidates = [basePeriodNum, basePeriodNum - 1n, basePeriodNum + 1n].filter(
+      (n) => n >= 0n
+    );
+    const nReplicas = Math.min(16, Math.max(1, c.params['hsdir_n_replicas'] ?? 2));
+    const spreadFetch = Math.min(128, Math.max(1, c.params['hsdir_spread_fetch'] ?? 3));
+
+    return { periodLengthMinutes, periodCandidates, nReplicas, spreadFetch };
+  }
+
+  /**
+   * Returns the current SRV values from the consensus, with disaster SRV fallbacks.
+   */
+  getSrvValues(periodLengthMinutes: bigint, periodNum: bigint): Buffer[] {
+    const disasterSrv = computeDisasterSrv({ periodLengthMinutes, periodNum });
+    return [
+      this.consensus.sharedRandCurrentValue ?? disasterSrv,
+      this.consensus.sharedRandPreviousValue ?? disasterSrv,
+    ];
+  }
+}
 
 async function tryReadChutneyEd25519IdentityKeyMap(): Promise<Map<string, Buffer> | undefined> {
   const dataDir = process.env.CHUTNEY_DATA_DIR;
@@ -839,8 +973,7 @@ export async function connectToHiddenServiceOverChutney(params: {
   const perHandshakeTimeoutMs = Math.min(overallTimeoutMs, 120_000);
 
   // Bootstrap: Get consensus using dangerous direct fetch (unavoidable for initial bootstrap)
-  const { consensus } = await getChutneyMicrodescConsensus();
-  const hsdirInterval = consensus.params['hsdir-interval'] ?? 1440;
+  const consensus: MicroDescConsensus = (await getChutneyMicrodescConsensus()).consensus;
   const hsdirNodes = (consensus.relays ?? []).filter((r) => {
     if (!(r.flags ?? []).includes('HSDir')) return false;
     const hsdirProto = r.protocols?.HSDir;
@@ -869,6 +1002,8 @@ export async function connectToHiddenServiceOverChutney(params: {
   // We need a bootstrap circuit to do safe directory lookups for the remaining nodes.
   // Build a random bootstrap circuit using dangerous methods (unavoidable for first circuit).
   let bootstrapCircuit: Circuit | undefined;
+  // Consensus manager handles fetching and caching consensus with mutex protection.
+  let consensusManager: ChutneyConsensusManager | undefined;
   try {
     // Build a random 3-hop circuit for directory lookups
     const bootstrapPath = await getRandomChutneyCircuitPath();
@@ -879,6 +1014,10 @@ export async function connectToHiddenServiceOverChutney(params: {
     await bootstrapChannel.connectPeerInfo(bootstrapFirst);
     bootstrapCircuit = new Circuit({ path: bootstrapPath, channel: bootstrapChannel });
     await bootstrapCircuit.connect();
+
+    // Create consensus manager to handle stale consensus during retries.
+    // This prevents concurrent refresh attempts and encapsulates time period computation.
+    consensusManager = new ChutneyConsensusManager(bootstrapCircuit, consensus);
 
     // Now use safe lookups for HSDir candidates
     const dirClient = new DirectoryClient(bootstrapCircuit);
@@ -912,34 +1051,24 @@ export async function connectToHiddenServiceOverChutney(params: {
   }
 
   const { publicIdentityKey } = parseOnionV3Address(params.onionAddress);
-  const timeArgs: Parameters<typeof computeTimePeriod>[0] = { validAfter: consensus.validAfter };
-  if (consensus.freshUntil) timeArgs.freshUntil = consensus.freshUntil;
-  // On mainnet, hsdir-interval == derived (votingIntervalSec * 24)/60 because the voting interval is 1h.
-  // On testing networks (including Chutney), Tor ignores hsdir-interval and derives the period length from
-  // the voting interval, which is typically much shorter than 1h. To match Tor behavior across both cases,
-  // only pass hsdir-interval when it matches the derived value; otherwise let computeTimePeriod derive it.
-  const votingIntervalSec = consensus.freshUntil
-    ? Math.floor((consensus.freshUntil.getTime() - consensus.validAfter.getTime()) / 1000)
-    : 3600;
-  const derivedPeriodMinutes = Math.max(1, Math.floor((votingIntervalSec * 24) / 60));
-  if (hsdirInterval === derivedPeriodMinutes) {
-    timeArgs.hsdirIntervalMinutes = hsdirInterval;
-  }
-  const { periodNum: basePeriodNum, periodLengthMinutes } = computeTimePeriod(timeArgs);
 
-  const periodCandidates = [basePeriodNum, basePeriodNum - 1n, basePeriodNum + 1n].filter(
-    (n) => n >= 0n
-  );
   const deadline = Date.now() + descriptorTimeoutMs;
 
   let subcred: Buffer | undefined;
   let blindedPublicKey: Buffer | undefined;
   let outerText: string | undefined;
 
-  const nReplicas = Math.min(16, Math.max(1, consensus.params['hsdir_n_replicas'] ?? 2));
-  const spreadFetch = Math.min(128, Math.max(1, consensus.params['hsdir_spread_fetch'] ?? 3));
-
   while (!outerText && Date.now() <= deadline) {
+    // Get fresh consensus (refreshes automatically if stale).
+    // This is critical for fast-rotating networks like Chutney where the
+    // SRV and time period can change during the retry loop.
+    // Note: consensusManager is guaranteed to be set after bootstrap circuit setup.
+    await consensusManager!.getConsensus();
+
+    // Compute time period info from the (possibly refreshed) consensus
+    const { periodLengthMinutes, periodCandidates, nReplicas, spreadFetch } =
+      consensusManager!.computeTimePeriodInfo();
+
     for (const periodNum of periodCandidates) {
       blindedPublicKey = deriveBlindedPublicKey({
         publicIdentityKey,
@@ -949,14 +1078,8 @@ export async function connectToHiddenServiceOverChutney(params: {
       subcred = deriveSubcredential({ publicIdentityKey, blindedPublicKey });
       const z = toBase64UrlNoPad(blindedPublicKey);
 
-      // Tor always has a "current" and "previous" SRV concept. If either is missing
-      // from the consensus, Tor uses a derived "disaster" SRV instead. To reduce
-      // flakiness around SRV/TP boundaries in Chutney, try both.
-      const disasterSrv = computeDisasterSrv({ periodLengthMinutes, periodNum });
-      const srvValues: Buffer[] = [
-        consensus.sharedRandCurrentValue ?? disasterSrv,
-        consensus.sharedRandPreviousValue ?? disasterSrv,
-      ];
+      // Get SRV values from consensus (with disaster SRV fallbacks)
+      const srvValues = consensusManager!.getSrvValues(periodLengthMinutes, periodNum);
 
       for (const srv of srvValues) {
         const hsdirPeersThisRound = selectHsdirsForFetch({
