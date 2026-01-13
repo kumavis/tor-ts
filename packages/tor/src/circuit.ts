@@ -612,8 +612,6 @@ export class Circuit extends EventEmitter {
         if (!stream) {
           throw new Error(`Got DATA for unknown streamId=${streamId}`);
         }
-        console.log(`got ${data.length} bytes of data for stream ${streamId}`);
-
         // Stream-level flow control
         const shouldSendStreamSendme = stream.recordDeliveredCell();
         if (shouldSendStreamSendme) {
