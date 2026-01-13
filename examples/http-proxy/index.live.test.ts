@@ -2,7 +2,8 @@
  * Live test for http-proxy example.
  *
  * Tests that we can establish a Tor circuit and proxy HTTP/HTTPS requests through it.
- * This tests the core functionality without requiring the full proxy server.
+ * Uses captive.apple.com which returns a simple "Success" response and doesn't
+ * block Tor exit nodes like many other services do.
  */
 
 import http from 'http';
@@ -24,8 +25,8 @@ test.serial('http-proxy: can proxy HTTP request through Tor circuit', async (t) 
     circuit.destroy();
   });
 
-  // Test HTTP request through proxy agent
-  const target = 'http://api.ipify.org';
+  // Use Apple's captive portal detection endpoint - it returns "Success" and doesn't block Tor
+  const target = 'http://captive.apple.com';
   console.log(`[test] Testing HTTP request to ${target}...`);
 
   const agent = getTorAgentForUrl(circuit, target);
@@ -42,14 +43,12 @@ test.serial('http-proxy: can proxy HTTP request through Tor circuit', async (t) 
     req.on('error', reject);
   });
 
-  console.log(`[test] IP address via Tor HTTP: ${body}`);
+  console.log(`[test] Response via Tor HTTP: ${body.trim()}`);
 
-  // Verify we got a valid IP address format
-  const ipv4Regex = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
-  const ipv6Regex = /^[a-fA-F0-9:]+$/;
+  // Apple's captive portal returns exactly "Success" when there's internet connectivity
   t.true(
-    ipv4Regex.test(body.trim()) || ipv6Regex.test(body.trim()),
-    `Response should be a valid IP address, got: ${body}`
+    body.includes('Success'),
+    `Response should contain 'Success', got: ${body.substring(0, 100)}`
   );
 });
 
@@ -65,8 +64,8 @@ test.serial('http-proxy: can proxy HTTPS request through Tor circuit', async (t)
     circuit.destroy();
   });
 
-  // Test HTTPS request through proxy agent
-  const target = 'https://api.ipify.org';
+  // Use Apple's captive portal detection endpoint over HTTPS
+  const target = 'https://captive.apple.com';
   console.log(`[test] Testing HTTPS request to ${target}...`);
 
   const agent = getTorAgentForUrl(circuit, target);
@@ -83,14 +82,12 @@ test.serial('http-proxy: can proxy HTTPS request through Tor circuit', async (t)
     req.on('error', reject);
   });
 
-  console.log(`[test] IP address via Tor HTTPS: ${body}`);
+  console.log(`[test] Response via Tor HTTPS: ${body.trim()}`);
 
-  // Verify we got a valid IP address format
-  const ipv4Regex = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
-  const ipv6Regex = /^[a-fA-F0-9:]+$/;
+  // Apple's captive portal returns exactly "Success" when there's internet connectivity
   t.true(
-    ipv4Regex.test(body.trim()) || ipv6Regex.test(body.trim()),
-    `Response should be a valid IP address, got: ${body}`
+    body.includes('Success'),
+    `Response should contain 'Success', got: ${body.substring(0, 100)}`
   );
 });
 
@@ -125,8 +122,8 @@ test.serial('http-proxy: proxy server can handle HTTP requests', async (t) => {
     circuit.destroy();
   });
 
-  // Make request through proxy
-  const target = 'http://api.ipify.org';
+  // Use Apple's captive portal detection endpoint
+  const target = 'http://captive.apple.com';
   console.log(`[test] Making request through proxy to ${target}...`);
 
   const body = await new Promise<string>((resolve, reject) => {
@@ -149,13 +146,11 @@ test.serial('http-proxy: proxy server can handle HTTP requests', async (t) => {
     req.on('error', reject);
   });
 
-  console.log(`[test] IP address via proxy: ${body}`);
+  console.log(`[test] Response via proxy: ${body.trim()}`);
 
-  // Verify we got a valid IP address format
-  const ipv4Regex = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
-  const ipv6Regex = /^[a-fA-F0-9:]+$/;
+  // Apple's captive portal returns exactly "Success" when there's internet connectivity
   t.true(
-    ipv4Regex.test(body.trim()) || ipv6Regex.test(body.trim()),
-    `Response should be a valid IP address, got: ${body}`
+    body.includes('Success'),
+    `Response should contain 'Success', got: ${body.substring(0, 100)}`
   );
 });

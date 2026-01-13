@@ -2,6 +2,8 @@
  * Live test for node-fetch example.
  *
  * Tests that we can establish a Tor circuit and make HTTP requests through it.
+ * Uses captive.apple.com which returns a simple "Success" response and doesn't
+ * block Tor exit nodes like many other services do.
  */
 
 import test from 'ava';
@@ -21,7 +23,8 @@ test('node-fetch: can fetch through Tor circuit', async (t) => {
     circuit.destroy();
   });
 
-  const target = 'https://api.ipify.org';
+  // Use Apple's captive portal detection endpoint - it returns "Success" and doesn't block Tor
+  const target = 'http://captive.apple.com';
   console.log(`[test] Fetching ${target} through Tor...`);
 
   const agent = getTorAgentForUrl(circuit, target);
@@ -30,14 +33,12 @@ test('node-fetch: can fetch through Tor circuit', async (t) => {
   console.log(`[test] Got response: ${response.status}`);
   t.is(response.status, 200, 'Response should be 200 OK');
 
-  const ipAddress = await response.text();
-  console.log(`[test] IP address via Tor: ${ipAddress}`);
+  const body = await response.text();
+  console.log(`[test] Response body: ${body.trim()}`);
 
-  // Verify we got a valid IP address format (IPv4 or IPv6)
-  const ipv4Regex = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
-  const ipv6Regex = /^[a-fA-F0-9:]+$/;
+  // Apple's captive portal returns exactly "Success" when there's internet connectivity
   t.true(
-    ipv4Regex.test(ipAddress) || ipv6Regex.test(ipAddress),
-    `Response should be a valid IP address, got: ${ipAddress}`
+    body.includes('Success'),
+    `Response should contain 'Success', got: ${body.substring(0, 100)}`
   );
 });
