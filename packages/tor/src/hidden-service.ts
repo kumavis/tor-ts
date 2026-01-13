@@ -1020,8 +1020,9 @@ export async function connectToHiddenServiceOverChutney(params: {
   );
   const descriptor = parseSecondLayerPlaintext(secondPlain.toString('utf8'));
 
-  const intro = descriptor.introPoints[0];
-  if (!intro) throw new Error('Descriptor contained no introduction points');
+  // Shuffle intro points for load balancing (per spec: client MAY try different intro points)
+  const introPoints = shuffleInPlace([...descriptor.introPoints]);
+  if (introPoints.length === 0) throw new Error('Descriptor contained no introduction points');
 
   // Pick a rendezvous relay (any relay should work; prefer ones that can do HSRend=2 if present).
   const rendCandidates = consensus.relays.filter((r) => {
@@ -1060,42 +1061,89 @@ export async function connectToHiddenServiceOverChutney(params: {
   });
   await waitForRelayCommand(rendCircuit, RelayCell.RENDEZVOUS_ESTABLISHED, perHandshakeTimeoutMs);
 
-  // Build intro circuit safely using the bootstrap circuit for directory lookups
-  console.log('hs: building intro circuit');
-  const introPeer = peerInfoFromIntroPoint(intro);
-  const introPath = await getRandomChutneyCircuitPathToTargetSafe(bootstrapCircuit!, introPeer, {
-    avoidRsaIdDigests: [rendezvousPoint.rsaIdDigest],
-  });
-  const introChannel = new TlsChannelConnection();
-  const introFirst = introPath[0];
-  if (!introFirst) throw new Error('Empty introduction circuit path');
-  await introChannel.connectPeerInfo(introFirst);
-  const introCircuit = new Circuit({ path: introPath, channel: introChannel });
-  await introCircuit.connect();
+  // Try each introduction point until one succeeds (per spec: client MAY try different intro points on failure)
+  // Arti uses hs_intro_rend_attempts=6 by default, allowing cycling through intro points more than once
+  const maxIntroAttempts = Math.min(6, introPoints.length * 2);
+  const introErrors: Error[] = [];
+  let successfulIntro:
+    | { intro: IntroPoint; introCircuit: Circuit; state: HsNtorClientState }
+    | undefined;
 
-  console.log('hs: send INTRODUCE1');
-  const { payload: introducePayload, state } = buildIntroduce1Payload({
-    introAuthKeyEd25519: intro.authKeyEd25519,
-    serviceEncKey: intro.serviceEncKey,
-    N_hs_subcred: subcred,
-    rendezvousCookie,
-    rendezvousPoint,
-  });
-  await introCircuit.sendRelayMessage({
-    streamId: 0,
-    relayCommand: RelayCell.INTRODUCE1,
-    data: introducePayload,
-  });
-  const ack = await waitForRelayCommand(
-    introCircuit,
-    RelayCell.INTRODUCE_ACK,
-    perHandshakeTimeoutMs
-  );
-  if (ack.data.length < 2) throw new Error('INTRODUCE_ACK too short');
-  const status = ack.data.readUInt16BE(0);
-  if (status !== 0) {
-    throw new Error(`INTRODUCE_ACK status=${status}`);
+  for (let attempt = 0; attempt < maxIntroAttempts; attempt++) {
+    // Cycle through intro points (modulo allows retrying the same points if maxIntroAttempts > introPoints.length)
+    const intro = introPoints[attempt % introPoints.length]!;
+
+    let introCircuit: Circuit | undefined;
+    try {
+      // Build intro circuit safely using the bootstrap circuit for directory lookups
+      console.log(`hs: building intro circuit (attempt ${attempt + 1}/${maxIntroAttempts})`);
+      const introPeer = peerInfoFromIntroPoint(intro);
+      const introPath = await getRandomChutneyCircuitPathToTargetSafe(
+        bootstrapCircuit!,
+        introPeer,
+        {
+          avoidRsaIdDigests: [rendezvousPoint.rsaIdDigest],
+        }
+      );
+      const introChannel = new TlsChannelConnection();
+      const introFirst = introPath[0];
+      if (!introFirst) throw new Error('Empty introduction circuit path');
+      await introChannel.connectPeerInfo(introFirst);
+      introCircuit = new Circuit({ path: introPath, channel: introChannel });
+      await introCircuit.connect();
+
+      console.log(`hs: send INTRODUCE1 (attempt ${attempt + 1}/${maxIntroAttempts})`);
+      const { payload: introducePayload, state } = buildIntroduce1Payload({
+        introAuthKeyEd25519: intro.authKeyEd25519,
+        serviceEncKey: intro.serviceEncKey,
+        N_hs_subcred: subcred,
+        rendezvousCookie,
+        rendezvousPoint,
+      });
+      await introCircuit.sendRelayMessage({
+        streamId: 0,
+        relayCommand: RelayCell.INTRODUCE1,
+        data: introducePayload,
+      });
+      const ack = await waitForRelayCommand(
+        introCircuit,
+        RelayCell.INTRODUCE_ACK,
+        perHandshakeTimeoutMs
+      );
+      if (ack.data.length < 2) throw new Error('INTRODUCE_ACK too short');
+      const status = ack.data.readUInt16BE(0);
+      if (status !== 0) {
+        // Per spec (rend-spec line 301-305): "If the INTRODUCE_ACK message indicates failure,
+        // the client MAY try a different introduction point."
+        // Status codes: 0=success, 1=service ID not recognized, 2=bad format, 3=can't relay
+        throw new Error(`INTRODUCE_ACK status=${status}`);
+      }
+
+      // Success! Keep the intro circuit alive until we're done with the state
+      successfulIntro = { intro, introCircuit, state };
+      console.log(`hs: INTRODUCE1 succeeded on attempt ${attempt + 1}`);
+      break;
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err));
+      introErrors.push(error);
+      console.log(`hs: intro attempt ${attempt + 1}/${maxIntroAttempts} failed: ${error.message}`);
+      // Clean up the failed intro circuit
+      introCircuit?.destroy();
+      // Continue to next intro point
+    }
   }
+
+  if (!successfulIntro) {
+    // Clean up before throwing
+    rendCircuit.destroy();
+    bootstrapCircuit?.destroy();
+    const errorSummary = introErrors.map((e) => e.message).join('; ');
+    throw new Error(`All ${maxIntroAttempts} introduction points failed: ${errorSummary}`);
+  }
+
+  const { introCircuit, state } = successfulIntro;
+
+  // Now safe to destroy the intro circuit (we have the state we need)
   introCircuit.destroy();
 
   // Clean up the bootstrap circuit now that we've built all needed circuits
