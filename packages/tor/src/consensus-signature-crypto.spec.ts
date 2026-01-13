@@ -16,6 +16,7 @@ import {
   parseAllKeyCertificates,
   findAuthorityByFingerprint,
   verifySignatureWithData,
+  verifySignatureWithDataAsync,
   verifyConsensusSignatures,
   verifyConsensusSignaturesAsync,
 } from './consensus-signature.ts';
@@ -379,11 +380,12 @@ test('Browser shim - pkcs1ToSpki conversion', async (t) => {
   }
 });
 
-// Failing: Web Crypto API only supports standard RSASSA-PKCS1-v1_5 with DigestInfo,
+// NOTE: Standard crypto.subtle.verify uses RSASSA-PKCS1-v1_5 with DigestInfo,
 // but Tor uses unprefixed PKCS#1 v1.5 (raw hash without DigestInfo).
-// This test documents the limitation; browser environments should use
-// dangerouslySkipSignatureVerification for now.
-test.failing('Browser shim - full verification flow', async (t) => {
+// We implement this using pure-JS RSA (modular exponentiation with BigInt) in
+// the browser shim's publicDecrypt function, which is used by verifySignatureAsync.
+// This test verifies the async verification path works correctly.
+test('verifySignatureWithDataAsync - pure-JS RSA verification', async (t) => {
   if (!hasFixtures) {
     t.pass('Skipping: no fixtures');
     return;
@@ -404,70 +406,17 @@ test.failing('Browser shim - full verification flow', async (t) => {
     const authority = findAuthorityByFingerprint(sig.identityFingerprint);
     const name = authority?.nickname ?? sig.identityFingerprint.slice(0, 8);
 
-    // Simulate browser shim flow
-    const pem = cert.signingKeyPem;
-    const lines = pem.split('\n');
-    const base64Lines = lines.filter((line) => !line.startsWith('-----') && line.trim().length > 0);
-    const base64 = base64Lines.join('');
-    const pkcs1Der = Buffer.from(base64, 'base64');
+    // Use the async verification function which handles both Node.js and browser paths
+    const valid = await verifySignatureWithDataAsync(
+      signedPortion,
+      sig.signature,
+      cert.signingKeyPem,
+      sig.algorithm
+    );
 
-    // Convert to SPKI
-    const rsaAlgorithmId = Buffer.from([
-      0x30, 0x0d, 0x06, 0x09, 0x2a, 0x86, 0x48, 0x86, 0xf7, 0x0d, 0x01, 0x01, 0x01, 0x05, 0x00,
-    ]);
-    const bitStringContent = Buffer.concat([Buffer.from([0x00]), pkcs1Der]);
-    let bitStringHeader: Buffer;
-    if (bitStringContent.length < 128) {
-      bitStringHeader = Buffer.from([0x03, bitStringContent.length]);
-    } else if (bitStringContent.length < 256) {
-      bitStringHeader = Buffer.from([0x03, 0x81, bitStringContent.length]);
-    } else {
-      bitStringHeader = Buffer.from([
-        0x03,
-        0x82,
-        (bitStringContent.length >> 8) & 0xff,
-        bitStringContent.length & 0xff,
-      ]);
-    }
-    const innerLength = rsaAlgorithmId.length + bitStringHeader.length + bitStringContent.length;
-    let outerSequence: Buffer;
-    if (innerLength < 128) {
-      outerSequence = Buffer.from([0x30, innerLength]);
-    } else if (innerLength < 256) {
-      outerSequence = Buffer.from([0x30, 0x81, innerLength]);
-    } else {
-      outerSequence = Buffer.from([0x30, 0x82, (innerLength >> 8) & 0xff, innerLength & 0xff]);
-    }
-    const spkiDer = Buffer.concat([
-      outerSequence,
-      rsaAlgorithmId,
-      bitStringHeader,
-      bitStringContent,
-    ]);
-
-    try {
-      const cryptoKey = await crypto.subtle.importKey(
-        'spki',
-        spkiDer,
-        { name: 'RSASSA-PKCS1-v1_5', hash: sig.algorithm === 'sha256' ? 'SHA-256' : 'SHA-1' },
-        true,
-        ['verify']
-      );
-
-      const signedData = new TextEncoder().encode(signedPortion);
-      const valid = await crypto.subtle.verify(
-        'RSASSA-PKCS1-v1_5',
-        cryptoKey,
-        new Uint8Array(sig.signature),
-        signedData
-      );
-
-      t.log(`${name}: ${valid ? 'VALID' : 'INVALID'}`);
-      if (valid) validCount++;
-    } catch (err) {
-      t.log(`${name}: ERROR - ${err}`);
-    }
+    t.log(`${name}: ${valid ? 'VALID' : 'INVALID'}`);
+    if (valid) validCount++;
   }
 
-  t.true(validCount >= 5, `At least 5 valid signatures with crypto.subtle (got ${validCount})`);
+  t.true(validCount >= 5, `At least 5 valid signatures (got ${validCount})`);
 });
