@@ -1,10 +1,54 @@
 import { Circuit } from '../circuit.ts';
 import type { PeerInfo } from '../circuit.ts';
 import { TlsChannelConnection } from '../channel.ts';
-import { DirectoryClient, lookupPeerInfo, parseMicroDescConsensus } from '../directory-client.ts';
-import type { MicroDescNodeInfo } from './directory.ts';
-import { pickRelayWithFlags } from './util.ts';
+import {
+  DirectoryClient,
+  lookupPeerInfo,
+  parseMicroDescConsensus,
+  fetchExitPolicies,
+} from '../directory-client.ts';
+import type { MicroDescNodeInfo, MicroDescConsensus } from './directory.ts';
+import {
+  pickRelayWithFlags,
+  filterRelaysByFlags,
+  pickExitRelay,
+  pickGuardRelay,
+  pickMiddleRelay,
+} from './util.ts';
 import { getRandomFallbackDirectory, fallbackToPeerInfo } from '../fallback-dirs.ts';
+import { DEFAULT_TARGET_PORTS } from '../exit-policy.ts';
+
+/**
+ * Options for circuit building.
+ */
+export type CircuitBuildOptions = {
+  /**
+   * Target ports the exit relay must support.
+   * Default: [80, 443] (HTTP and HTTPS)
+   *
+   * The circuit builder will select an exit relay whose exit policy
+   * allows connections to all specified ports.
+   */
+  targetPorts?: number[];
+
+  /**
+   * Whether to use bandwidth-weighted relay selection.
+   * Default: true
+   *
+   * When enabled, relays are selected with probability proportional
+   * to their bandwidth, following the Tor specification.
+   */
+  useBandwidthWeighting?: boolean;
+
+  /**
+   * Whether to fetch exit policies before selecting exits.
+   * Default: true
+   *
+   * When enabled, downloads microdescriptors for exit candidates
+   * to check their exit policies before selection.
+   */
+  fetchExitPoliciesBeforeSelection?: boolean;
+};
 
 /**
  * Bootstrap safely using hardcoded fallback directories.
@@ -48,8 +92,21 @@ export async function bootstrapWithFallbackDirectory(): Promise<Circuit> {
  *
  * This is the privacy-preserving way to look up relay information.
  * Requires an existing circuit to a relay that serves directory information.
+ *
+ * @param directoryCircuit - Existing circuit for directory lookups
+ * @param options - Circuit building options
+ * @returns Array of PeerInfo for the circuit path (Guard → Middle → Exit)
  */
-export async function getRandomCircuitPathSafe(directoryCircuit: Circuit): Promise<PeerInfo[]> {
+export async function getRandomCircuitPathSafe(
+  directoryCircuit: Circuit,
+  options: CircuitBuildOptions = {}
+): Promise<PeerInfo[]> {
+  const {
+    targetPorts = DEFAULT_TARGET_PORTS,
+    useBandwidthWeighting = true,
+    fetchExitPoliciesBeforeSelection = true,
+  } = options;
+
   const client = new DirectoryClient(directoryCircuit);
   const microDescContent = await client.downloadMicrodescConsensus();
   const consensus = parseMicroDescConsensus(microDescContent);
@@ -58,10 +115,15 @@ export async function getRandomCircuitPathSafe(directoryCircuit: Circuit): Promi
     throw new Error('No relays parsed from consensus');
   }
 
-  const circuitPlan: Array<MicroDescNodeInfo> = [];
-  circuitPlan.push(pickRelayWithFlags(consensus.relays, ['Exit'], circuitPlan));
-  circuitPlan.push(pickRelayWithFlags(consensus.relays, [], circuitPlan));
-  circuitPlan.push(pickRelayWithFlags(consensus.relays, ['Guard'], circuitPlan));
+  // Select relays based on options
+  const circuitPlan = useBandwidthWeighting
+    ? await selectRelaysWithBandwidthWeighting(
+        client,
+        consensus,
+        targetPorts,
+        fetchExitPoliciesBeforeSelection
+      )
+    : selectRelaysUniform(consensus.relays);
 
   // Look up PeerInfo safely through the circuit
   const circuitPeerInfos: Array<PeerInfo> = await Promise.all(
@@ -74,14 +136,67 @@ export async function getRandomCircuitPathSafe(directoryCircuit: Circuit): Promi
 }
 
 /**
+ * Select relays using bandwidth-weighted selection with exit policy checking.
+ */
+async function selectRelaysWithBandwidthWeighting(
+  client: DirectoryClient,
+  consensus: MicroDescConsensus,
+  targetPorts: number[],
+  fetchPolicies: boolean
+): Promise<MicroDescNodeInfo[]> {
+  const relays = consensus.relays;
+  const circuitPlan: MicroDescNodeInfo[] = [];
+
+  // Get exit candidates
+  const exitCandidates = filterRelaysByFlags(relays, ['Exit'], []);
+
+  // Fetch exit policies if requested
+  if (fetchPolicies && exitCandidates.length > 0) {
+    await fetchExitPolicies(client, exitCandidates);
+  }
+
+  // Pick exit with bandwidth weighting and policy filtering
+  const exit = pickExitRelay(relays, targetPorts, consensus, circuitPlan);
+  circuitPlan.push(exit);
+
+  // Pick middle relay (any relay not already selected)
+  const middle = pickMiddleRelay(relays, consensus, circuitPlan);
+  circuitPlan.push(middle);
+
+  // Pick guard relay
+  const guard = pickGuardRelay(relays, consensus, circuitPlan);
+  circuitPlan.push(guard);
+
+  return circuitPlan;
+}
+
+/**
+ * Select relays using uniform random selection (legacy behavior).
+ */
+function selectRelaysUniform(relays: MicroDescNodeInfo[]): MicroDescNodeInfo[] {
+  const circuitPlan: MicroDescNodeInfo[] = [];
+  circuitPlan.push(pickRelayWithFlags(relays, ['Exit'], circuitPlan));
+  circuitPlan.push(pickRelayWithFlags(relays, [], circuitPlan));
+  circuitPlan.push(pickRelayWithFlags(relays, ['Guard'], circuitPlan));
+  return circuitPlan;
+}
+
+/**
  * Build a new circuit using safe directory lookups over an existing circuit.
  *
  * This is the recommended way to build circuits after initial bootstrap.
  * The existing circuit is used only for directory lookups - the new circuit
  * is completely independent.
+ *
+ * @param directoryCircuit - Existing circuit for directory lookups
+ * @param options - Circuit building options
+ * @returns New 3-hop circuit
  */
-export async function connectRandomCircuitSafe(directoryCircuit: Circuit): Promise<Circuit> {
-  const circuitPeerInfos = await getRandomCircuitPathSafe(directoryCircuit);
+export async function connectRandomCircuitSafe(
+  directoryCircuit: Circuit,
+  options: CircuitBuildOptions = {}
+): Promise<Circuit> {
+  const circuitPeerInfos = await getRandomCircuitPathSafe(directoryCircuit, options);
   const gatewayPeerInfo = circuitPeerInfos[0];
   if (!gatewayPeerInfo) {
     throw new Error('Failed to build circuit path (no gateway peer)');
@@ -106,14 +221,19 @@ export async function connectRandomCircuitSafe(directoryCircuit: Circuit): Promi
  * 4. Close the bootstrap circuit
  *
  * The returned circuit is a full 3-hop circuit (Guard → Middle → Exit).
+ *
+ * @param options - Circuit building options
+ * @returns New 3-hop circuit
  */
-export async function connectRandomCircuitWithSafeBootstrap(): Promise<Circuit> {
+export async function connectRandomCircuitWithSafeBootstrap(
+  options: CircuitBuildOptions = {}
+): Promise<Circuit> {
   // Step 1: Bootstrap safely using fallback directory
   const bootstrapCircuit = await bootstrapWithFallbackDirectory();
 
   try {
     // Step 2: Build a full 3-hop circuit using safe lookups
-    const circuit = await connectRandomCircuitSafe(bootstrapCircuit);
+    const circuit = await connectRandomCircuitSafe(bootstrapCircuit, options);
 
     // Step 3: Clean up bootstrap circuit
     bootstrapCircuit.destroy();
@@ -124,3 +244,7 @@ export async function connectRandomCircuitWithSafeBootstrap(): Promise<Circuit> 
     throw err;
   }
 }
+
+// Re-export for convenience
+export { DEFAULT_TARGET_PORTS };
+export type { CircuitBuildOptions as BuildCircuitOptions };

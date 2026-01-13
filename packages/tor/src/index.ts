@@ -27,10 +27,15 @@ export {
   extractEd25519IdentityFromDescriptor,
   parseMicroDescConsensus,
   parseMicroDescConsensusAsync,
+  // Microdescriptor parsing
+  parseMicrodescriptor,
+  parseMicrodescriptorBatch,
+  fetchExitPolicies,
   type MicroDescNodeInfo,
   type MicroDescConsensus,
   type ParseMicroDescConsensusOptions,
   type DirectoryResponse,
+  type ParsedMicrodescriptor,
   // Consensus signature verification
   DIRECTORY_AUTHORITIES,
   verifyConsensusSignatures,
@@ -46,6 +51,19 @@ export {
   type VerifyConsensusOptions,
   type SignatureVerificationResult,
 } from './directory-client.ts';
+
+// Exit policy parsing and matching
+export {
+  parsePortList,
+  parseExitPolicySummary,
+  policyAllowsPort,
+  policyAllowsAllPorts,
+  policyAllowsAnyPort,
+  policyRejectsAll,
+  DEFAULT_TARGET_PORTS,
+  type ExitPolicy,
+  type PortRange,
+} from './exit-policy.ts';
 
 // Fallback directories for safe bootstrap
 export {

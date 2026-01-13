@@ -56,6 +56,7 @@ import {
   type ConsensusVerificationResult,
   type AuthorityKeyCertificate,
 } from '../consensus-signature.ts';
+import type { ExitPolicy } from '../exit-policy.ts';
 
 export type DirectoryAuthority = {
   dir_address?: string;
@@ -256,7 +257,7 @@ export type MicroDescNodeInfo = {
   ip_address: string;
   onion_router_port: number;
   directory_server_port: number;
-  // idk what this is
+  /** Microdescriptor digest (base64) - used to fetch the full microdescriptor */
   mKey?: Buffer;
   flags?: string[];
   version?: string;
@@ -264,6 +265,11 @@ export type MicroDescNodeInfo = {
   // bandwidth?: number;
   // unmeasured?: number;
   bandwidthStats?: Record<string, number>;
+  /**
+   * Exit policy parsed from microdescriptor.
+   * Set after downloading and parsing the microdescriptor.
+   */
+  exitPolicy?: ExitPolicy;
 };
 
 export type MicroDescConsensus = {
@@ -276,6 +282,13 @@ export type MicroDescConsensus = {
   relays: MicroDescNodeInfo[];
   /** Signature verification result, if verification was performed */
   signatureVerification?: ConsensusVerificationResult | undefined;
+  /**
+   * Bandwidth weights for path selection.
+   * Keys include: Wbd, Wbe, Wbg, Wbm, Wdb, Web, Wed, Wee, Weg, Wem,
+   * Wgb, Wgd, Wgg, Wgm, Wmb, Wmd, Wme, Wmg, Wmm
+   * Values are scaled by bwweightscale (typically 10000).
+   */
+  bandwidthWeights: Record<string, number>;
 };
 
 /**
@@ -368,6 +381,7 @@ export function parseMicroDescConsensus(
   let relayInfo: MicroDescNodeInfo | undefined;
   const relayInfos: MicroDescNodeInfo[] = [];
   const params: Record<string, number> = {};
+  const bandwidthWeights: Record<string, number> = {};
   let validAfter: Date | undefined;
   let freshUntil: Date | undefined;
   let validUntil: Date | undefined;
@@ -416,6 +430,16 @@ export function parseMicroDescConsensus(
     } else if (tokens[0] === 'shared-rand-current-value') {
       const valueB64 = tokens[2];
       if (valueB64) sharedRandCurrentValue = Buffer.from(valueB64, 'base64');
+      continue;
+    } else if (tokens[0] === 'bandwidth-weights') {
+      // bandwidth-weights Wbd=1004 Wbe=0 Wbg=3945 Wbm=10000 ...
+      for (const kv of tokens.slice(1)) {
+        const [k, v] = kv.split('=');
+        if (!k || !v) continue;
+        const n = Number.parseInt(v, 10);
+        if (!Number.isFinite(n)) continue;
+        bandwidthWeights[k] = n;
+      }
       continue;
     }
 
@@ -533,6 +557,7 @@ export function parseMicroDescConsensus(
     sharedRandCurrentValue,
     relays: relayInfos,
     signatureVerification,
+    bandwidthWeights,
   };
 }
 
