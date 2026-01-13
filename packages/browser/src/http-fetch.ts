@@ -7,11 +7,13 @@
  * This matches how Tor works: the exit node opens a raw TCP connection, and
  * the client is responsible for TLS if connecting to port 443.
  *
+ * FEATURES:
+ * - Automatic redirect following (3xx responses) with configurable max redirects
+ * - Supports both HTTP and HTTPS (TLS inside Tor stream for HTTPS)
+ *
  * LIMITATIONS:
  * - Responses are decoded as UTF-8 text. Binary responses (images, etc.) will be corrupted.
  *   This is intentional for the HTML-fetching use case. For binary data, use a Buffer-based API.
- * - HTTP redirects (3xx) are NOT followed automatically. Callers must handle redirects
- *   if needed (e.g., http→https, www→non-www).
  * - Only supports HTTP/1.1 with Connection: close semantics.
  */
 
@@ -260,17 +262,39 @@ function wrapRawStream(stream: CircuitStream): Transport {
   };
 }
 
+export interface FetchViaTorOptions {
+  method?: string;
+  headers?: Record<string, string>;
+  timeout?: number;
+  /** Maximum number of redirects to follow. Set to 0 to disable. Default: 10 */
+  maxRedirects?: number;
+  /** Whether to follow redirects automatically. Default: true */
+  followRedirects?: boolean;
+}
+
 /**
  * Fetch a URL over a Tor circuit.
  * Supports HTTP and HTTPS (TLS is performed inside the Tor stream for HTTPS).
- *
- * Note: Does not follow redirects. Check response.status for 3xx codes
- * and handle manually if redirect-following is needed.
+ * Automatically follows redirects (3xx responses) up to maxRedirects times.
  */
 export async function fetchViaTor(
   circuit: Circuit,
   url: string,
-  options: { method?: string; headers?: Record<string, string>; timeout?: number } = {}
+  options: FetchViaTorOptions = {}
+): Promise<TorFetchResponse> {
+  const { followRedirects = true, maxRedirects = 10 } = options;
+
+  return fetchViaTorInternal(circuit, url, options, followRedirects ? maxRedirects : 0);
+}
+
+/**
+ * Internal fetch implementation with redirect counter.
+ */
+async function fetchViaTorInternal(
+  circuit: Circuit,
+  url: string,
+  options: FetchViaTorOptions,
+  redirectsRemaining: number
 ): Promise<TorFetchResponse> {
   const parsedUrl = new URL(url);
   const host = parsedUrl.hostname;
@@ -316,6 +340,37 @@ export async function fetchViaTor(
   // Read response with timeout
   const timeout = options.timeout || 30000;
   const response = await readHttpResponse(transport, timeout);
+
+  // Handle redirects (3xx status codes)
+  if (response.status >= 300 && response.status < 400) {
+    const location = response.headers.get('location');
+
+    if (location && redirectsRemaining > 0) {
+      // Resolve relative URLs against the current URL
+      const redirectUrl = new URL(location, url).href;
+
+      // For 301, 302, 303: change method to GET (except for HEAD)
+      // For 307, 308: preserve the original method
+      let redirectMethod = method;
+      if (response.status === 301 || response.status === 302 || response.status === 303) {
+        if (method !== 'HEAD') {
+          redirectMethod = 'GET';
+        }
+      }
+
+      return fetchViaTorInternal(
+        circuit,
+        redirectUrl,
+        { ...options, method: redirectMethod },
+        redirectsRemaining - 1
+      );
+    } else if (location && redirectsRemaining === 0) {
+      throw new Error(
+        `Too many redirects (max ${options.maxRedirects ?? 10}). Last redirect: ${location}`
+      );
+    }
+    // If no location header, return the redirect response as-is
+  }
 
   return response;
 }
