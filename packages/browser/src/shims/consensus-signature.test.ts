@@ -84,10 +84,11 @@ describe('Browser consensus signature verification', () => {
         err &&
         typeof err === 'object' &&
         'name' in err &&
-        err.name === 'AsyncPublicDecryptRequired'
+        err.name === 'AsyncPublicDecryptRequired' &&
+        'promise' in err
       ) {
         // Await the async result
-        decryptedHash = await (err as { promise: Promise<Uint8Array> }).promise;
+        decryptedHash = await (err as unknown as { promise: Promise<Uint8Array> }).promise;
       } else {
         throw err;
       }
@@ -119,10 +120,11 @@ describe('Browser consensus signature verification', () => {
         err &&
         typeof err === 'object' &&
         'name' in err &&
-        err.name === 'AsyncPublicDecryptRequired'
+        err.name === 'AsyncPublicDecryptRequired' &&
+        'promise' in err
       ) {
         try {
-          await (err as { promise: Promise<Uint8Array> }).promise;
+          await (err as unknown as { promise: Promise<Uint8Array> }).promise;
         } catch (e) {
           error = e as Error;
         }
@@ -140,7 +142,9 @@ describe('Browser consensus signature verification', () => {
 
     // Known SHA-256 of "Hello, World!"
     const expectedHex = 'dffd6021bb2bd5b0af676290809ec3a53191dd81c7f70a4b28688a362182986f';
-    const actualHex = Array.from(new Uint8Array(hash))
+    // digest() returns Buffer when no encoding is specified, but the type is Buffer | string
+    const hashBuffer = hash as Buffer;
+    const actualHex = Array.from(new Uint8Array(hashBuffer))
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
 
@@ -153,7 +157,9 @@ describe('Browser consensus signature verification', () => {
 
     // Known SHA-1 of "Hello, World!"
     const expectedHex = '0a0a9f2a6772942557ab5355d76af442f8f65e01';
-    const actualHex = Array.from(new Uint8Array(hash))
+    // digest() returns Buffer when no encoding is specified, but the type is Buffer | string
+    const hashBuffer = hash as Buffer;
+    const actualHex = Array.from(new Uint8Array(hashBuffer))
       .map((b) => b.toString(16).padStart(2, '0'))
       .join('');
 
@@ -184,9 +190,10 @@ describe('Tor consensus signature verification integration', () => {
         err &&
         typeof err === 'object' &&
         'name' in err &&
-        err.name === 'AsyncPublicDecryptRequired'
+        err.name === 'AsyncPublicDecryptRequired' &&
+        'promise' in err
       ) {
-        decryptedHash = await (err as { promise: Promise<Uint8Array> }).promise;
+        decryptedHash = await (err as unknown as { promise: Promise<Uint8Array> }).promise;
       } else {
         throw err;
       }
@@ -238,9 +245,10 @@ ijIc0evuvD5kmJ/XukhYYzW7mDdT2J6r97tOK8xLAX7l8eFm4N73MCscq8DOAVO0
         err &&
         typeof err === 'object' &&
         'name' in err &&
-        err.name === 'AsyncPublicDecryptRequired'
+        err.name === 'AsyncPublicDecryptRequired' &&
+        'promise' in err
       ) {
-        decryptedHash = await (err as { promise: Promise<Uint8Array> }).promise;
+        decryptedHash = await (err as unknown as { promise: Promise<Uint8Array> }).promise;
       } else {
         throw err;
       }
