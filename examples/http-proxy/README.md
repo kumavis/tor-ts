@@ -1,36 +1,46 @@
-### http-proxy
+# HTTP Proxy Server over Tor
 
-Node Proxy Server for http/https/websockets over tor.
+This example demonstrates how to create an HTTP proxy server that routes traffic through Tor.
 
-For http/ws proxying, uses `http-proxy` with a Node HTTP Agent.
-For https proxying, uses simple stream forwarding via `proxyCircuitStreamDuplex` / `circuitStreamToNodeDuplex`
+## How it works
 
-This demo establishes a single tor circuit and on it opens up new a tor stream for each request.
+1. Establishes a Tor circuit
+2. Creates an HTTP proxy server using `http-proxy`
+3. Routes incoming HTTP requests through the Tor circuit
 
-### usage
+## Usage
 
-start the proxy server (on port :1234)
+Run the example/test:
 
 ```bash
-yarn start
+yarn test:live
 ```
 
-in another window, look up ip via tor proxied curl request + normal curl
+## Code
 
-```bash
-URL=https://api.ipify.org \
-&& echo "normal:" \
-&& curl "$URL" \
-&& echo "\ntor:" \
-&& curl -x localhost:1234 "$URL"
-```
+See `index.spec.ts` for the full example:
 
-plumbing for http and https are different -- try http as well
+```typescript
+import http from 'http';
+import httpProxy from 'http-proxy';
+import { connectRandomCircuitWithSafeBootstrap } from 'tor/build-circuit/mainnet';
+import { getTorAgentForUrl } from 'tor/node';
 
-```bash
-URL=http://api.ipify.org \
-&& echo "normal:" \
-&& curl "$URL" \
-&& echo "\ntor:" \
-&& curl -x localhost:1234 "$URL"
+// Establish a Tor circuit
+const circuit = await connectRandomCircuitWithSafeBootstrap();
+
+// Create a proxy server
+const proxy = httpProxy.createProxyServer();
+
+const server = http.createServer((req, res) => {
+  const target = req.url;
+  const agent = getTorAgentForUrl(circuit, target);
+  proxy.web(req, res, { target, agent });
+});
+
+server.listen(1234, () => {
+  console.log('Proxy server listening on port 1234');
+});
+
+// Use with: curl -x localhost:1234 http://example.com
 ```
