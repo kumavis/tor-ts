@@ -1,5 +1,5 @@
-import { x25519 } from '@noble/curves/ed25519';
-import { sha1 as sha1Noble } from '@noble/hashes/sha1';
+import { x25519 } from 'tor-crypto';
+import { sha1 as sha1Noble } from 'tor-crypto';
 import { makeAes128CtrKey } from './aes.ts';
 import crypto from 'node:crypto';
 
@@ -15,7 +15,7 @@ export interface CopyableHash {
 
 /**
  * Browser-compatible SHA-1 hash wrapper that provides Node.js-like interface.
- * Uses @noble/hashes/sha1 internally, which works in both Node.js and browsers.
+ * Uses tor-crypto internally, which works in both Node.js and browsers.
  */
 export class Sha1Hash implements CopyableHash {
   private accumulated: Uint8Array[] = [];

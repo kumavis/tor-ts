@@ -10,8 +10,8 @@
  * manual RSA operations (modular exponentiation).
  */
 
-import { describe, it, expect } from 'vitest';
-import crypto, { publicDecrypt, constants, createPublicKey } from './crypto-webcrypto.ts';
+import { describe, it, expect, beforeAll } from 'vitest';
+import crypto from './crypto-webcrypto.ts';
 
 // Import fixture data using Vite's ?raw suffix
 import consensusText from '../../../tor/src/fixtures/consensus-microdesc.txt?raw';
@@ -20,19 +20,16 @@ import authorityKeysText from '../../../tor/src/fixtures/authority-keys.txt?raw'
 // Import the consensus signature verification functions from the tor package
 import {
   parseConsensusSignatures,
-  getConsensusSignedPortion,
   parseAllKeyCertificates,
-  findAuthorityByFingerprint,
-  verifyConsensusSignaturesAsync,
+  verifyConsensusSignatures,
   type AuthorityKeyCertificate,
 } from '../../../tor/src/consensus-signature.ts';
 
 describe('Browser consensus signature verification', () => {
   describe('Crypto shim basics', () => {
     it('exports required functions', () => {
-      expect(typeof publicDecrypt).toBe('function');
-      expect(typeof createPublicKey).toBe('function');
-      expect(constants.RSA_PKCS1_PADDING).toBe(1);
+      expect(typeof crypto.createHash).toBe('function');
+      expect(typeof crypto.randomBytes).toBe('function');
     });
 
     it('createHash computes correct SHA-256', () => {
@@ -123,14 +120,16 @@ describe('Browser consensus signature verification', () => {
     let keyCertificates: AuthorityKeyCertificate[];
 
     // Parse certificates once for all tests
-    keyCertificates = parseAllKeyCertificates(authorityKeysText);
+    beforeAll(() => {
+      keyCertificates = parseAllKeyCertificates(authorityKeysText);
+    });
 
     it('verifies all consensus signatures using browser crypto', async () => {
       // Use a fixed time that's within the certificate validity period
       // The certificates have various expiry dates, we use a time when most are valid
       const testTime = new Date('2026-01-13T00:00:00Z').getTime();
 
-      const result = await verifyConsensusSignaturesAsync(consensusText, {
+      const result = await verifyConsensusSignatures(consensusText, {
         keyCertificates,
         requiredSignatures: 5,
         now: testTime,
@@ -153,84 +152,6 @@ describe('Browser consensus signature verification', () => {
       expect(result.validSignatureCount).toBeGreaterThanOrEqual(5);
     });
 
-    it('verifies each authority signature individually', async () => {
-      const signatures = parseConsensusSignatures(consensusText);
-      const signedPortion = getConsensusSignedPortion(consensusText);
-
-      // Compute expected hash
-      const hashObj = crypto.createHash('sha256').update(signedPortion).digest();
-      const expectedHash = new Uint8Array(hashObj as Buffer);
-      const expectedHashHex = Array.from(expectedHash)
-        .map((b) => b.toString(16).padStart(2, '0'))
-        .join('');
-
-      console.log(`Signed portion length: ${signedPortion.length}`);
-      console.log(`Expected hash: ${expectedHashHex.slice(0, 32)}...`);
-
-      let validCount = 0;
-
-      for (const sig of signatures) {
-        const cert = keyCertificates.find(
-          (c) =>
-            c.identityFingerprint.toUpperCase() === sig.identityFingerprint.toUpperCase() &&
-            c.signingKeyFingerprint.toUpperCase() === sig.signingKeyFingerprint.toUpperCase()
-        );
-
-        if (!cert) {
-          console.log(`No certificate for ${sig.identityFingerprint.slice(0, 8)}`);
-          continue;
-        }
-
-        const authority = findAuthorityByFingerprint(sig.identityFingerprint);
-        const name = authority?.nickname ?? sig.identityFingerprint.slice(0, 8);
-
-        // Verify using browser crypto shim's publicDecrypt
-        const key = createPublicKey(cert.signingKeyPem);
-        const signatureBytes = new Uint8Array(sig.signature);
-
-        let decryptedHash: Uint8Array | undefined;
-        let error: string | undefined;
-
-        try {
-          publicDecrypt({ key, padding: constants.RSA_PKCS1_PADDING }, signatureBytes);
-        } catch (err: unknown) {
-          if (
-            err &&
-            typeof err === 'object' &&
-            'name' in err &&
-            err.name === 'AsyncPublicDecryptRequired' &&
-            'promise' in err
-          ) {
-            try {
-              decryptedHash = await (err as unknown as { promise: Promise<Uint8Array> }).promise;
-            } catch (e) {
-              error = (e as Error).message;
-            }
-          } else {
-            error = (err as Error).message;
-          }
-        }
-
-        if (decryptedHash) {
-          const decryptedHex = Array.from(decryptedHash)
-            .map((b) => b.toString(16).padStart(2, '0'))
-            .join('');
-
-          const isValid = decryptedHex === expectedHashHex;
-          console.log(`${name}: ${isValid ? 'VALID' : 'INVALID'}`);
-
-          if (isValid) {
-            validCount++;
-          }
-        } else {
-          console.log(`${name}: ERROR - ${error}`);
-        }
-      }
-
-      // At least 5 signatures should be valid
-      expect(validCount).toBeGreaterThanOrEqual(5);
-    });
-
     it('fails verification with corrupted consensus', async () => {
       // Corrupt the consensus by modifying some content
       const corruptedConsensus = consensusText.replace(
@@ -240,7 +161,7 @@ describe('Browser consensus signature verification', () => {
 
       const testTime = new Date('2026-01-13T00:00:00Z').getTime();
 
-      const result = await verifyConsensusSignaturesAsync(corruptedConsensus, {
+      const result = await verifyConsensusSignatures(corruptedConsensus, {
         keyCertificates,
         requiredSignatures: 5,
         now: testTime,
@@ -255,7 +176,7 @@ describe('Browser consensus signature verification', () => {
       const testTime = new Date('2026-01-13T00:00:00Z').getTime();
 
       // Require more signatures than available
-      const result = await verifyConsensusSignaturesAsync(consensusText, {
+      const result = await verifyConsensusSignatures(consensusText, {
         keyCertificates,
         requiredSignatures: 100,
         now: testTime,

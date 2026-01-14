@@ -23,7 +23,7 @@ export default defineConfig({
       ws: path.resolve(__dirname, 'src/shims/ws.ts'),
       // Replace node:tls with our @reclaimprotocol/tls-based implementation (TLS 1.3)
       'node:tls': path.resolve(__dirname, 'src/shims/tls.ts'),
-      // Tor imports crypto via `node:crypto` - map it to our browser crypto shim.
+      // Dependencies that import node:crypto get our minimal shim
       'node:crypto': path.resolve(__dirname, 'src/shims/crypto-webcrypto.ts'),
       // Stream/web polyfill
       'stream/web': 'web-streams-polyfill/dist/ponyfill.mjs',

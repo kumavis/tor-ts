@@ -16,9 +16,8 @@ import {
   parseAllKeyCertificates,
   findAuthorityByFingerprint,
   verifySignatureWithData,
-  verifySignatureWithDataAsync,
   verifyConsensusSignatures,
-  verifyConsensusSignaturesAsync,
+  type AuthorityKeyCertificate,
 } from './consensus-signature.ts';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -34,8 +33,17 @@ const hasFixtures = fs.existsSync(consensusPath) && fs.existsSync(authKeysPath);
 const consensusText = hasFixtures ? fs.readFileSync(consensusPath, 'utf-8') : '';
 const authKeysText = hasFixtures ? fs.readFileSync(authKeysPath, 'utf-8') : '';
 
-// Parse authority certificates
-const keyCertificates = hasFixtures ? parseAllKeyCertificates(authKeysText) : [];
+// Parse authority certificates (lazy initialized since it's now async)
+let keyCertificates: AuthorityKeyCertificate[] = [];
+let keyCertificatesLoaded = false;
+
+function loadKeyCertificates(): AuthorityKeyCertificate[] {
+  if (!keyCertificatesLoaded && hasFixtures) {
+    keyCertificates = parseAllKeyCertificates(authKeysText);
+    keyCertificatesLoaded = true;
+  }
+  return keyCertificates;
+}
 
 test('fixtures are available', (t) => {
   if (!hasFixtures) {
@@ -45,7 +53,8 @@ test('fixtures are available', (t) => {
   }
   t.true(consensusText.length > 0, 'Consensus text is not empty');
   t.true(authKeysText.length > 0, 'Authority keys text is not empty');
-  t.true(keyCertificates.length > 0, `Parsed ${keyCertificates.length} key certificates`);
+  const certs = loadKeyCertificates();
+  t.true(certs.length > 0, `Parsed ${certs.length} key certificates`);
 });
 
 test('parseConsensusSignatures - parses fixture consensus', (t) => {
@@ -88,11 +97,12 @@ test('keyCertificates match signatures', (t) => {
     return;
   }
 
+  const certs = loadKeyCertificates();
   const signatures = parseConsensusSignatures(consensusText);
 
   let matchCount = 0;
   for (const sig of signatures) {
-    const cert = keyCertificates.find(
+    const cert = certs.find(
       (c) =>
         c.identityFingerprint.toUpperCase() === sig.identityFingerprint.toUpperCase() &&
         c.signingKeyFingerprint.toUpperCase() === sig.signingKeyFingerprint.toUpperCase()
@@ -111,25 +121,26 @@ test('keyCertificates match signatures', (t) => {
   t.true(matchCount >= 5, `At least 5 signatures should have matching certs (got ${matchCount})`);
 });
 
-test('Node.js crypto - verifySignatureWithData works', (t) => {
+test('Node.js crypto - verifySignatureWithData works', async (t) => {
   if (!hasFixtures) {
     t.pass('Skipping: no fixtures');
     return;
   }
 
+  const certs = loadKeyCertificates();
   const signatures = parseConsensusSignatures(consensusText);
   const signedPortion = getConsensusSignedPortion(consensusText);
 
   let validCount = 0;
   for (const sig of signatures) {
-    const cert = keyCertificates.find(
+    const cert = certs.find(
       (c) =>
         c.identityFingerprint.toUpperCase() === sig.identityFingerprint.toUpperCase() &&
         c.signingKeyFingerprint.toUpperCase() === sig.signingKeyFingerprint.toUpperCase()
     );
     if (!cert) continue;
 
-    const valid = verifySignatureWithData(
+    const valid = await verifySignatureWithData(
       signedPortion,
       sig.signature,
       cert.signingKeyPem,
@@ -145,41 +156,15 @@ test('Node.js crypto - verifySignatureWithData works', (t) => {
   t.true(validCount >= 5, `At least 5 valid signatures (got ${validCount})`);
 });
 
-test('Node.js crypto - verifyConsensusSignatures works', (t) => {
+test('Node.js crypto - verifyConsensusSignatures works', async (t) => {
   if (!hasFixtures) {
     t.pass('Skipping: no fixtures');
     return;
   }
 
-  const result = verifyConsensusSignatures(consensusText, {
-    keyCertificates,
-    requiredSignatures: 5,
-  });
-
-  t.log(
-    `Valid: ${result.valid}, count: ${result.validSignatureCount}/${result.requiredSignatureCount}`
-  );
-  for (const sig of result.signatures) {
-    t.log(
-      `  ${sig.nickname ?? sig.identityFingerprint.slice(0, 8)}: ${sig.valid ? 'OK' : sig.error}`
-    );
-  }
-
-  t.true(result.valid, 'Consensus should be valid');
-  t.true(
-    result.validSignatureCount >= 5,
-    `At least 5 valid signatures (got ${result.validSignatureCount})`
-  );
-});
-
-test('Node.js crypto - verifyConsensusSignaturesAsync works', async (t) => {
-  if (!hasFixtures) {
-    t.pass('Skipping: no fixtures');
-    return;
-  }
-
-  const result = await verifyConsensusSignaturesAsync(consensusText, {
-    keyCertificates,
+  const certs = loadKeyCertificates();
+  const result = await verifyConsensusSignatures(consensusText, {
+    keyCertificates: certs,
     requiredSignatures: 5,
   });
 
@@ -210,12 +195,13 @@ test('Unprefixed PKCS#1 v1.5 - verify hash extraction works', async (t) => {
     return;
   }
 
+  const certs = loadKeyCertificates();
   const signatures = parseConsensusSignatures(consensusText);
   const signedPortion = getConsensusSignedPortion(consensusText);
 
   // Find a signature with a matching certificate
   const sig = signatures.find((s) =>
-    keyCertificates.some(
+    certs.some(
       (c) =>
         c.identityFingerprint.toUpperCase() === s.identityFingerprint.toUpperCase() &&
         c.signingKeyFingerprint.toUpperCase() === s.signingKeyFingerprint.toUpperCase()
@@ -227,7 +213,7 @@ test('Unprefixed PKCS#1 v1.5 - verify hash extraction works', async (t) => {
     return;
   }
 
-  const cert = keyCertificates.find(
+  const cert = certs.find(
     (c) =>
       c.identityFingerprint.toUpperCase() === sig.identityFingerprint.toUpperCase() &&
       c.signingKeyFingerprint.toUpperCase() === sig.signingKeyFingerprint.toUpperCase()
@@ -264,7 +250,8 @@ test('Browser shim - pkcs1ToSpki conversion', async (t) => {
   }
 
   // Find a certificate with a signing key
-  const cert = keyCertificates[0];
+  const certs = loadKeyCertificates();
+  const cert = certs[0];
   if (!cert) {
     t.fail('No certificates available');
     return;
@@ -383,20 +370,21 @@ test('Browser shim - pkcs1ToSpki conversion', async (t) => {
 // NOTE: Standard crypto.subtle.verify uses RSASSA-PKCS1-v1_5 with DigestInfo,
 // but Tor uses unprefixed PKCS#1 v1.5 (raw hash without DigestInfo).
 // We implement this using pure-JS RSA (modular exponentiation with BigInt) in
-// the browser shim's publicDecrypt function, which is used by verifySignatureAsync.
+// the crypto/browser.ts module.
 // This test verifies the async verification path works correctly.
-test('verifySignatureWithDataAsync - pure-JS RSA verification', async (t) => {
+test('verifySignatureWithData - async verification', async (t) => {
   if (!hasFixtures) {
     t.pass('Skipping: no fixtures');
     return;
   }
 
+  const certs = loadKeyCertificates();
   const signatures = parseConsensusSignatures(consensusText);
   const signedPortion = getConsensusSignedPortion(consensusText);
 
   let validCount = 0;
   for (const sig of signatures) {
-    const cert = keyCertificates.find(
+    const cert = certs.find(
       (c) =>
         c.identityFingerprint.toUpperCase() === sig.identityFingerprint.toUpperCase() &&
         c.signingKeyFingerprint.toUpperCase() === sig.signingKeyFingerprint.toUpperCase()
@@ -406,8 +394,8 @@ test('verifySignatureWithDataAsync - pure-JS RSA verification', async (t) => {
     const authority = findAuthorityByFingerprint(sig.identityFingerprint);
     const name = authority?.nickname ?? sig.identityFingerprint.slice(0, 8);
 
-    // Use the async verification function which handles both Node.js and browser paths
-    const valid = await verifySignatureWithDataAsync(
+    // Use the async verification function
+    const valid = await verifySignatureWithData(
       signedPortion,
       sig.signature,
       cert.signingKeyPem,

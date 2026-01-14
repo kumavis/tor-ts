@@ -13,7 +13,7 @@ import {
   DirectoryClient,
   lookupPeerInfo,
   lookupPeerInfoWithEd25519IdentityKey,
-  parseMicroDescConsensusAsync,
+  parseMicroDescConsensus,
 } from 'tor/directory-client';
 import type { DownloadProgress } from 'tor/directory-client';
 import { pickRelayWithFlags } from 'tor/build-circuit/util';
@@ -164,7 +164,7 @@ export async function connectToHiddenService(
     cacheConsensus(microDescContent);
   }
 
-  const consensus = await parseMicroDescConsensusAsync(microDescContent, {
+  const consensus = await parseMicroDescConsensus(microDescContent, {
     dangerouslySkipSignatureVerification,
   });
 

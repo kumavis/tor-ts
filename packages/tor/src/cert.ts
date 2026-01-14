@@ -2,11 +2,7 @@ import assert from 'node:assert';
 import { X509Certificate as PeculiarX509Certificate } from '@peculiar/x509';
 import type { CellCerts } from './messaging.ts';
 import { BytesReader, sha256 } from './util.ts';
-import * as ed from '@noble/ed25519';
-import { sha512 } from '@noble/hashes/sha512';
-
-// enable synchronous ed25519 methods
-ed.etc.sha512Sync = (...m) => sha512(ed.etc.concatBytes(...m));
+import { ed25519VerifySync } from 'tor-crypto';
 
 type Ed25519CertificateExtension = {
   type: number;
@@ -414,7 +410,7 @@ export const validateCertsCellForIdentities = (
 
   // Verify the ed25519 certificates in this handshake.
   sigs.forEach(({ key, signature, text }) => {
-    const verified = ed.verify(signature, text, key);
+    const verified = ed25519VerifySync(signature, text, key);
     if (verified !== true) {
       throw new Error(`Invalid ed25519 signature in handshake`);
     }

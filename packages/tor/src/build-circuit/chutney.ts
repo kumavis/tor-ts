@@ -73,7 +73,7 @@ export async function getChutneyMicrodescConsensus(): Promise<{
   const microDescContent = await dangerouslyDownloadMicrodescFromDirectory(directoryServer);
   // Disable signature verification for Chutney - test networks use local
   // directory authorities that don't match the hardcoded mainnet authorities
-  const consensus = parseMicroDescConsensus(microDescContent, { verifySignatures: false });
+  const consensus = await parseMicroDescConsensus(microDescContent, { verifySignatures: false });
   return { directoryServer, consensus };
 }
 
@@ -225,7 +225,7 @@ export async function getChutneyMicrodescConsensusSafe(
   const microDescContent = await client.downloadMicrodescConsensus();
   // Disable signature verification for Chutney - test networks use local
   // directory authorities that don't match the hardcoded mainnet authorities
-  return parseMicroDescConsensus(microDescContent, { verifySignatures: false });
+  return await parseMicroDescConsensus(microDescContent, { verifySignatures: false });
 }
 
 /**
@@ -240,14 +240,14 @@ export async function getRandomChutneyCircuitPathSafe(
   const microDescContent = await client.downloadMicrodescConsensus();
   // Disable signature verification for Chutney - test networks use local
   // directory authorities that don't match the hardcoded mainnet authorities
-  const consensus = parseMicroDescConsensus(microDescContent, { verifySignatures: false });
+  const consensus = await parseMicroDescConsensus(microDescContent, { verifySignatures: false });
   const microDescNodeInfos = consensus.relays;
 
   const circuitPlan: Array<MicroDescNodeInfo> = [];
 
   const forcedExitRsaIdDigestHex = process.env.TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX?.toLowerCase();
   if (forcedExitRsaIdDigestHex) {
-    const forcedExit = microDescNodeInfos.find((n) => {
+    const forcedExit = microDescNodeInfos.find((n: MicroDescNodeInfo) => {
       const digestHex = n.rsaIdDigest.toString('hex');
       return digestHex === forcedExitRsaIdDigestHex;
     });
@@ -288,7 +288,7 @@ export async function getRandomChutneyCircuitPathToTargetSafe(
   const microDescContent = await client.downloadMicrodescConsensus();
   // Disable signature verification for Chutney - test networks use local
   // directory authorities that don't match the hardcoded mainnet authorities
-  const consensus = parseMicroDescConsensus(microDescContent, { verifySignatures: false });
+  const consensus = await parseMicroDescConsensus(microDescContent, { verifySignatures: false });
   const microDescNodeInfos = consensus.relays;
 
   const avoid = new Set<string>([
@@ -296,7 +296,7 @@ export async function getRandomChutneyCircuitPathToTargetSafe(
     ...(opts.avoidRsaIdDigests ?? []).map((b) => b.toString('hex')),
   ]);
 
-  const ignore: MicroDescNodeInfo[] = microDescNodeInfos.filter((n) =>
+  const ignore: MicroDescNodeInfo[] = microDescNodeInfos.filter((n: MicroDescNodeInfo) =>
     avoid.has(n.rsaIdDigest.toString('hex'))
   );
 

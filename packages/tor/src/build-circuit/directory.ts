@@ -52,7 +52,6 @@ import { AddressTypes, LinkSpecifierTypes, addressAndPortToLinkSpecifier } from 
 import type { LinkSpecifier } from '../messaging.ts';
 import {
   verifyConsensusSignatures,
-  verifyConsensusSignaturesAsync,
   type ConsensusVerificationResult,
   type AuthorityKeyCertificate,
 } from '../consensus-signature.ts';
@@ -341,8 +340,13 @@ export type ParseMicroDescConsensusOptions = {
   now?: number;
 };
 
-export function parseRelaysFromMicroDesc(microDescContent: string): MicroDescNodeInfo[] {
-  return parseMicroDescConsensus(microDescContent, { throwOnVerificationFailure: false }).relays;
+export async function parseRelaysFromMicroDesc(
+  microDescContent: string
+): Promise<MicroDescNodeInfo[]> {
+  const consensus = await parseMicroDescConsensus(microDescContent, {
+    throwOnVerificationFailure: false,
+  });
+  return consensus.relays;
 }
 
 /**
@@ -362,10 +366,10 @@ export function parseRelaysFromMicroDesc(microDescContent: string): MicroDescNod
  * @returns Parsed consensus with signature verification result
  * @throws Error if signature verification fails and throwOnVerificationFailure is true
  */
-export function parseMicroDescConsensus(
+export async function parseMicroDescConsensus(
   microDescContent: string,
   options: ParseMicroDescConsensusOptions = {}
-): MicroDescConsensus {
+): Promise<MicroDescConsensus> {
   const {
     verifySignatures = true,
     dangerouslySkipSignatureVerification = false,
@@ -523,7 +527,7 @@ export function parseMicroDescConsensus(
   let signatureVerification: ConsensusVerificationResult | undefined;
 
   if (shouldVerify) {
-    signatureVerification = verifyConsensusSignatures(microDescContent, {
+    signatureVerification = await verifyConsensusSignatures(microDescContent, {
       keyCertificates,
       requiredSignatures,
       allowWithoutCertificates: true,
@@ -558,72 +562,6 @@ export function parseMicroDescConsensus(
     relays: relayInfos,
     signatureVerification,
     bandwidthWeights,
-  };
-}
-
-/**
- * Async version of parseMicroDescConsensus for browser environments.
- * Uses Web Crypto API for RSA signature verification.
- *
- * @param microDescContent - The raw microdesc consensus content
- * @param options - Optional parsing options
- * @returns Promise resolving to parsed consensus data
- */
-export async function parseMicroDescConsensusAsync(
-  microDescContent: string,
-  options: ParseMicroDescConsensusOptions = {}
-): Promise<MicroDescConsensus> {
-  const {
-    verifySignatures = true,
-    dangerouslySkipSignatureVerification = false,
-    keyCertificates = [],
-    requiredSignatures,
-    throwOnVerificationFailure = true,
-    now = Date.now(),
-  } = options;
-
-  // dangerouslySkipSignatureVerification takes precedence
-  const shouldVerify = !dangerouslySkipSignatureVerification && verifySignatures;
-
-  // Parse the consensus content (same as sync version)
-  const syncResult = parseMicroDescConsensus(microDescContent, {
-    ...options,
-    verifySignatures: false, // Skip sync verification
-    dangerouslySkipSignatureVerification: true, // Ensure no sync verification
-  });
-
-  // Verify signatures asynchronously if requested
-  let signatureVerification: ConsensusVerificationResult | undefined;
-
-  if (shouldVerify) {
-    signatureVerification = await verifyConsensusSignaturesAsync(microDescContent, {
-      keyCertificates,
-      requiredSignatures,
-      allowWithoutCertificates: true,
-      now,
-    });
-
-    if (!signatureVerification.valid && throwOnVerificationFailure) {
-      const validSigs = signatureVerification.signatures
-        .filter((s) => s.valid)
-        .map((s) => s.nickname || s.identityFingerprint.slice(0, 8))
-        .join(', ');
-      const invalidSigs = signatureVerification.signatures
-        .filter((s) => !s.valid)
-        .map((s) => `${s.nickname || s.identityFingerprint.slice(0, 8)}: ${s.error}`)
-        .join('; ');
-
-      throw new Error(
-        `Consensus signature verification failed: ${signatureVerification.error}. ` +
-          `Valid signatures from: [${validSigs || 'none'}]. ` +
-          `Invalid: [${invalidSigs || 'none'}]`
-      );
-    }
-  }
-
-  return {
-    ...syncResult,
-    signatureVerification,
   };
 }
 

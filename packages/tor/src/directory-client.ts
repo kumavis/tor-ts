@@ -403,15 +403,10 @@ import type {
   MicroDescConsensus,
   ParseMicroDescConsensusOptions,
 } from './build-circuit/directory.ts';
-import {
-  parseMicroDescConsensus,
-  parseMicroDescConsensusAsync,
-  microDescNodeInfoToPeerInfo,
-} from './build-circuit/directory.ts';
+import { parseMicroDescConsensus, microDescNodeInfoToPeerInfo } from './build-circuit/directory.ts';
 
 export {
   parseMicroDescConsensus,
-  parseMicroDescConsensusAsync,
   type MicroDescNodeInfo,
   type MicroDescConsensus,
   type ParseMicroDescConsensusOptions,
@@ -431,7 +426,6 @@ export {
   DIRECTORY_AUTHORITIES,
   verifyConsensusSignatures,
   parseConsensusSignatures,
-  parseKeyCertificate,
   parseAllKeyCertificates,
   findAuthorityByFingerprint,
   extractAuthorityFingerprints,

@@ -1,6 +1,5 @@
 import test from 'ava';
-import { hmac } from '@noble/hashes/hmac';
-import { sha256 } from '@noble/hashes/sha256';
+import { hmac, sha256Hash as sha256 } from 'tor-crypto';
 import { KDF_RFC5869, NtorParams } from './ntor.ts';
 
 // fn expand(b: &[u8]) -> SecretBuf {

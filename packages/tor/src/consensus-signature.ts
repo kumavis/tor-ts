@@ -30,8 +30,7 @@
  * "directory-signature " keyword (including trailing space).
  */
 
-import crypto from 'node:crypto';
-import { sha256, sha1 } from './util.ts';
+import { sha256, sha1, verifyUnprefixedPkcs1Signature, computeRsaKeyFingerprint } from 'tor-crypto';
 
 /**
  * A directory authority's identity, including their RSA identity key.
@@ -272,7 +271,7 @@ export function cacheKeyCertificate(cert: AuthorityKeyCertificate): void {
  * -----END SIGNATURE-----
  * ```
  */
-export function parseKeyCertificate(certText: string): AuthorityKeyCertificate {
+function parseKeyCertificate(certText: string): AuthorityKeyCertificate {
   const lines = certText.split('\n');
   let identityFingerprint = '';
   let published: Date | undefined;
@@ -316,16 +315,6 @@ export function parseKeyCertificate(certText: string): AuthorityKeyCertificate {
     published,
     expires,
   };
-}
-
-/**
- * Compute the SHA1 fingerprint of an RSA public key.
- * The fingerprint is the SHA1 hash of the DER-encoded key.
- */
-export function computeRsaKeyFingerprint(keyPem: string): string {
-  const keyObject = crypto.createPublicKey(keyPem);
-  const derKey = keyObject.export({ type: 'pkcs1', format: 'der' });
-  return sha1(derKey).toString('hex').toUpperCase();
 }
 
 /**
@@ -402,71 +391,18 @@ export function computeConsensusDigest(
  * embeds the raw hash, not the DigestInfo structure.
  *
  * See Arti's implementation: `Pkcs1v15Sign::new_unprefixed()`
- */
-export function verifySignature(digest: Buffer, signature: Buffer, signingKeyPem: string): boolean {
-  try {
-    const publicKey = crypto.createPublicKey(signingKeyPem);
-
-    // For Tor's non-standard PKCS#1 v1.5 signatures, we use publicDecrypt
-    // to "decrypt" the signature and compare with the raw hash directly.
-    // Unlike standard PKCS#1 v1.5, Tor does NOT include DigestInfo.
-    const paddingOptions = {
-      key: publicKey,
-      padding: crypto.constants.RSA_PKCS1_PADDING,
-    };
-
-    // Use crypto.publicDecrypt to "decrypt" the signature and compare with raw digest
-    const decrypted = crypto.publicDecrypt(paddingOptions, signature);
-    // Tor's unprefixed PKCS#1 v1.5: the decrypted value IS the raw hash
-    return Buffer.from(decrypted).equals(digest);
-  } catch (err: unknown) {
-    // crypto.publicDecrypt throws on invalid padding or malformed signatures.
-    // These are expected for invalid signatures, so return false.
-    if (
-      err instanceof Error &&
-      (err.message.includes('padding') ||
-        err.message.includes('decrypt') ||
-        (err as NodeJS.ErrnoException).code?.includes('RSA'))
-    ) {
-      return false;
-    }
-    // Re-throw unexpected errors (e.g., invalid key format)
-    throw err;
-  }
-}
-
-/**
- * Async version of verifySignature for browser environments.
  *
- * In Node.js, this delegates to the sync version.
- * In browsers, the sync version throws AsyncPublicDecryptRequired which we catch
- * and await the async result.
+ * @param digest - The hash that was signed
+ * @param signature - The signature bytes
+ * @param signingKeyPem - The public key in PEM format
+ * @returns true if the signature is valid
  */
-export async function verifySignatureAsync(
+export async function verifySignature(
   digest: Buffer,
   signature: Buffer,
   signingKeyPem: string
 ): Promise<boolean> {
-  try {
-    return verifySignature(digest, signature, signingKeyPem);
-  } catch (err: unknown) {
-    // Handle browser's async publicDecrypt
-    if (
-      err &&
-      typeof err === 'object' &&
-      'name' in err &&
-      err.name === 'AsyncPublicDecryptRequired' &&
-      'promise' in err
-    ) {
-      try {
-        const decrypted = await (err as { promise: Promise<Uint8Array> }).promise;
-        return Buffer.from(decrypted).equals(digest);
-      } catch {
-        return false;
-      }
-    }
-    return false;
-  }
+  return verifyUnprefixedPkcs1Signature(digest, signature, signingKeyPem);
 }
 
 /**
@@ -479,33 +415,9 @@ export async function verifySignatureAsync(
  * @param signature - The signature bytes
  * @param signingKeyPem - The public key in PEM format
  * @param algorithm - Hash algorithm used ('sha256' or 'sha1')
+ * @returns true if the signature is valid
  */
-export function verifySignatureWithData(
-  signedData: string,
-  signature: Buffer,
-  signingKeyPem: string,
-  algorithm: 'sha256' | 'sha1'
-): boolean {
-  // Compute the hash of the signed data
-  const data = Buffer.from(signedData, 'utf-8');
-  const digest = algorithm === 'sha256' ? sha256(data) : sha1(data);
-
-  // Use Tor's unprefixed PKCS#1 v1.5 verification
-  return verifySignature(digest, signature, signingKeyPem);
-}
-
-/**
- * Async version of verifySignatureWithData for browser environments.
- *
- * Note: For browser environments, we implement unprefixed PKCS#1 v1.5
- * verification using pure JavaScript RSA operations.
- *
- * @param signedData - The data that was signed
- * @param signature - The signature bytes
- * @param signingKeyPem - The public key in PEM format
- * @param algorithm - Hash algorithm used ('sha256' or 'sha1')
- */
-export async function verifySignatureWithDataAsync(
+export async function verifySignatureWithData(
   signedData: string,
   signature: Buffer,
   signingKeyPem: string,
@@ -515,8 +427,8 @@ export async function verifySignatureWithDataAsync(
   const data = Buffer.from(signedData, 'utf-8');
   const digest = algorithm === 'sha256' ? sha256(data) : sha1(data);
 
-  // Use the async version which handles both Node.js and browser
-  return verifySignatureAsync(digest, signature, signingKeyPem);
+  // Use Tor's unprefixed PKCS#1 v1.5 verification
+  return verifySignature(digest, signature, signingKeyPem);
 }
 
 /**
@@ -574,154 +486,7 @@ export type VerifyConsensusOptions = {
  * @param options - Verification options
  * @returns Verification result with details about each signature
  */
-export function verifyConsensusSignatures(
-  consensusText: string,
-  options: VerifyConsensusOptions = {}
-): ConsensusVerificationResult {
-  const { keyCertificates = [], allowWithoutCertificates = true, now = Date.now() } = options;
-
-  const totalKnownAuthorities = DIRECTORY_AUTHORITIES.length;
-
-  // Default: require majority (at least ceil(n/2) + 1 for security, but commonly n/2 + 1)
-  // For 8 authorities: 5 required. For 9: 5 required.
-  const defaultRequired = Math.floor(totalKnownAuthorities / 2) + 1;
-  const requiredSignatureCount = options.requiredSignatures ?? defaultRequired;
-
-  const signatures = parseConsensusSignatures(consensusText);
-
-  if (signatures.length === 0) {
-    return {
-      valid: false,
-      validSignatureCount: 0,
-      requiredSignatureCount,
-      totalKnownAuthorities,
-      signatures: [],
-      error: 'No signatures found in consensus',
-    };
-  }
-
-  // Build certificate lookup map
-  const certMap = new Map<string, AuthorityKeyCertificate>();
-  for (const cert of keyCertificates) {
-    const key = `${cert.identityFingerprint.toUpperCase()}-${cert.signingKeyFingerprint.toUpperCase()}`;
-    certMap.set(key, cert);
-  }
-
-  // Also check cache
-  for (const sig of signatures) {
-    const key = `${sig.identityFingerprint}-${sig.signingKeyFingerprint}`;
-    const cached = keyCertificateCache.get(key);
-    if (cached && !certMap.has(key)) {
-      certMap.set(key, cached);
-    }
-  }
-
-  const results: SignatureVerificationResult[] = [];
-  let validCount = 0;
-
-  // Get the signed portion once (same for all signatures for this consensus)
-  // Note: Each signature actually signs from "network-status-version" to just before
-  // that specific "directory-signature" line, but for microdesc consensus the digest
-  // is computed over the same portion for all signatures.
-  const signedPortion = getConsensusSignedPortion(consensusText);
-
-  for (const sig of signatures) {
-    const authority = findAuthorityByFingerprint(sig.identityFingerprint);
-
-    if (!authority) {
-      results.push({
-        identityFingerprint: sig.identityFingerprint,
-        nickname: undefined,
-        valid: false,
-        error: 'Unknown directory authority',
-      });
-      continue;
-    }
-
-    // Try to find the key certificate
-    const certKey = `${sig.identityFingerprint}-${sig.signingKeyFingerprint}`;
-    const certificate = certMap.get(certKey);
-
-    let signingKeyPem: string;
-
-    if (certificate) {
-      // Check certificate validity
-      if (now < certificate.published.getTime()) {
-        results.push({
-          identityFingerprint: sig.identityFingerprint,
-          nickname: authority.nickname,
-          valid: false,
-          error: 'Key certificate not yet valid',
-        });
-        continue;
-      }
-      if (now > certificate.expires.getTime()) {
-        results.push({
-          identityFingerprint: sig.identityFingerprint,
-          nickname: authority.nickname,
-          valid: false,
-          error: 'Key certificate expired',
-        });
-        continue;
-      }
-      signingKeyPem = certificate.signingKeyPem;
-    } else if (allowWithoutCertificates) {
-      // Fall back to using identity key directly
-      // This is less secure but works for bootstrap
-      signingKeyPem = authority.identityKeyPem;
-    } else {
-      results.push({
-        identityFingerprint: sig.identityFingerprint,
-        nickname: authority.nickname,
-        valid: false,
-        error: 'No key certificate available',
-      });
-      continue;
-    }
-
-    // Verify the signature
-    const valid = verifySignatureWithData(
-      signedPortion,
-      sig.signature,
-      signingKeyPem,
-      sig.algorithm
-    );
-
-    if (valid) {
-      validCount++;
-    }
-
-    results.push({
-      identityFingerprint: sig.identityFingerprint,
-      nickname: authority.nickname,
-      valid,
-      error: valid ? undefined : 'Signature verification failed',
-    });
-  }
-
-  const isValid = validCount >= requiredSignatureCount;
-
-  return {
-    valid: isValid,
-    validSignatureCount: validCount,
-    requiredSignatureCount,
-    totalKnownAuthorities,
-    signatures: results,
-    error: isValid
-      ? undefined
-      : `Insufficient valid signatures: got ${validCount}, need ${requiredSignatureCount}`,
-  };
-}
-
-/**
- * Async version of verifyConsensusSignatures for browser environments.
- * Uses Web Crypto API for RSA signature verification.
- *
- * @param consensusText - The full consensus document text
- * @param options - Verification options
- * @returns Promise resolving to verification result
- */
-export async function verifyConsensusSignaturesAsync(
+export async function verifyConsensusSignatures(
   consensusText: string,
   options: VerifyConsensusOptions = {}
 ): Promise<ConsensusVerificationResult> {
@@ -815,8 +580,8 @@ export async function verifyConsensusSignaturesAsync(
       continue;
     }
 
-    // Verify the signature using async version
-    const valid = await verifySignatureWithDataAsync(
+    // Verify the signature
+    const valid = await verifySignatureWithData(
       signedPortion,
       sig.signature,
       signingKeyPem,
