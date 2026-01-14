@@ -5,6 +5,7 @@ import {
   DirectoryClient,
   lookupPeerInfo,
   parseMicroDescConsensus,
+  parseAllKeyCertificates,
   fetchExitPolicies,
 } from '../directory-client.ts';
 import type { MicroDescNodeInfo, MicroDescConsensus } from './directory.ts';
@@ -108,8 +109,15 @@ export async function getRandomCircuitPathSafe(
   } = options;
 
   const client = new DirectoryClient(directoryCircuit);
+
+  // Download key certificates for signature verification
+  // These contain the signing keys that authorities use to sign the consensus
+  const keyCertsText = await client.downloadKeyCertificates();
+  const keyCertificates = parseAllKeyCertificates(keyCertsText);
+
+  // Download and verify the consensus using the key certificates
   const microDescContent = await client.downloadMicrodescConsensus();
-  const consensus = parseMicroDescConsensus(microDescContent);
+  const consensus = parseMicroDescConsensus(microDescContent, { keyCertificates });
 
   if (consensus.relays.length === 0) {
     throw new Error('No relays parsed from consensus');
