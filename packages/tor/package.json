@@ -4,11 +4,9 @@
   "license": "MIT",
   "type": "module",
   "dependencies": {
-    "@noble/curves": "^1.9.7",
-    "@noble/ed25519": "^2.3.0",
-    "@noble/hashes": "^1.8.0",
     "@peculiar/x509": "^1.14.2",
-    "commander": "^14.0.2"
+    "commander": "^14.0.2",
+    "tor-crypto": "workspace:^"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

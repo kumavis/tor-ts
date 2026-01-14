@@ -1,4 +1,4 @@
-import * as crypto from 'node:crypto';
+export { sha256, sha1 } from 'tor-crypto';
 
 export class BytesReader {
   data: Buffer;
@@ -44,22 +44,6 @@ export function bufferFromUint(length: number, value: number) {
   data.writeUintBE(value, 0, length);
   return data;
 }
-
-export const sha256 = (...data: Buffer[]): Buffer => {
-  const hash = crypto.createHash('sha256');
-  for (const d of data) {
-    hash.update(d);
-  }
-  return hash.digest();
-};
-
-export const sha1 = (...data: Buffer[]): Buffer => {
-  const hash = crypto.createHash('sha1');
-  for (const d of data) {
-    hash.update(d);
-  }
-  return hash.digest();
-};
 
 export const deferred = <T>(): {
   promise: Promise<T>;

@@ -1,0 +1,34 @@
+{
+  "name": "tor-crypto",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "dependencies": {
+    "@noble/curves": "^1.9.7",
+    "@noble/ed25519": "^2.3.0",
+    "@noble/hashes": "^1.8.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "ava": "^6.4.1",
+    "typescript": "^5.9.3"
+  },
+  "exports": {
+    ".": {
+      "browser": "./src/browser.ts",
+      "default": "./src/node.ts"
+    }
+  },
+  "scripts": {
+    "test": "ava src/*.spec.ts",
+    "typecheck": "tsc -p tsconfig.json --noEmit"
+  },
+  "ava": {
+    "extensions": {
+      "ts": "module"
+    },
+    "nodeArguments": [
+      "--experimental-transform-types"
+    ]
+  }
+}

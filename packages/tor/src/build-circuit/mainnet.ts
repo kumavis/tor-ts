@@ -117,7 +117,7 @@ export async function getRandomCircuitPathSafe(
 
   // Download and verify the consensus using the key certificates
   const microDescContent = await client.downloadMicrodescConsensus();
-  const consensus = parseMicroDescConsensus(microDescContent, { keyCertificates });
+  const consensus = await parseMicroDescConsensus(microDescContent, { keyCertificates });
 
   if (consensus.relays.length === 0) {
     throw new Error('No relays parsed from consensus');

@@ -2262,8 +2262,9 @@ __metadata:
     buffer: "npm:^6.0.3"
     playwright: "npm:^1.52.0"
     process: "npm:^0.11.10"
-    snowflake: "npm:0.1.0"
-    tor: "npm:0.1.0"
+    snowflake: "workspace:^"
+    tor: "workspace:^"
+    tor-crypto: "workspace:^"
     typescript: "npm:^5.9.3"
     vite: "npm:^6.3.5"
     vite-plugin-node-polyfills: "npm:^0.23.0"
@@ -6862,7 +6863,7 @@ __metadata:
   languageName: node
   linkType: hard
 
-"snowflake@npm:0.1.0, snowflake@workspace:packages/snowflake":
+"snowflake@workspace:^, snowflake@workspace:packages/snowflake":
   version: 0.0.0-use.local
   resolution: "snowflake@workspace:packages/snowflake"
   dependencies:
@@ -7298,6 +7299,19 @@ __metadata:
   languageName: node
   linkType: hard
 
+"tor-crypto@workspace:^, tor-crypto@workspace:packages/crypto":
+  version: 0.0.0-use.local
+  resolution: "tor-crypto@workspace:packages/crypto"
+  dependencies:
+    "@noble/curves": "npm:^1.9.7"
+    "@noble/ed25519": "npm:^2.3.0"
+    "@noble/hashes": "npm:^1.8.0"
+    "@types/node": "npm:^22.0.0"
+    ava: "npm:^6.4.1"
+    typescript: "npm:^5.9.3"
+  languageName: unknown
+  linkType: soft
+
 "tor-example-http-proxy@workspace:examples/http-proxy":
   version: 0.0.0-use.local
   resolution: "tor-example-http-proxy@workspace:examples/http-proxy"
@@ -7338,18 +7352,16 @@ __metadata:
   languageName: unknown
   linkType: soft
 
-"tor@npm:0.1.0, tor@workspace:packages/tor":
+"tor@npm:0.1.0, tor@workspace:^, tor@workspace:packages/tor":
   version: 0.0.0-use.local
   resolution: "tor@workspace:packages/tor"
   dependencies:
-    "@noble/curves": "npm:^1.9.7"
-    "@noble/ed25519": "npm:^2.3.0"
-    "@noble/hashes": "npm:^1.8.0"
     "@peculiar/x509": "npm:^1.14.2"
     "@types/node": "npm:^22.0.0"
     ava: "npm:^6.4.1"
     commander: "npm:^14.0.2"
     pm2: "npm:^6.0.14"
+    tor-crypto: "workspace:^"
     typescript: "npm:^5.9.3"
   languageName: unknown
   linkType: soft

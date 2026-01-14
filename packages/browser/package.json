@@ -5,8 +5,9 @@
   "type": "module",
   "dependencies": {
     "@reclaimprotocol/tls": "^0.1.2",
-    "snowflake": "0.1.0",
-    "tor": "0.1.0",
+    "snowflake": "workspace:^",
+    "tor": "workspace:^",
+    "tor-crypto": "workspace:^",
     "web-streams-polyfill": "^4.1.0"
   },
   "devDependencies": {

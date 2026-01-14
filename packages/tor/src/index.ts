@@ -26,7 +26,6 @@ export {
   extractNtorOnionKeyFromDescriptor,
   extractEd25519IdentityFromDescriptor,
   parseMicroDescConsensus,
-  parseMicroDescConsensusAsync,
   // Microdescriptor parsing
   parseMicrodescriptor,
   parseMicrodescriptorBatch,
@@ -40,7 +39,6 @@ export {
   DIRECTORY_AUTHORITIES,
   verifyConsensusSignatures,
   parseConsensusSignatures,
-  parseKeyCertificate,
   parseAllKeyCertificates,
   findAuthorityByFingerprint,
   extractAuthorityFingerprints,

@@ -1,8 +1,8 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { x25519, ed25519 } from '@noble/curves/ed25519';
-import { sha3_256, shake256 } from '@noble/hashes/sha3';
+import { x25519, ed25519 } from 'tor-crypto';
+import { sha3_256, shake256 } from 'tor-crypto';
 import { BytesReader, Mutex } from './util.ts';
 import type { LinkSpecifier } from './messaging.ts';
 import { RelayCell } from './relay-cell.ts';
@@ -202,7 +202,7 @@ function sha3(...parts: Buffer[]): Buffer {
 
 /**
  * Browser-compatible SHA3-256 hash wrapper that provides Node.js-like interface.
- * Uses @noble/hashes/sha3 internally, which works in both Node.js and browsers.
+ * Uses tor-crypto internally, which works in both Node.js and browsers.
  */
 class Sha3_256Hash implements CopyableHash {
   private accumulated: Uint8Array[] = [];

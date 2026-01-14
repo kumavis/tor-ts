@@ -34,7 +34,7 @@ test.serial('snowflake live: build circuit + fetch example.com (optional)', asyn
   }
 
   const microDescContent = await dangerouslyDownloadMicrodescFromDirectory(directoryServer);
-  const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
+  const microDescNodeInfos = await parseRelaysFromMicroDesc(microDescContent);
 
   const channel = new SnowflakeTlsChannelConnection();
   await channel.connect({ relayUrl: 'wss://snowflake.torproject.net/' });

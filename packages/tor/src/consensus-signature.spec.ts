@@ -4,7 +4,6 @@ import {
   getConsensusSignedPortion,
   computeConsensusDigest,
   verifyConsensusSignatures,
-  computeRsaKeyFingerprint,
   findAuthorityByFingerprint,
   extractAuthorityFingerprints,
   DIRECTORY_AUTHORITIES,
@@ -147,22 +146,8 @@ test('extractAuthorityFingerprints - should extract unique fingerprints from con
   }
 });
 
-test('computeRsaKeyFingerprint - should compute consistent fingerprint', (t) => {
-  // Note: The hardcoded identity keys in DIRECTORY_AUTHORITIES are placeholders
-  // that need to be replaced with the real authority keys from Tor Project.
-  // For now, we just verify the function computes a valid 40-character fingerprint.
-  const moria1 = DIRECTORY_AUTHORITIES.find((a) => a.nickname === 'moria1');
-  t.truthy(moria1);
-
-  const computed = computeRsaKeyFingerprint(moria1!.identityKeyPem);
-  t.regex(computed, /^[A-F0-9]{40}$/);
-
-  // TODO: When real identity keys are added, uncomment this assertion:
-  // t.is(computed, moria1!.v3ident);
-});
-
-test('verifyConsensusSignatures - should fail for test microdesc (unknown authorities)', (t) => {
-  const result = verifyConsensusSignatures(testMicrodesc, {
+test('verifyConsensusSignatures - should fail for test microdesc (unknown authorities)', async (t) => {
+  const result = await verifyConsensusSignatures(testMicrodesc, {
     allowWithoutCertificates: true,
   });
 
@@ -178,13 +163,13 @@ test('verifyConsensusSignatures - should fail for test microdesc (unknown author
   }
 });
 
-test('verifyConsensusSignatures - should verify real consensus signatures', (t) => {
+test('verifyConsensusSignatures - should verify real consensus signatures', async (t) => {
   if (!hasRealConsensus) {
     t.pass('Skipping: no real consensus file available');
     return;
   }
 
-  const result = verifyConsensusSignatures(realConsensus, {
+  const result = await verifyConsensusSignatures(realConsensus, {
     allowWithoutCertificates: true,
   });
 
@@ -196,20 +181,20 @@ test('verifyConsensusSignatures - should verify real consensus signatures', (t) 
   t.true(knownSigs.length > 0);
 });
 
-test('verifyConsensusSignatures - should fail with empty consensus', (t) => {
-  const result = verifyConsensusSignatures('', {});
+test('verifyConsensusSignatures - should fail with empty consensus', async (t) => {
+  const result = await verifyConsensusSignatures('', {});
   t.false(result.valid);
   t.is(result.error, 'No signatures found in consensus');
 });
 
-test('verifyConsensusSignatures - should respect requiredSignatures option', (t) => {
+test('verifyConsensusSignatures - should respect requiredSignatures option', async (t) => {
   if (!hasRealConsensus) {
     t.pass('Skipping: no real consensus file available');
     return;
   }
 
   // Setting a very high requirement should fail
-  const result = verifyConsensusSignatures(realConsensus, {
+  const result = await verifyConsensusSignatures(realConsensus, {
     requiredSignatures: 100,
     allowWithoutCertificates: true,
   });

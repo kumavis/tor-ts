@@ -20,11 +20,7 @@
 
 import { Circuit } from 'tor/circuit';
 import type { PeerInfo } from 'tor/circuit';
-import {
-  DirectoryClient,
-  parseMicroDescConsensusAsync,
-  lookupPeerInfo,
-} from 'tor/directory-client';
+import { DirectoryClient, parseMicroDescConsensus, lookupPeerInfo } from 'tor/directory-client';
 import type { DownloadProgress } from 'tor/directory-client';
 import { pickRelayWithFlags } from 'tor/build-circuit/util';
 import { SnowflakeBrowserChannel } from './snowflake-channel.ts';
@@ -154,7 +150,7 @@ export async function connectBrowserCircuit(
   }
 
   // Use async version for browser (Web Crypto API is async)
-  const consensus = await parseMicroDescConsensusAsync(microDescContent, {
+  const consensus = await parseMicroDescConsensus(microDescContent, {
     dangerouslySkipSignatureVerification,
   });
 
