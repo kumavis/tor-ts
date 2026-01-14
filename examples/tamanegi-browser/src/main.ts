@@ -8,8 +8,11 @@ import {
   fetchHtml,
   getConsensusCacheStatus,
   clearCachedConsensus,
+  connectToHiddenService,
+  isOnionAddress,
+  fetchViaTor,
 } from 'browser';
-import type { BrowserCircuit, DownloadProgress } from 'browser';
+import type { BrowserCircuit, DownloadProgress, HiddenServiceConnection } from 'browser';
 
 // Types
 type ViewMode = 'info' | 'browser';
@@ -41,6 +44,8 @@ const middleName = document.getElementById('middle-name') as HTMLElement;
 const middleStatus = document.getElementById('middle-status') as HTMLElement;
 const exitName = document.getElementById('exit-name') as HTMLElement;
 const exitStatus = document.getElementById('exit-status') as HTMLElement;
+const exitLabel = document.getElementById('exit-label') as HTMLElement;
+const exitIcon = document.getElementById('exit-icon') as HTMLElement;
 const destinationName = document.getElementById('destination-name') as HTMLElement;
 const destinationStatus = document.getElementById('destination-status') as HTMLElement;
 const destProtocol = document.getElementById('dest-protocol') as HTMLElement;
@@ -79,11 +84,13 @@ const warningDismiss = document.getElementById('warning-dismiss') as HTMLButtonE
 
 // State
 let currentCircuit: BrowserCircuit | null = null;
+let currentHsConnection: HiddenServiceConnection | null = null;
 let isConnecting = false;
 let currentPageUrl: URL | null = null;
 let linkMap: Map<number, string> = new Map();
 let _currentMode: ViewMode = 'info';
 let hasLoadedContent = false;
+let _isOnionSite = false;
 
 // Navigation history
 let historyStack: string[] = [];
@@ -218,6 +225,21 @@ function setNodeState(
 
 function updateCircuitStatus(text: string): void {
   circuitStatus.textContent = text;
+}
+
+// Update circuit display labels for hidden service vs clearnet mode
+function setCircuitMode(mode: 'clearnet' | 'onion'): void {
+  if (mode === 'onion') {
+    exitLabel.textContent = 'Rendezvous';
+    exitIcon.textContent = '🔗';
+    nodeExit.classList.add('rendezvous');
+    nodeExit.classList.remove('exit');
+  } else {
+    exitLabel.textContent = 'Exit';
+    exitIcon.textContent = '🌐';
+    nodeExit.classList.add('exit');
+    nodeExit.classList.remove('rendezvous');
+  }
 }
 
 // Consensus panel state management
@@ -450,20 +472,37 @@ async function browsePage(url: string): Promise<void> {
   try {
     // Add protocol if missing
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      url = 'https://' + url;
+      url = 'http://' + url; // Default to http for .onion, https for others
     }
     parsedUrl = new URL(url);
+
+    // For .onion addresses, use http (most onion services use http since Tor provides encryption)
+    const isOnion = isOnionAddress(parsedUrl.hostname);
+    if (isOnion && parsedUrl.protocol === 'https:') {
+      // Keep https if explicitly specified, but note that many .onion sites use http
+      log('Note: Using HTTPS for .onion (some sites may only support HTTP)', 'info');
+    }
   } catch {
     log(`Invalid URL: ${url}`, 'error');
     return;
   }
 
   setLoading(true);
-  log(`Fetching: ${parsedUrl.href}`, 'info');
+  const isOnion = isOnionAddress(parsedUrl.hostname);
+  _isOnionSite = isOnion;
+
+  // Update circuit display mode
+  setCircuitMode(isOnion ? 'onion' : 'clearnet');
+
+  if (isOnion) {
+    log(`Connecting to hidden service: ${parsedUrl.hostname}`, 'info');
+  } else {
+    log(`Fetching: ${parsedUrl.href}`, 'info');
+  }
 
   // Update destination in circuit display
   destinationName.textContent = parsedUrl.hostname;
-  destProtocol.textContent = parsedUrl.protocol === 'https:' ? 'HTTPS' : 'HTTP';
+  destProtocol.textContent = isOnion ? 'Onion' : parsedUrl.protocol === 'https:' ? 'HTTPS' : 'HTTP';
   setNodeState(
     destinationName,
     destinationStatus,
@@ -473,18 +512,15 @@ async function browsePage(url: string): Promise<void> {
   );
 
   try {
-    // Connect if not already connected
-    const { circuit } = await connectToTor();
+    let html: string;
 
-    // Fetch the page with timeout
-    log('Sending request through Tor circuit...', 'info');
-
-    // Add a race with timeout for better error reporting
-    const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error('Request timeout after 60s')), 60000);
-    });
-
-    const html = await Promise.race([fetchHtml(circuit, parsedUrl.href), timeoutPromise]);
+    if (isOnion) {
+      // Hidden service path
+      html = await browseOnionPage(parsedUrl);
+    } else {
+      // Regular clearnet path
+      html = await browseClearnetPage(parsedUrl);
+    }
 
     log(`Received ${html.length} bytes`, 'success');
 
@@ -505,13 +541,168 @@ async function browsePage(url: string): Promise<void> {
     setStatus('error', 'Error');
     setNodeState(destinationName, destinationStatus, nodeDestination, 'waiting', 'Failed');
 
-    // Reset circuit on error
+    // Reset circuits on error
     if (currentCircuit) {
       currentCircuit.destroy();
       currentCircuit = null;
     }
+    if (currentHsConnection) {
+      currentHsConnection.destroy();
+      currentHsConnection = null;
+    }
   } finally {
     setLoading(false);
+  }
+}
+
+// Browse a regular clearnet page through Tor
+async function browseClearnetPage(parsedUrl: URL): Promise<string> {
+  // Connect if not already connected
+  const { circuit } = await connectToTor();
+
+  // Fetch the page with timeout
+  log('Sending request through Tor circuit...', 'info');
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('Request timeout after 60s')), 60000);
+  });
+
+  return await Promise.race([fetchHtml(circuit, parsedUrl.href), timeoutPromise]);
+}
+
+// Browse a .onion hidden service
+async function browseOnionPage(parsedUrl: URL): Promise<string> {
+  // Determine port (default 80 for http, 443 for https)
+  const port = parsedUrl.port
+    ? parseInt(parsedUrl.port, 10)
+    : parsedUrl.protocol === 'https:'
+      ? 443
+      : 80;
+
+  // Check if we already have a connection to this onion address
+  // For now, we create a new connection each time (could be optimized later)
+  if (currentHsConnection) {
+    currentHsConnection.destroy();
+    currentHsConnection = null;
+  }
+
+  // Reset circuit display for hidden service connection
+  updateCircuitStatus('Connecting to hidden service...');
+  setNodeState(snowflakeName, snowflakeStatus, nodeSnowflake, 'connecting', 'Connecting...');
+  setNodeState(guardName, guardStatus, nodeGuard, 'waiting', 'Waiting...');
+  setNodeState(middleName, middleStatus, nodeMiddle, 'waiting', 'Waiting...');
+  setNodeState(exitName, exitStatus, nodeExit, 'waiting', 'Rendezvous');
+
+  // Connect to the hidden service
+  const hsConnection = await connectToHiddenService(parsedUrl.hostname, port, {
+    onStatus: (status) => {
+      log(status, 'info');
+      parseHsStatusMessage(status);
+    },
+    onConsensusProgress: (progress) => {
+      updateConsensusProgress(progress);
+    },
+    dangerouslySkipSignatureVerification: true,
+  });
+
+  currentHsConnection = hsConnection;
+  setStatus('connected', 'Connected (Onion)');
+
+  // Update circuit display for hidden service
+  setNodeState(snowflakeName, snowflakeStatus, nodeSnowflake, 'connected', 'Connected');
+  setNodeState(guardName, guardStatus, nodeGuard, 'connected', 'Guard');
+  setNodeState(middleName, middleStatus, nodeMiddle, 'connected', 'Middle');
+  setNodeState(exitName, exitStatus, nodeExit, 'connected', 'Rendezvous');
+  updateCircuitStatus('Hidden service connected');
+
+  // Fetch the page using the hidden service circuit
+  log('Fetching page from hidden service...', 'info');
+
+  const timeoutPromise = new Promise<never>((_, reject) => {
+    setTimeout(() => reject(new Error('Request timeout after 120s')), 120000);
+  });
+
+  // Use fetchViaTor with the rendezvous circuit
+  // The circuit is already connected to the hidden service via the rendezvous
+  const response = await Promise.race([
+    fetchViaTor(hsConnection.circuit, parsedUrl.href, {
+      headers: {
+        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+      },
+    }),
+    timeoutPromise,
+  ]);
+
+  if (response.status >= 400) {
+    throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
+  }
+
+  return response.body;
+}
+
+// Parse hidden service status messages
+function parseHsStatusMessage(status: string): void {
+  if (status.includes('Connecting to Snowflake')) {
+    setNodeState(snowflakeName, snowflakeStatus, nodeSnowflake, 'connecting', 'Connecting...');
+    updateCircuitStatus('Connecting to Snowflake...');
+  }
+
+  if (status.includes('Building bootstrap circuit')) {
+    setNodeState(snowflakeName, snowflakeStatus, nodeSnowflake, 'connected', 'Connected');
+    setNodeState(guardName, guardStatus, nodeGuard, 'connecting', 'Bootstrap...');
+    updateCircuitStatus('Building bootstrap circuit...');
+  }
+
+  if (status.includes('Using cached network consensus')) {
+    setNodeState(guardName, guardStatus, nodeGuard, 'connected', 'Guard');
+    updateCircuitStatus('Using cached consensus');
+    showConsensusCached();
+  }
+
+  if (status.includes('Downloading network consensus')) {
+    setNodeState(guardName, guardStatus, nodeGuard, 'connected', 'Guard');
+    setConsensusState('downloading');
+    updateCircuitStatus('Downloading consensus...');
+  }
+
+  if (status.includes('Locating hidden service directory')) {
+    updateCircuitStatus('Locating HSDir nodes...');
+  }
+
+  if (status.includes('Fetching hidden service descriptor')) {
+    updateCircuitStatus('Fetching HS descriptor...');
+  }
+
+  if (status.includes('Decrypting hidden service descriptor')) {
+    updateCircuitStatus('Decrypting descriptor...');
+  }
+
+  if (status.includes('Building rendezvous circuit')) {
+    setNodeState(middleName, middleStatus, nodeMiddle, 'connecting', 'Building...');
+    updateCircuitStatus('Building rendezvous circuit...');
+  }
+
+  if (status.includes('Establishing rendezvous point')) {
+    setNodeState(middleName, middleStatus, nodeMiddle, 'connected', 'Middle');
+    setNodeState(exitName, exitStatus, nodeExit, 'connecting', 'Rendezvous');
+    updateCircuitStatus('Establishing rendezvous...');
+  }
+
+  if (status.includes('Building introduction circuit')) {
+    updateCircuitStatus('Building intro circuit...');
+  }
+
+  if (status.includes('Sending introduction')) {
+    updateCircuitStatus('Sending introduction...');
+  }
+
+  if (status.includes('Waiting for rendezvous completion')) {
+    updateCircuitStatus('Waiting for rendezvous...');
+  }
+
+  if (status.includes('Connected to hidden service')) {
+    setNodeState(exitName, exitStatus, nodeExit, 'connected', 'Rendezvous');
+    updateCircuitStatus('Hidden service connected');
   }
 }
 
@@ -756,11 +947,15 @@ checkCachedConsensus();
 
 // Initial log
 log('TamanegiBrowser ready. Enter a URL to browse anonymously.', 'info');
+log('Supports both clearnet and .onion addresses.', 'info');
 log('Powered by Snowflake pluggable transport.', 'info');
 
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {
   if (currentCircuit) {
     currentCircuit.destroy();
+  }
+  if (currentHsConnection) {
+    currentHsConnection.destroy();
   }
 });

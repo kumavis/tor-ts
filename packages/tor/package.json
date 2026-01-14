@@ -28,7 +28,9 @@
     "./build-circuit/directory": "./src/build-circuit/directory.ts",
     "./build-circuit/mainnet": "./src/build-circuit/mainnet.ts",
     "./build-circuit/util": "./src/build-circuit/util.ts",
-    "./cli": "./src/cli.ts"
+    "./cli": "./src/cli.ts",
+    "./hidden-service": "./src/hidden-service.ts",
+    "./relay-cell": "./src/relay-cell.ts"
   },
   "scripts": {
     "dev": "pm2 start --no-daemon scripts/dev.config.cjs",
