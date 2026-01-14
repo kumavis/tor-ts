@@ -37,9 +37,16 @@ async function main() {
   const perStepTimeoutMs = 90_000;
 
   // Local HTTP server that the chutney onion-service node will forward to.
-  const targetPort = Number.parseInt(process.env.TOR_TS_HS_TARGET_PORT ?? '4748', 10);
+  const targetPort = Number.parseInt(process.env.TOR_TS_HS_TARGET_PORT ?? '4747', 10);
   if (!Number.isFinite(targetPort) || targetPort <= 0) {
     throw new Error(`Invalid TOR_TS_HS_TARGET_PORT: ${process.env.TOR_TS_HS_TARGET_PORT ?? ''}`);
+  }
+
+  // The hidden service's virtual port (what clients connect to).
+  // Chutney's built-in HS uses 5858 by default.
+  const hsVirtPort = Number.parseInt(process.env.TOR_TS_HS_VIRTPORT ?? '5858', 10);
+  if (!Number.isFinite(hsVirtPort) || hsVirtPort <= 0) {
+    throw new Error(`Invalid TOR_TS_HS_VIRTPORT: ${process.env.TOR_TS_HS_VIRTPORT ?? ''}`);
   }
 
   const hostnamePath =
@@ -92,7 +99,7 @@ async function main() {
     const { circuit, stream } = await withTimeout(
       'connect to hidden service over chutney',
       overallTimeoutMs + 90_000,
-      connectToHiddenServiceOverChutney({ onionAddress, port: 80, overallTimeoutMs })
+      connectToHiddenServiceOverChutney({ onionAddress, port: hsVirtPort, overallTimeoutMs })
     );
     console.log('hs: connected, issuing HTTP request');
 
@@ -120,7 +127,10 @@ async function main() {
     })();
 
     const requestText =
-      `GET / HTTP/1.1\r\n` + `Host: ${onionAddress}\r\n` + `Connection: close\r\n` + `\r\n`;
+      `GET / HTTP/1.1\r\n` +
+      `Host: ${onionAddress}:${hsVirtPort}\r\n` +
+      `Connection: close\r\n` +
+      `\r\n`;
     await withTimeout(
       'write request',
       perStepTimeoutMs,

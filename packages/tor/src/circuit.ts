@@ -739,7 +739,6 @@ export class Circuit extends EventEmitter {
   private async doSendStreamSendme(stream: CircuitStream, targetHop: Hop): Promise<void> {
     const { streamId } = stream;
     // Stream-level SENDME has the streamId set, and empty data
-    console.log(`sending stream SENDME for stream ${streamId}`);
     await this.sendRelayMessage(
       {
         streamId,

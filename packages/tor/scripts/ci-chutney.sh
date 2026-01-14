@@ -92,8 +92,6 @@ export CHUTNEY_DATA_DIR="${CHUTNEY_DATA_DIR:-$(mktemp -d)}"
 export CHUTNEY_LISTEN_ADDRESS="${CHUTNEY_LISTEN_ADDRESS:-127.0.0.1}"
 export CHUTNEY_DISABLE_IPV6="${CHUTNEY_DISABLE_IPV6:-1}"
 export CHUTNEY_DNS_CONF="${CHUTNEY_DNS_CONF:-/dev/null}"
-export TOR_TS_TEST_PORT="${TOR_TS_TEST_PORT:-4747}"
-export TOR_TS_HS_TARGET_PORT="${TOR_TS_HS_TARGET_PORT:-4748}"
 
 cleanup() {
   cd "${CHUTNEY_DIR}" || exit 0
@@ -111,8 +109,13 @@ cd "${CHUTNEY_DIR}"
 # Create a CI-only network config that allows exiting to localhost.
 # This avoids REASON_EXITPOLICY when testing e2e against a local HTTP server.
 CHUTNEY_NETWORK="${CHUTNEY_NETWORK:-tor-ts-basic-min}"
-mkdir -p "${CHUTNEY_DATA_DIR}/hs_service"
-export TOR_TS_HS_HOSTNAME_PATH="${CHUTNEY_DATA_DIR}/hs_service/hostname"
+
+# Chutney's verify test uses port 4747 (LISTEN_PORT in verify.py) for both
+# exit relay tests AND hidden service tests. We use the same port for both.
+export TOR_TS_TEST_PORT=4747
+export TOR_TS_HS_TARGET_PORT=4747
+# Chutney's built-in HS uses virtport 5858 (hardcoded in TorNet.py)
+export TOR_TS_HS_VIRTPORT=5858
 
 cat > "networks/${CHUTNEY_NETWORK}" <<EOF
 Authority = Node(tag="a", authority=1, relay=1)
@@ -128,101 +131,50 @@ ClientDNSRejectInternalAddresses 0
 
 Client = Node(tag="c", client=1)
 
-HiddenService = Node(tag="h", client=1, extra_raw_torrc="""\
-EnforceDistinctSubnets 0
-UseEntryGuards 0
-HiddenServiceDir ${CHUTNEY_DATA_DIR}/hs_service
-HiddenServicePort 80 127.0.0.1:${TOR_TS_HS_TARGET_PORT}
-""")
+# Use Chutney's built-in hs=1 so that 'chutney verify' can test HS connectivity.
+# This uses Chutney's managed HS directory and proper timing.
+HiddenService = Node(tag="h", hs=1, launch_phase=2)
 
 NODES = Authority.getN(4) + Relay.getN(2) + ExitRelay.getN(1) + Client.getN(1) + HiddenService.getN(1)
 ConfigureNodes(NODES)
 EOF
 
-timeout 10m ./chutney bootstrap "${CHUTNEY_NETWORK}"
-./chutney status "${CHUTNEY_NETWORK}"
+# Use Chutney's test-network.sh with --stop-time -1 to:
+# 1. Bootstrap the network
+# 2. Verify connectivity (exit + HS) with proper timing and retries
+# 3. Keep the network running (don't stop) so we can run TypeScript tests
+#
+# This handles all the HS descriptor timing automatically (waits voting_interval + 10s).
+export CHUTNEY_PATH="${CHUTNEY_DIR}"
 
-# If we plan to run the hidden-service test, wait until the hidden service has:
-# 1. Established at least one intro point (INTRO_ESTABLISHED received)
-# 2. Uploaded its descriptor to HSDirs
-# This prevents flakiness where the client tries to use an intro point before it's ready.
-if [[ ",${TOR_TS_CHUTNEY_TESTS:-exit,hidden-service}," == *",hidden-service,"* ]]; then
-  echo ""
-  echo "Waiting for hidden service intro points + descriptor upload (to reduce flakiness)..."
-  python3 - <<'PY'
-import glob
-import os
-import time
+echo ""
+echo "Running Chutney test-network.sh to bootstrap and verify (exit + HS)..."
+echo "This includes proper HS timing waits to avoid descriptor lookup flakiness."
+timeout 10m "${CHUTNEY_DIR}/tools/test-network.sh" \
+  --flavour "${CHUTNEY_NETWORK}" \
+  --bootstrap-time 120 \
+  --stop-time -1
+echo "Chutney test-network.sh passed - network connectivity confirmed."
 
-data_dir = os.environ.get("CHUTNEY_DATA_DIR", "")
-if not data_dir:
-    raise SystemExit("CHUTNEY_DATA_DIR is not set")
+# Use Chutney's built-in hsaddress.sh tool to get the HS hostname
+# The tool looks in ${CHUTNEY_DATA_DIR}/nodes/*h*/hidden_service/hostname
+HS_HOSTNAME=$("${CHUTNEY_DIR}/tools/hsaddress.sh" 2>/dev/null | head -n 1 | sed 's/^Node [^:]*: //')
 
-hostname_path = os.environ.get("TOR_TS_HS_HOSTNAME_PATH", os.path.join(data_dir, "hs_service", "hostname"))
-hs_nodes = sorted(glob.glob(os.path.join(data_dir, "nodes", "*h")))
-if not hs_nodes:
-    raise SystemExit(f"Could not find hidden service node under {data_dir}/nodes/*h")
-
-hs_log = os.path.join(hs_nodes[0], "info.log")
-deadline = time.time() + 180  # seconds
-
-# Conditions to check:
-# 1. Intro point established - the relay has registered the service
-intro_established_needle = "Successfully received an INTRO_ESTABLISHED cell"
-# 2. Descriptor uploaded - clients can now fetch it
-desc_upload_needle1 = "HS descriptor stored successfully."
-desc_upload_needle2 = "Uploading hidden service descriptor: finished with status 200"
-
-intro_ready = False
-desc_uploaded = False
-last_size = -1
-
-while time.time() <= deadline:
-    if os.path.exists(hostname_path) and os.path.exists(hs_log):
-        try:
-            txt = open(hs_log, "r", encoding="utf-8", errors="replace").read()
-        except Exception:
-            txt = ""
-        
-        # Check intro point establishment
-        if not intro_ready and intro_established_needle in txt:
-            print("Intro point established (INTRO_ESTABLISHED received).")
-            intro_ready = True
-        
-        # Check descriptor upload
-        if not desc_uploaded and (desc_upload_needle1 in txt or desc_upload_needle2 in txt):
-            print("Descriptor upload confirmed.")
-            desc_uploaded = True
-        
-        # Both conditions met - add a small grace period for relay-side processing
-        if intro_ready and desc_uploaded:
-            print("Both intro points and descriptor ready. Waiting 2s grace period...")
-            time.sleep(2)
-            print("Hidden service fully ready.")
-            raise SystemExit(0)
-        
-        try:
-            sz = os.path.getsize(hs_log)
-        except OSError:
-            sz = -1
-        if sz != last_size:
-            last_size = sz
-    time.sleep(1)
-
-print("Timed out waiting for hidden service readiness.")
-print(f"  intro_ready={intro_ready}, desc_uploaded={desc_uploaded}")
-print(f"  hostname_path={hostname_path}")
-print(f"  hs_log={hs_log}")
-try:
-    tail = open(hs_log, "r", encoding="utf-8", errors="replace").read().splitlines()[-40:]
-    print("Last 40 lines of hs info.log:")
-    for line in tail:
-        print(line)
-except Exception as e:
-    print(f"Could not read hs log tail: {e}")
-raise SystemExit(1)
-PY
+if [ -z "${HS_HOSTNAME}" ]; then
+  echo "ERROR: Could not get HS hostname from hsaddress.sh"
+  echo "Debugging: listing nodes directory"
+  ls -la "${CHUTNEY_DATA_DIR}/nodes" 2>&1 || echo "(nodes dir not found)"
+  for d in "${CHUTNEY_DATA_DIR}"/nodes/*h*; do
+    echo "Node dir: $d"
+    ls -la "$d/hidden_service" 2>&1 || echo "(no hidden_service dir)"
+  done
+  exit 1
 fi
+
+# Write the hostname to a temp file that the TypeScript test can read
+export TOR_TS_HS_HOSTNAME_PATH="${CHUTNEY_DATA_DIR}/hs_hostname.txt"
+echo "${HS_HOSTNAME}" > "${TOR_TS_HS_HOSTNAME_PATH}"
+echo "HS hostname: ${HS_HOSTNAME}"
 
 # Force the integration test to use the real exit relay.
 # Chutney writes a hex fingerprint in nodes/*r/fingerprint; that's the SHA1 digest we use.
@@ -240,7 +192,7 @@ echo "TOR_TS_HS_HOSTNAME_PATH=${TOR_TS_HS_HOSTNAME_PATH}"
 echo ""
 for torrc in "${CHUTNEY_DATA_DIR}"/nodes/*/torrc; do
   echo "--- ${torrc}"
-  grep -nE "^(SocksPort|ORPort|DirPort|ExitRelay|ExitPolicy|ExitPolicyRejectLocalInterfaces|ExitPolicyRejectPrivate|ClientRejectInternalAddresses|ClientDNSRejectInternalAddresses|ReducedExitPolicy)\\b" "${torrc}" || true
+  grep -nE "^(SocksPort|ORPort|DirPort|ExitRelay|ExitPolicy|ExitPolicyRejectLocalInterfaces|ExitPolicyRejectPrivate|ClientRejectInternalAddresses|ClientDNSRejectInternalAddresses|ReducedExitPolicy|HiddenServiceDir|HiddenServicePort)\\b" "${torrc}" || true
 done
 echo "=== end torrc summary ==="
 echo ""
