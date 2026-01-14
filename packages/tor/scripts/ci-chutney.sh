@@ -114,6 +114,8 @@ CHUTNEY_NETWORK="${CHUTNEY_NETWORK:-tor-ts-basic-min}"
 # exit relay tests AND hidden service tests. We use the same port for both.
 export TOR_TS_TEST_PORT=4747
 export TOR_TS_HS_TARGET_PORT=4747
+# Chutney's built-in HS uses virtport 5858 (hardcoded in TorNet.py)
+export TOR_TS_HS_VIRTPORT=5858
 
 cat > "networks/${CHUTNEY_NETWORK}" <<EOF
 Authority = Node(tag="a", authority=1, relay=1)
