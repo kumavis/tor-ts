@@ -137,22 +137,25 @@ NODES = Authority.getN(4) + Relay.getN(2) + ExitRelay.getN(1) + Client.getN(1) +
 ConfigureNodes(NODES)
 EOF
 
-timeout 10m ./chutney bootstrap "${CHUTNEY_NETWORK}"
-./chutney status "${CHUTNEY_NETWORK}"
+# Use Chutney's test-network.sh with --stop-time -1 to:
+# 1. Bootstrap the network
+# 2. Verify connectivity (exit + HS) with proper timing and retries
+# 3. Keep the network running (don't stop) so we can run TypeScript tests
+#
+# This handles all the HS descriptor timing automatically (waits voting_interval + 10s).
+export CHUTNEY_PATH="${CHUTNEY_DIR}"
 
-# Use Chutney's built-in verify command to test both exit and HS connectivity.
-# This has proper timing (waits voting_interval + 10s) and retries, ensuring the
-# hidden service descriptor has propagated correctly before we test it.
-# The verify command binds a TrafficTester on port 4747 and tests data transmission.
 echo ""
-echo "Running chutney verify to validate network connectivity (exit + HS)..."
+echo "Running Chutney test-network.sh to bootstrap and verify (exit + HS)..."
 echo "This includes proper HS timing waits to avoid descriptor lookup flakiness."
-timeout 5m ./chutney verify "${CHUTNEY_NETWORK}"
-echo "Chutney verify passed - network connectivity confirmed."
+timeout 10m "${CHUTNEY_DIR}/tools/test-network.sh" \
+  --flavour "${CHUTNEY_NETWORK}" \
+  --bootstrap-time 120 \
+  --stop-time -1
+echo "Chutney test-network.sh passed - network connectivity confirmed."
 
 # Use Chutney's built-in hsaddress.sh tool to get the HS hostname
 # The tool looks in ${CHUTNEY_DATA_DIR}/nodes/*h*/hidden_service/hostname
-export CHUTNEY_PATH="${CHUTNEY_DIR}"
 HS_HOSTNAME=$("${CHUTNEY_DIR}/tools/hsaddress.sh" 2>/dev/null | head -n 1 | sed 's/^Node [^:]*: //')
 
 if [ -z "${HS_HOSTNAME}" ]; then
