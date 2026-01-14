@@ -526,7 +526,6 @@ export function parseMicroDescConsensus(
     signatureVerification = verifyConsensusSignatures(microDescContent, {
       keyCertificates,
       requiredSignatures,
-      allowWithoutCertificates: true,
       now,
     });
 
@@ -599,7 +598,6 @@ export async function parseMicroDescConsensusAsync(
     signatureVerification = await verifyConsensusSignaturesAsync(microDescContent, {
       keyCertificates,
       requiredSignatures,
-      allowWithoutCertificates: true,
       now,
     });
 

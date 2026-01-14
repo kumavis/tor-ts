@@ -550,14 +550,6 @@ export type VerifyConsensusOptions = {
   requiredSignatures?: number | undefined;
 
   /**
-   * Whether to allow verification without key certificates.
-   * When true, signatures are verified against authority identity keys directly.
-   * This is less secure but useful for bootstrap.
-   * Default: true
-   */
-  allowWithoutCertificates?: boolean | undefined;
-
-  /**
    * Current time for checking certificate validity.
    * Defaults to Date.now().
    */
@@ -580,7 +572,7 @@ export function verifyConsensusSignatures(
   consensusText: string,
   options: VerifyConsensusOptions = {}
 ): ConsensusVerificationResult {
-  const { keyCertificates = [], allowWithoutCertificates = true, now = Date.now() } = options;
+  const { keyCertificates = [], now = Date.now() } = options;
 
   const totalKnownAuthorities = DIRECTORY_AUTHORITIES.length;
 
@@ -588,6 +580,22 @@ export function verifyConsensusSignatures(
   // For 8 authorities: 5 required. For 9: 5 required.
   const defaultRequired = Math.floor(totalKnownAuthorities / 2) + 1;
   const requiredSignatureCount = options.requiredSignatures ?? defaultRequired;
+
+  // Key certificates are required for proper verification
+  // The consensus is signed with signing keys (not identity keys), and certificates
+  // contain those signing keys. Without certificates, verification cannot succeed.
+  if (keyCertificates.length === 0) {
+    return {
+      valid: false,
+      validSignatureCount: 0,
+      requiredSignatureCount,
+      totalKnownAuthorities,
+      signatures: [],
+      error:
+        'No key certificates provided. Consensus signatures are made with signing keys ' +
+        '(not identity keys), so key certificates must be downloaded to verify signatures.',
+    };
+  }
 
   const signatures = parseConsensusSignatures(consensusText);
 
@@ -667,16 +675,13 @@ export function verifyConsensusSignatures(
         continue;
       }
       signingKeyPem = certificate.signingKeyPem;
-    } else if (allowWithoutCertificates) {
-      // Fall back to using identity key directly
-      // This is less secure but works for bootstrap
-      signingKeyPem = authority.identityKeyPem;
     } else {
+      // No matching certificate for this signature
       results.push({
         identityFingerprint: sig.identityFingerprint,
         nickname: authority.nickname,
         valid: false,
-        error: 'No key certificate available',
+        error: 'No matching key certificate for this signing key',
       });
       continue;
     }
@@ -736,11 +741,25 @@ export async function verifyConsensusSignaturesAsync(
   consensusText: string,
   options: VerifyConsensusOptions = {}
 ): Promise<ConsensusVerificationResult> {
-  const { keyCertificates = [], allowWithoutCertificates = true, now = Date.now() } = options;
+  const { keyCertificates = [], now = Date.now() } = options;
 
   const totalKnownAuthorities = DIRECTORY_AUTHORITIES.length;
   const defaultRequired = Math.floor(totalKnownAuthorities / 2) + 1;
   const requiredSignatureCount = options.requiredSignatures ?? defaultRequired;
+
+  // Key certificates are required for proper verification
+  if (keyCertificates.length === 0) {
+    return {
+      valid: false,
+      validSignatureCount: 0,
+      requiredSignatureCount,
+      totalKnownAuthorities,
+      signatures: [],
+      error:
+        'No key certificates provided. Consensus signatures are made with signing keys ' +
+        '(not identity keys), so key certificates must be downloaded to verify signatures.',
+    };
+  }
 
   const signatures = parseConsensusSignatures(consensusText);
 
@@ -814,14 +833,13 @@ export async function verifyConsensusSignaturesAsync(
         continue;
       }
       signingKeyPem = certificate.signingKeyPem;
-    } else if (allowWithoutCertificates) {
-      signingKeyPem = authority.identityKeyPem;
     } else {
+      // No matching certificate for this signature
       results.push({
         identityFingerprint: sig.identityFingerprint,
         nickname: authority.nickname,
         valid: false,
-        error: 'No key certificate available',
+        error: 'No matching key certificate for this signing key',
       });
       continue;
     }
