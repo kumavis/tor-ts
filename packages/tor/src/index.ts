@@ -74,3 +74,20 @@ export {
   type FallbackDirEntry,
   type FallbackDirsData,
 } from './fallback-dirs.ts';
+
+// SOCKS proxy support
+export {
+  SocksProxyServer,
+  createSocksProxy,
+  SOCKS_VERSION,
+  SocksAuthMethod,
+  SocksCommand,
+  SocksAddressType,
+  SocksReply,
+  parseSocksGreeting,
+  buildSocksGreetingResponse,
+  parseSocksRequest,
+  buildSocksReply,
+  type SocksRequest,
+  type SocksServerOptions,
+} from './socks.ts';
