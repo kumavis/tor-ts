@@ -127,7 +127,6 @@ export const circuitStreamToNodeDuplex = (circuitStream: CircuitStream): Duplex 
       // no means of triggering read
     },
     write(chunk, encoding, callback) {
-      console.log('writing to circuitStream');
 
       writer
         .write(chunk)
@@ -147,10 +146,8 @@ export const circuitStreamToNodeDuplex = (circuitStream: CircuitStream): Duplex 
       let { value, done } = result as ReadableStreamReadResult<Uint8Array>;
       while (!done) {
         nodeDuplexStream.push(value);
-        console.log('reading value from circuitStream');
         ({ done, value } = (await reader.read()) as ReadableStreamReadResult<Uint8Array>);
       }
-      console.log('done reading from circuitStream');
 
       nodeDuplexStream.push(null);
       reader.releaseLock();
