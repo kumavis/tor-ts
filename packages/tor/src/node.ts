@@ -127,7 +127,6 @@ export const circuitStreamToNodeDuplex = (circuitStream: CircuitStream): Duplex 
       // no means of triggering read
     },
     write(chunk, encoding, callback) {
-
       writer
         .write(chunk)
         .then(() => {
