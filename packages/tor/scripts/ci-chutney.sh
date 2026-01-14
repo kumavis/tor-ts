@@ -150,18 +150,26 @@ echo "This includes proper HS timing waits to avoid descriptor lookup flakiness.
 timeout 5m ./chutney verify "${CHUTNEY_NETWORK}"
 echo "Chutney verify passed - network connectivity confirmed."
 
-# Find the HS hostname from Chutney's managed HS node directory
-HS_NODE_DIR=$(find "${CHUTNEY_DATA_DIR}/nodes" -maxdepth 1 -type d -name '*h*' | head -n 1)
-if [ -z "${HS_NODE_DIR}" ]; then
-  echo "ERROR: Could not find HS node directory"
+# Use Chutney's built-in hsaddress.sh tool to get the HS hostname
+# The tool looks in ${CHUTNEY_DATA_DIR}/nodes/*h*/hidden_service/hostname
+export CHUTNEY_PATH="${CHUTNEY_DIR}"
+HS_HOSTNAME=$("${CHUTNEY_DIR}/tools/hsaddress.sh" 2>/dev/null | head -n 1 | sed 's/^Node [^:]*: //')
+
+if [ -z "${HS_HOSTNAME}" ]; then
+  echo "ERROR: Could not get HS hostname from hsaddress.sh"
+  echo "Debugging: listing nodes directory"
+  ls -la "${CHUTNEY_DATA_DIR}/nodes" 2>&1 || echo "(nodes dir not found)"
+  for d in "${CHUTNEY_DATA_DIR}"/nodes/*h*; do
+    echo "Node dir: $d"
+    ls -la "$d/hidden_service" 2>&1 || echo "(no hidden_service dir)"
+  done
   exit 1
 fi
-export TOR_TS_HS_HOSTNAME_PATH="${HS_NODE_DIR}/hs_service/hostname"
-if [ ! -f "${TOR_TS_HS_HOSTNAME_PATH}" ]; then
-  echo "ERROR: HS hostname file not found at ${TOR_TS_HS_HOSTNAME_PATH}"
-  exit 1
-fi
-echo "HS hostname: $(cat "${TOR_TS_HS_HOSTNAME_PATH}")"
+
+# Write the hostname to a temp file that the TypeScript test can read
+export TOR_TS_HS_HOSTNAME_PATH="${CHUTNEY_DATA_DIR}/hs_hostname.txt"
+echo "${HS_HOSTNAME}" > "${TOR_TS_HS_HOSTNAME_PATH}"
+echo "HS hostname: ${HS_HOSTNAME}"
 
 # Force the integration test to use the real exit relay.
 # Chutney writes a hex fingerprint in nodes/*r/fingerprint; that's the SHA1 digest we use.
