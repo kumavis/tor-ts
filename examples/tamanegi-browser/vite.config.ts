@@ -29,6 +29,8 @@ export default defineConfig({
       ws: path.resolve(browserShimsPath, 'ws.ts'),
       // Replace node:tls with @reclaimprotocol/tls-based implementation (TLS 1.3)
       'node:tls': path.resolve(browserShimsPath, 'tls.ts'),
+      // Tor imports crypto via `node:crypto` - ensure it uses the shim.
+      'node:crypto': path.resolve(browserShimsPath, 'crypto-webcrypto.ts'),
       // Stream/web alias for the circuit.ts import
       'stream/web': 'web-streams-polyfill/dist/ponyfill.mjs',
     },

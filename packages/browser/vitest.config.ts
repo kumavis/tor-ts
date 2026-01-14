@@ -27,6 +27,8 @@ export default defineConfig({
     alias: {
       ws: path.resolve(__dirname, 'src/shims/ws.ts'),
       'node:tls': path.resolve(__dirname, 'src/shims/tls.ts'),
+      // Tor imports crypto via `node:crypto` - ensure it uses the same shim.
+      'node:crypto': path.resolve(__dirname, 'src/shims/crypto-webcrypto.ts'),
       'stream/web': 'web-streams-polyfill/dist/ponyfill.mjs',
     },
   },
