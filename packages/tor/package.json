@@ -30,7 +30,8 @@
     "./build-circuit/util": "./src/build-circuit/util.ts",
     "./cli": "./src/cli.ts",
     "./hidden-service": "./src/hidden-service.ts",
-    "./relay-cell": "./src/relay-cell.ts"
+    "./relay-cell": "./src/relay-cell.ts",
+    "./consensus-signature": "./src/consensus-signature.ts"
   },
   "scripts": {
     "dev": "pm2 start --no-daemon scripts/dev.config.cjs",

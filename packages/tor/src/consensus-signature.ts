@@ -441,6 +441,10 @@ export function verifySignature(digest: Buffer, signature: Buffer, signingKeyPem
  * In Node.js, this delegates to the sync version.
  * In browsers, the sync version throws AsyncPublicDecryptRequired which we catch
  * and await the async result.
+ *
+ * @throws Error if verification cannot be performed (e.g., unsupported algorithm,
+ *         key import failure, etc.). This is distinct from returning false, which
+ *         means the signature is definitively invalid.
  */
 export async function verifySignatureAsync(
   digest: Buffer,
@@ -458,14 +462,12 @@ export async function verifySignatureAsync(
       err.name === 'AsyncPublicDecryptRequired' &&
       'promise' in err
     ) {
-      try {
-        const decrypted = await (err as { promise: Promise<Uint8Array> }).promise;
-        return Buffer.from(decrypted).equals(digest);
-      } catch {
-        return false;
-      }
+      // Await the async RSA operation - let errors propagate
+      const decrypted = await (err as { promise: Promise<Uint8Array> }).promise;
+      return Buffer.from(decrypted).equals(digest);
     }
-    return false;
+    // Re-throw other errors - verification could not be performed
+    throw err;
   }
 }
 
@@ -680,12 +682,21 @@ export function verifyConsensusSignatures(
     }
 
     // Verify the signature
-    const valid = verifySignatureWithData(
-      signedPortion,
-      sig.signature,
-      signingKeyPem,
-      sig.algorithm
-    );
+    let valid: boolean;
+    let verificationError: string | undefined;
+    try {
+      valid = verifySignatureWithData(signedPortion, sig.signature, signingKeyPem, sig.algorithm);
+      if (!valid) {
+        verificationError = 'Signature verification failed';
+      }
+    } catch (err) {
+      // Verification could not be performed (e.g., unsupported algorithm, key import failed)
+      valid = false;
+      verificationError =
+        err instanceof Error
+          ? `Verification error: ${err.message}`
+          : 'Verification error: unknown error';
+    }
 
     if (valid) {
       validCount++;
@@ -695,7 +706,7 @@ export function verifyConsensusSignatures(
       identityFingerprint: sig.identityFingerprint,
       nickname: authority.nickname,
       valid,
-      error: valid ? undefined : 'Signature verification failed',
+      error: verificationError,
     });
   }
 
@@ -816,12 +827,26 @@ export async function verifyConsensusSignaturesAsync(
     }
 
     // Verify the signature using async version
-    const valid = await verifySignatureWithDataAsync(
-      signedPortion,
-      sig.signature,
-      signingKeyPem,
-      sig.algorithm
-    );
+    let valid: boolean;
+    let verificationError: string | undefined;
+    try {
+      valid = await verifySignatureWithDataAsync(
+        signedPortion,
+        sig.signature,
+        signingKeyPem,
+        sig.algorithm
+      );
+      if (!valid) {
+        verificationError = 'Signature verification failed';
+      }
+    } catch (err) {
+      // Verification could not be performed (e.g., unsupported algorithm, key import failed)
+      valid = false;
+      verificationError =
+        err instanceof Error
+          ? `Verification error: ${err.message}`
+          : 'Verification error: unknown error';
+    }
 
     if (valid) {
       validCount++;
@@ -831,7 +856,7 @@ export async function verifyConsensusSignaturesAsync(
       identityFingerprint: sig.identityFingerprint,
       nickname: authority.nickname,
       valid,
-      error: valid ? undefined : 'Signature verification failed',
+      error: verificationError,
     });
   }
 
