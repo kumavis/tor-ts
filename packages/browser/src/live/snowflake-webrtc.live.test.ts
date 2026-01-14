@@ -40,8 +40,14 @@ beforeAll(async () => {
   statusMessages.push('Connecting to Snowflake broker...');
 
   // Step 1: Connect via WebRTC channel
+  // Note: Domain fronting is disabled because browsers don't allow setting
+  // the Host header (it's a forbidden header). Direct broker connection is used.
   channel = new SnowflakeWebRtcBrowserChannel();
-  await channel.connect();
+  await channel.connect({
+    broker: {
+      disableDomainFronting: true,
+    },
+  });
   statusMessages.push('WebRTC connection established');
 
   const entryRsaIdDigest = channel.peerIdentity?.rsaIdDigest;
