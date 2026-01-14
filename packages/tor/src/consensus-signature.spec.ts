@@ -147,9 +147,7 @@ test('extractAuthorityFingerprints - should extract unique fingerprints from con
 });
 
 test('verifyConsensusSignatures - should fail for test microdesc (unknown authorities)', async (t) => {
-  const result = await verifyConsensusSignatures(testMicrodesc, {
-    allowWithoutCertificates: true,
-  });
+  const result = await verifyConsensusSignatures(testMicrodesc, { keyCertificates: [] });
 
   // Test microdesc is signed by chutney test authorities, not mainnet
   t.false(result.valid);
@@ -163,26 +161,32 @@ test('verifyConsensusSignatures - should fail for test microdesc (unknown author
   }
 });
 
-test('verifyConsensusSignatures - should verify real consensus signatures', async (t) => {
+test('verifyConsensusSignatures - fails without key certificates', async (t) => {
   if (!hasRealConsensus) {
     t.pass('Skipping: no real consensus file available');
     return;
   }
 
-  const result = await verifyConsensusSignatures(realConsensus, {
-    allowWithoutCertificates: true,
-  });
+  // Verification without key certificates should fail - the consensus is signed
+  // with signing keys from certificates, not identity keys
+  const result = await verifyConsensusSignatures(realConsensus, { keyCertificates: [] });
 
   // Real consensus should have signatures from known authorities
   t.is(result.totalKnownAuthorities, 8);
 
-  // At minimum, we should recognize the authority fingerprints
+  // We should recognize authority fingerprints
   const knownSigs = result.signatures.filter((s) => s.nickname !== undefined);
   t.true(knownSigs.length > 0);
+
+  // But verification should fail without certificates
+  t.false(result.valid);
+  for (const sig of knownSigs) {
+    t.is(sig.error, 'No key certificate available (required for verification)');
+  }
 });
 
 test('verifyConsensusSignatures - should fail with empty consensus', async (t) => {
-  const result = await verifyConsensusSignatures('', {});
+  const result = await verifyConsensusSignatures('', { keyCertificates: [] });
   t.false(result.valid);
   t.is(result.error, 'No signatures found in consensus');
 });
@@ -194,9 +198,10 @@ test('verifyConsensusSignatures - should respect requiredSignatures option', asy
   }
 
   // Setting a very high requirement should fail
+  // TODO: this will fail anyways without keyCertificates
   const result = await verifyConsensusSignatures(realConsensus, {
+    keyCertificates: [],
     requiredSignatures: 100,
-    allowWithoutCertificates: true,
   });
   t.false(result.valid);
   t.is(result.requiredSignatureCount, 100);

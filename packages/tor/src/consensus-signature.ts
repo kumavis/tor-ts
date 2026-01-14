@@ -447,25 +447,20 @@ export function findAuthorityByFingerprint(
 export type VerifyConsensusOptions = {
   /**
    * The key certificates for signing key verification.
-   * If not provided, verification will only check that signatures are from
-   * known authorities and use their identity keys (which is less secure
-   * but works without fetching certificates).
+   *
+   * The consensus is signed with authority signing keys (from certificates).
+   * Without certificates, signature verification will fail.
+   *
+   * Fetch certificates via DirectoryClient.downloadKeyCertificates() and
+   * parse with parseAllKeyCertificates().
    */
-  keyCertificates?: AuthorityKeyCertificate[] | undefined;
+  keyCertificates: AuthorityKeyCertificate[];
 
   /**
    * Minimum number of valid signatures required.
    * Defaults to majority of known authorities (ceil(n/2) + 1 for n > 2).
    */
   requiredSignatures?: number | undefined;
-
-  /**
-   * Whether to allow verification without key certificates.
-   * When true, signatures are verified against authority identity keys directly.
-   * This is less secure but useful for bootstrap.
-   * Default: true
-   */
-  allowWithoutCertificates?: boolean | undefined;
 
   /**
    * Current time for checking certificate validity.
@@ -488,9 +483,9 @@ export type VerifyConsensusOptions = {
  */
 export async function verifyConsensusSignatures(
   consensusText: string,
-  options: VerifyConsensusOptions = {}
+  options: VerifyConsensusOptions
 ): Promise<ConsensusVerificationResult> {
-  const { keyCertificates = [], allowWithoutCertificates = true, now = Date.now() } = options;
+  const { keyCertificates, now = Date.now() } = options;
 
   const totalKnownAuthorities = DIRECTORY_AUTHORITIES.length;
   const defaultRequired = Math.floor(totalKnownAuthorities / 2) + 1;
@@ -546,39 +541,37 @@ export async function verifyConsensusSignatures(
     const certKey = `${sig.identityFingerprint}-${sig.signingKeyFingerprint}`;
     const certificate = certMap.get(certKey);
 
-    let signingKeyPem: string;
-
-    if (certificate) {
-      if (now < certificate.published.getTime()) {
-        results.push({
-          identityFingerprint: sig.identityFingerprint,
-          nickname: authority.nickname,
-          valid: false,
-          error: 'Key certificate not yet valid',
-        });
-        continue;
-      }
-      if (now > certificate.expires.getTime()) {
-        results.push({
-          identityFingerprint: sig.identityFingerprint,
-          nickname: authority.nickname,
-          valid: false,
-          error: 'Key certificate expired',
-        });
-        continue;
-      }
-      signingKeyPem = certificate.signingKeyPem;
-    } else if (allowWithoutCertificates) {
-      signingKeyPem = authority.identityKeyPem;
-    } else {
+    if (!certificate) {
+      // No certificate means we can't verify - the consensus is signed with
+      // signing keys from certificates
       results.push({
         identityFingerprint: sig.identityFingerprint,
         nickname: authority.nickname,
         valid: false,
-        error: 'No key certificate available',
+        error: 'No key certificate available (required for verification)',
       });
       continue;
     }
+
+    if (now < certificate.published.getTime()) {
+      results.push({
+        identityFingerprint: sig.identityFingerprint,
+        nickname: authority.nickname,
+        valid: false,
+        error: 'Key certificate not yet valid',
+      });
+      continue;
+    }
+    if (now > certificate.expires.getTime()) {
+      results.push({
+        identityFingerprint: sig.identityFingerprint,
+        nickname: authority.nickname,
+        valid: false,
+        error: 'Key certificate expired',
+      });
+      continue;
+    }
+    const { signingKeyPem } = certificate;
 
     // Verify the signature
     const valid = await verifySignatureWithData(
