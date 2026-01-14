@@ -161,58 +161,34 @@ test('computeRsaKeyFingerprint - should compute consistent fingerprint', (t) => 
   // t.is(computed, moria1!.v3ident);
 });
 
-test('verifyConsensusSignatures - should fail for test microdesc (unknown authorities)', (t) => {
-  const result = verifyConsensusSignatures(testMicrodesc, {
-    allowWithoutCertificates: true,
-  });
+test('verifyConsensusSignatures - requires key certificates', (t) => {
+  // Without key certificates, verification should fail with a clear error
+  const result = verifyConsensusSignatures(testMicrodesc, {});
 
-  // Test microdesc is signed by chutney test authorities, not mainnet
   t.false(result.valid);
   t.is(result.validSignatureCount, 0);
-  t.truthy(result.error?.includes('Insufficient valid signatures'));
-
-  // All signatures should be marked as from unknown authorities
-  for (const sig of result.signatures) {
-    t.false(sig.valid);
-    t.is(sig.error, 'Unknown directory authority');
-  }
+  t.truthy(result.error?.includes('No key certificates provided'));
 });
 
-test('verifyConsensusSignatures - should verify real consensus signatures', (t) => {
+test('verifyConsensusSignatures - fails without certificates even for real consensus', (t) => {
   if (!hasRealConsensus) {
     t.pass('Skipping: no real consensus file available');
     return;
   }
 
-  const result = verifyConsensusSignatures(realConsensus, {
-    allowWithoutCertificates: true,
-  });
+  // Even real consensus requires key certificates to verify
+  const result = verifyConsensusSignatures(realConsensus, {});
 
-  // Real consensus should have signatures from known authorities
-  t.is(result.totalKnownAuthorities, 8);
-
-  // At minimum, we should recognize the authority fingerprints
-  const knownSigs = result.signatures.filter((s) => s.nickname !== undefined);
-  t.true(knownSigs.length > 0);
+  t.false(result.valid);
+  t.truthy(result.error?.includes('No key certificates provided'));
 });
 
-test('verifyConsensusSignatures - should fail with empty consensus', (t) => {
+test('verifyConsensusSignatures - should fail with empty certificates', (t) => {
   const result = verifyConsensusSignatures('', {});
   t.false(result.valid);
-  t.is(result.error, 'No signatures found in consensus');
-});
-
-test('verifyConsensusSignatures - should respect requiredSignatures option', (t) => {
-  if (!hasRealConsensus) {
-    t.pass('Skipping: no real consensus file available');
-    return;
-  }
-
-  // Setting a very high requirement should fail
-  const result = verifyConsensusSignatures(realConsensus, {
-    requiredSignatures: 100,
-    allowWithoutCertificates: true,
-  });
-  t.false(result.valid);
-  t.is(result.requiredSignatureCount, 100);
+  // Empty certificates check happens before parsing signatures
+  t.is(
+    result.error,
+    'No key certificates provided. Consensus signatures are made with signing keys (not identity keys), so key certificates must be downloaded to verify signatures.'
+  );
 });

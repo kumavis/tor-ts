@@ -441,6 +441,10 @@ export function verifySignature(digest: Buffer, signature: Buffer, signingKeyPem
  * In Node.js, this delegates to the sync version.
  * In browsers, the sync version throws AsyncPublicDecryptRequired which we catch
  * and await the async result.
+ *
+ * @throws Error if verification cannot be performed (e.g., unsupported algorithm,
+ *         key import failure, etc.). This is distinct from returning false, which
+ *         means the signature is definitively invalid.
  */
 export async function verifySignatureAsync(
   digest: Buffer,
@@ -458,14 +462,12 @@ export async function verifySignatureAsync(
       err.name === 'AsyncPublicDecryptRequired' &&
       'promise' in err
     ) {
-      try {
-        const decrypted = await (err as { promise: Promise<Uint8Array> }).promise;
-        return Buffer.from(decrypted).equals(digest);
-      } catch {
-        return false;
-      }
+      // Await the async RSA operation - let errors propagate
+      const decrypted = await (err as { promise: Promise<Uint8Array> }).promise;
+      return Buffer.from(decrypted).equals(digest);
     }
-    return false;
+    // Re-throw other errors - verification could not be performed
+    throw err;
   }
 }
 
@@ -548,14 +550,6 @@ export type VerifyConsensusOptions = {
   requiredSignatures?: number | undefined;
 
   /**
-   * Whether to allow verification without key certificates.
-   * When true, signatures are verified against authority identity keys directly.
-   * This is less secure but useful for bootstrap.
-   * Default: true
-   */
-  allowWithoutCertificates?: boolean | undefined;
-
-  /**
    * Current time for checking certificate validity.
    * Defaults to Date.now().
    */
@@ -578,7 +572,7 @@ export function verifyConsensusSignatures(
   consensusText: string,
   options: VerifyConsensusOptions = {}
 ): ConsensusVerificationResult {
-  const { keyCertificates = [], allowWithoutCertificates = true, now = Date.now() } = options;
+  const { keyCertificates = [], now = Date.now() } = options;
 
   const totalKnownAuthorities = DIRECTORY_AUTHORITIES.length;
 
@@ -586,6 +580,22 @@ export function verifyConsensusSignatures(
   // For 8 authorities: 5 required. For 9: 5 required.
   const defaultRequired = Math.floor(totalKnownAuthorities / 2) + 1;
   const requiredSignatureCount = options.requiredSignatures ?? defaultRequired;
+
+  // Key certificates are required for proper verification
+  // The consensus is signed with signing keys (not identity keys), and certificates
+  // contain those signing keys. Without certificates, verification cannot succeed.
+  if (keyCertificates.length === 0) {
+    return {
+      valid: false,
+      validSignatureCount: 0,
+      requiredSignatureCount,
+      totalKnownAuthorities,
+      signatures: [],
+      error:
+        'No key certificates provided. Consensus signatures are made with signing keys ' +
+        '(not identity keys), so key certificates must be downloaded to verify signatures.',
+    };
+  }
 
   const signatures = parseConsensusSignatures(consensusText);
 
@@ -665,27 +675,33 @@ export function verifyConsensusSignatures(
         continue;
       }
       signingKeyPem = certificate.signingKeyPem;
-    } else if (allowWithoutCertificates) {
-      // Fall back to using identity key directly
-      // This is less secure but works for bootstrap
-      signingKeyPem = authority.identityKeyPem;
     } else {
+      // No matching certificate for this signature
       results.push({
         identityFingerprint: sig.identityFingerprint,
         nickname: authority.nickname,
         valid: false,
-        error: 'No key certificate available',
+        error: 'No matching key certificate for this signing key',
       });
       continue;
     }
 
     // Verify the signature
-    const valid = verifySignatureWithData(
-      signedPortion,
-      sig.signature,
-      signingKeyPem,
-      sig.algorithm
-    );
+    let valid: boolean;
+    let verificationError: string | undefined;
+    try {
+      valid = verifySignatureWithData(signedPortion, sig.signature, signingKeyPem, sig.algorithm);
+      if (!valid) {
+        verificationError = 'Signature verification failed';
+      }
+    } catch (err) {
+      // Verification could not be performed (e.g., unsupported algorithm, key import failed)
+      valid = false;
+      verificationError =
+        err instanceof Error
+          ? `Verification error: ${err.message}`
+          : 'Verification error: unknown error';
+    }
 
     if (valid) {
       validCount++;
@@ -695,7 +711,7 @@ export function verifyConsensusSignatures(
       identityFingerprint: sig.identityFingerprint,
       nickname: authority.nickname,
       valid,
-      error: valid ? undefined : 'Signature verification failed',
+      error: verificationError,
     });
   }
 
@@ -725,11 +741,25 @@ export async function verifyConsensusSignaturesAsync(
   consensusText: string,
   options: VerifyConsensusOptions = {}
 ): Promise<ConsensusVerificationResult> {
-  const { keyCertificates = [], allowWithoutCertificates = true, now = Date.now() } = options;
+  const { keyCertificates = [], now = Date.now() } = options;
 
   const totalKnownAuthorities = DIRECTORY_AUTHORITIES.length;
   const defaultRequired = Math.floor(totalKnownAuthorities / 2) + 1;
   const requiredSignatureCount = options.requiredSignatures ?? defaultRequired;
+
+  // Key certificates are required for proper verification
+  if (keyCertificates.length === 0) {
+    return {
+      valid: false,
+      validSignatureCount: 0,
+      requiredSignatureCount,
+      totalKnownAuthorities,
+      signatures: [],
+      error:
+        'No key certificates provided. Consensus signatures are made with signing keys ' +
+        '(not identity keys), so key certificates must be downloaded to verify signatures.',
+    };
+  }
 
   const signatures = parseConsensusSignatures(consensusText);
 
@@ -803,25 +833,38 @@ export async function verifyConsensusSignaturesAsync(
         continue;
       }
       signingKeyPem = certificate.signingKeyPem;
-    } else if (allowWithoutCertificates) {
-      signingKeyPem = authority.identityKeyPem;
     } else {
+      // No matching certificate for this signature
       results.push({
         identityFingerprint: sig.identityFingerprint,
         nickname: authority.nickname,
         valid: false,
-        error: 'No key certificate available',
+        error: 'No matching key certificate for this signing key',
       });
       continue;
     }
 
     // Verify the signature using async version
-    const valid = await verifySignatureWithDataAsync(
-      signedPortion,
-      sig.signature,
-      signingKeyPem,
-      sig.algorithm
-    );
+    let valid: boolean;
+    let verificationError: string | undefined;
+    try {
+      valid = await verifySignatureWithDataAsync(
+        signedPortion,
+        sig.signature,
+        signingKeyPem,
+        sig.algorithm
+      );
+      if (!valid) {
+        verificationError = 'Signature verification failed';
+      }
+    } catch (err) {
+      // Verification could not be performed (e.g., unsupported algorithm, key import failed)
+      valid = false;
+      verificationError =
+        err instanceof Error
+          ? `Verification error: ${err.message}`
+          : 'Verification error: unknown error';
+    }
 
     if (valid) {
       validCount++;
@@ -831,7 +874,7 @@ export async function verifyConsensusSignaturesAsync(
       identityFingerprint: sig.identityFingerprint,
       nickname: authority.nickname,
       valid,
-      error: valid ? undefined : 'Signature verification failed',
+      error: verificationError,
     });
   }
 

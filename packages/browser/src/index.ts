@@ -27,11 +27,14 @@ import {
 } from 'tor/directory-client';
 import type { DownloadProgress } from 'tor/directory-client';
 import { pickRelayWithFlags } from 'tor/build-circuit/util';
+import { parseAllKeyCertificates } from 'tor/consensus-signature';
 import { SnowflakeBrowserChannel } from './snowflake-channel.ts';
 import { fetchHtml } from './http-fetch.ts';
 import { getCachedConsensus, cacheConsensus } from './consensus-cache.ts';
 
 export { SnowflakeBrowserChannel } from './snowflake-channel.ts';
+export { SnowflakeWebRtcBrowserChannel } from './snowflake-webrtc-channel.ts';
+export type { SnowflakeWebRtcBrowserChannelOptions } from './snowflake-webrtc-channel.ts';
 export { fetchViaTor, fetchHtml } from './http-fetch.ts';
 export type { TorFetchResponse } from './http-fetch.ts';
 export { pickRelayWithFlags } from 'tor/build-circuit/util';
@@ -136,7 +139,18 @@ export async function connectBrowserCircuit(
   // Use a much longer timeout for browser environment where JS TLS is slower.
   const dirClient = new DirectoryClient(bootstrapCircuit, { timeoutMs: 600_000 });
 
-  // Step 3: Get consensus - either from cache or download
+  // Step 3: Download key certificates for signature verification
+  // Key certificates contain the signing keys used by directory authorities.
+  // Without these, we can't properly verify consensus signatures.
+  let keyCertificates;
+  if (!dangerouslySkipSignatureVerification) {
+    log('Downloading authority key certificates (via Tor circuit)...');
+    const keyCertsText = await dirClient.downloadKeyCertificates();
+    keyCertificates = parseAllKeyCertificates(keyCertsText);
+    log(`Downloaded ${keyCertificates.length} key certificates`);
+  }
+
+  // Step 4: Get consensus - either from cache or download
   let microDescContent: string;
   const cachedConsensus = skipConsensusCache ? undefined : getCachedConsensus();
 
@@ -156,6 +170,7 @@ export async function connectBrowserCircuit(
   // Use async version for browser (Web Crypto API is async)
   const consensus = await parseMicroDescConsensusAsync(microDescContent, {
     dangerouslySkipSignatureVerification,
+    keyCertificates,
   });
 
   if (consensus.relays.length === 0) {
@@ -163,19 +178,19 @@ export async function connectBrowserCircuit(
     throw new Error('No relays found in consensus');
   }
 
-  // Step 4: Select middle and exit nodes
+  // Step 5: Select middle and exit nodes
   const middleNode = pickRelayWithFlags(consensus.relays, [], []);
   const exitNode = pickRelayWithFlags(consensus.relays, ['Exit'], [middleNode]);
 
   log(`Selected middle node: ${middleNode.nickname}`);
   log(`Selected exit node: ${exitNode.nickname}`);
 
-  // Step 5: Look up relay info over encrypted circuit
+  // Step 6: Look up relay info over encrypted circuit
   log('Looking up relay descriptors (via Tor circuit)...');
   const middlePeerInfo = await lookupPeerInfo(dirClient, middleNode);
   const exitPeerInfo = await lookupPeerInfo(dirClient, exitNode);
 
-  // Step 6: Build full 3-hop circuit on the same channel
+  // Step 7: Build full 3-hop circuit on the same channel
   // Note: We create a new Circuit instance rather than extending the bootstrap circuit.
   // Circuit.destroy() only cleans up circuit-level state (streams, crypto contexts),
   // it does NOT close the underlying channel. This allows us to reuse the same

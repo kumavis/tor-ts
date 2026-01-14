@@ -308,43 +308,44 @@ class BrowserVerifier {
   }
 
   async verifyAsync(publicKey: BrowserPublicKey, signature: Uint8Array | Buffer): Promise<boolean> {
-    try {
-      // Combine all data
-      const totalLength = this.data.reduce((sum, arr) => sum + arr.length, 0);
-      const combined = new Uint8Array(totalLength);
-      let offset = 0;
-      for (const arr of this.data) {
-        combined.set(arr, offset);
-        offset += arr.length;
-      }
-
-      // Map algorithm name to Web Crypto hash
-      let hashAlg: string;
-      if (this.algorithm === 'SHA256' || this.algorithm === 'RSA-SHA256') {
-        hashAlg = 'SHA-256';
-      } else if (this.algorithm === 'SHA1' || this.algorithm === 'RSA-SHA1') {
-        hashAlg = 'SHA-1';
-      } else {
-        return false;
-      }
-
-      // Import the public key
-      const cryptoKey = await publicKey.importKey({
-        name: 'RSASSA-PKCS1-v1_5',
-        hash: { name: hashAlg },
-      });
-
-      // Verify the signature
-      const result = await crypto.subtle.verify(
-        'RSASSA-PKCS1-v1_5',
-        cryptoKey,
-        signature as BufferSource,
-        combined
-      );
-      return result;
-    } catch {
-      return false;
+    // Combine all data
+    const totalLength = this.data.reduce((sum, arr) => sum + arr.length, 0);
+    const combined = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const arr of this.data) {
+      combined.set(arr, offset);
+      offset += arr.length;
     }
+
+    // Map algorithm name to Web Crypto hash
+    let hashAlg: string;
+    if (this.algorithm === 'SHA256' || this.algorithm === 'RSA-SHA256') {
+      hashAlg = 'SHA-256';
+    } else if (this.algorithm === 'SHA1' || this.algorithm === 'RSA-SHA1') {
+      hashAlg = 'SHA-1';
+    } else {
+      throw new Error(
+        `Unsupported signature algorithm: ${this.algorithm}. ` +
+          `Browser crypto shim only supports SHA256/RSA-SHA256 and SHA1/RSA-SHA1.`
+      );
+    }
+
+    // Import the public key
+    // Note: This may fail if the key format is not supported by Web Crypto
+    const cryptoKey = await publicKey.importKey({
+      name: 'RSASSA-PKCS1-v1_5',
+      hash: { name: hashAlg },
+    });
+
+    // Verify the signature
+    // Web Crypto's verify() returns false for invalid signatures, throws for errors
+    const result = await crypto.subtle.verify(
+      'RSASSA-PKCS1-v1_5',
+      cryptoKey,
+      signature as BufferSource,
+      combined
+    );
+    return result;
   }
 }
 
