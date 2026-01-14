@@ -295,10 +295,16 @@ export type MicroDescConsensus = {
  */
 export type ParseMicroDescConsensusOptions = {
   /**
-   * Whether to verify consensus signatures.
-   * Default: true
+   * Key certificates for signing key verification.
+   *
+   * Required - the consensus is signed with authority signing keys from
+   * certificates, not identity keys.
+   *
+   * - For production: Fetch via DirectoryClient.downloadKeyCertificates()
+   *   and parse with parseAllKeyCertificates()
+   * - For tests/Chutney: Pass [] with dangerouslySkipSignatureVerification
    */
-  verifySignatures?: boolean;
+  keyCertificates: AuthorityKeyCertificate[];
 
   /**
    * **DANGEROUS**: Skip consensus signature verification entirely.
@@ -309,17 +315,10 @@ export type ParseMicroDescConsensusOptions = {
    * Only use this option if:
    * - You're in a test environment (like Chutney)
    * - You're debugging/developing and understand the risks
-   * - The crypto implementation for your platform is not yet complete
    *
    * Default: false
    */
   dangerouslySkipSignatureVerification?: boolean;
-
-  /**
-   * Key certificates for signing key verification.
-   * If not provided, signatures are verified against authority identity keys.
-   */
-  keyCertificates?: AuthorityKeyCertificate[];
 
   /**
    * Minimum number of valid signatures required.
@@ -329,7 +328,7 @@ export type ParseMicroDescConsensusOptions = {
 
   /**
    * Whether to throw if signature verification fails.
-   * Default: true for production security
+   * Default: true
    */
   throwOnVerificationFailure?: boolean;
 
@@ -340,25 +339,19 @@ export type ParseMicroDescConsensusOptions = {
   now?: number;
 };
 
-export async function parseRelaysFromMicroDesc(
-  microDescContent: string
-): Promise<MicroDescNodeInfo[]> {
-  const consensus = await parseMicroDescConsensus(microDescContent, {
-    throwOnVerificationFailure: false,
-  });
-  return consensus.relays;
-}
-
 /**
- * Parse a microdesc consensus document and optionally verify signatures.
+ * Parse a microdesc consensus document and verify signatures.
  *
  * By default, this function verifies that the consensus is signed by a
  * majority of known directory authorities. This is critical for security
  * as it prevents attacks where a malicious party provides a forged consensus.
  *
- * For test environments (like Chutney), you may want to disable verification:
+ * For test environments (like Chutney), you may disable verification:
  * ```typescript
- * parseMicroDescConsensus(content, { verifySignatures: false });
+ * parseMicroDescConsensus(content, {
+ *   keyCertificates: [],
+ *   dangerouslySkipSignatureVerification: true,
+ * });
  * ```
  *
  * @param microDescContent - The raw consensus document text
@@ -368,19 +361,17 @@ export async function parseRelaysFromMicroDesc(
  */
 export async function parseMicroDescConsensus(
   microDescContent: string,
-  options: ParseMicroDescConsensusOptions = {}
+  options: ParseMicroDescConsensusOptions
 ): Promise<MicroDescConsensus> {
   const {
-    verifySignatures = true,
+    keyCertificates,
     dangerouslySkipSignatureVerification = false,
-    keyCertificates = [],
     requiredSignatures,
     throwOnVerificationFailure = true,
     now = Date.now(),
   } = options;
 
-  // dangerouslySkipSignatureVerification takes precedence
-  const shouldVerify = !dangerouslySkipSignatureVerification && verifySignatures;
+  const shouldVerify = !dangerouslySkipSignatureVerification;
   const lines = microDescContent.split('\n');
   let relayInfo: MicroDescNodeInfo | undefined;
   const relayInfos: MicroDescNodeInfo[] = [];
@@ -530,7 +521,6 @@ export async function parseMicroDescConsensus(
     signatureVerification = await verifyConsensusSignatures(microDescContent, {
       keyCertificates,
       requiredSignatures,
-      allowWithoutCertificates: true,
       now,
     });
 

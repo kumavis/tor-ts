@@ -20,7 +20,12 @@
 
 import { Circuit } from 'tor/circuit';
 import type { PeerInfo } from 'tor/circuit';
-import { DirectoryClient, parseMicroDescConsensus, lookupPeerInfo } from 'tor/directory-client';
+import {
+  DirectoryClient,
+  parseMicroDescConsensus,
+  lookupPeerInfo,
+  parseAllKeyCertificates,
+} from 'tor/directory-client';
 import type { DownloadProgress } from 'tor/directory-client';
 import { pickRelayWithFlags } from 'tor/build-circuit/util';
 import { SnowflakeBrowserChannel } from './snowflake-channel.ts';
@@ -149,9 +154,21 @@ export async function connectBrowserCircuit(
     cacheConsensus(microDescContent);
   }
 
+  // Step 3.5: Download key certificates for signature verification
+  // These contain the signing keys that authorities use to sign the consensus.
+  // Without these, verification would incorrectly use identity keys (which will fail).
+  let keyCertificates: ReturnType<typeof parseAllKeyCertificates> = [];
+  if (!dangerouslySkipSignatureVerification) {
+    log('Downloading authority key certificates...');
+    const keyCertsText = await dirClient.downloadKeyCertificates();
+    keyCertificates = parseAllKeyCertificates(keyCertsText);
+    log(`Downloaded ${keyCertificates.length} key certificates`);
+  }
+
   // Use async version for browser (Web Crypto API is async)
   const consensus = await parseMicroDescConsensus(microDescContent, {
     dangerouslySkipSignatureVerification,
+    keyCertificates,
   });
 
   if (consensus.relays.length === 0) {

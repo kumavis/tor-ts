@@ -14,7 +14,7 @@ import { TlsChannelConnection } from '../src/channel.ts';
 import { linkSpecifierToAddressAndPort } from '../src/messaging.ts';
 import {
   dangerouslyDownloadMicrodescFromDirectory,
-  parseRelaysFromMicroDesc,
+  parseMicroDescConsensus,
   dangerouslyLookupPeerInfo,
 } from '../src/build-circuit/directory.ts';
 import type { MicroDescNodeInfo } from '../src/build-circuit/directory.ts';
@@ -23,12 +23,22 @@ async function getStandardChutneyCircuitPath() {
   const loopback = '127.0.0.1';
   const directoryServer = `${loopback}:7000`;
   const microDescContent = await dangerouslyDownloadMicrodescFromDirectory(directoryServer);
-  const microDescNodeInfos = parseRelaysFromMicroDesc(microDescContent);
+  // Chutney uses local test authorities, not mainnet - skip verification
+  const consensus = await parseMicroDescConsensus(microDescContent, {
+    keyCertificates: [],
+    dangerouslySkipSignatureVerification: true,
+  });
+  const microDescNodeInfos = consensus.relays;
 
-  const circuitPlan: Array<MicroDescNodeInfo> = [];
-  circuitPlan.push(microDescNodeInfos.find((nodeInfo) => nodeInfo.onion_router_port === 5004));
-  circuitPlan.push(microDescNodeInfos.find((nodeInfo) => nodeInfo.onion_router_port === 5001));
-  circuitPlan.push(microDescNodeInfos.find((nodeInfo) => nodeInfo.onion_router_port === 5000));
+  // Build a circuit plan with specific onion_router_port's, but ensure all entries are found
+  const wantedPorts = [5004, 5001, 5000];
+  const circuitPlan: Array<MicroDescNodeInfo> = wantedPorts.map((port) => {
+    const nodeInfo = microDescNodeInfos.find((nodeInfo) => nodeInfo.onion_router_port === port);
+    if (!nodeInfo) {
+      throw new Error(`Relay with onion_router_port ${port} not found in consensus`);
+    }
+    return nodeInfo;
+  });
 
   const circuitPeerInfos: Array<PeerInfo> = await Promise.all(
     circuitPlan.map(async (relayInfo) => {
