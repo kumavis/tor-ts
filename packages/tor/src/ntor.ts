@@ -1,6 +1,5 @@
 import assert from 'node:assert';
-import { x25519 } from 'tor-crypto';
-import { hmac, sha256Hash as sha256 } from 'tor-crypto';
+import { x25519, hmac, sha256Hash as sha256 } from 'tor-crypto';
 import { HandshakeTypes } from './messaging.ts';
 import type { Create2ClientHandshake, Create2ServerHandshake } from './messaging.ts';
 import { BytesReader } from './util.ts';
