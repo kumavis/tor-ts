@@ -1,5 +1,4 @@
-import { x25519 } from 'tor-crypto';
-import { sha1 as sha1Noble } from 'tor-crypto';
+import { x25519, sha1 as sha1Noble } from 'tor-crypto';
 import { makeAes128CtrKey } from './aes.ts';
 import crypto from 'node:crypto';
 

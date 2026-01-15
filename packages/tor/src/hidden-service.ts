@@ -1,8 +1,7 @@
 import crypto from 'node:crypto';
 import fs from 'node:fs/promises';
 import path from 'node:path';
-import { x25519, ed25519 } from 'tor-crypto';
-import { sha3_256, shake256 } from 'tor-crypto';
+import { x25519, ed25519, sha3_256, shake256 } from 'tor-crypto';
 import { BytesReader, Mutex } from './util.ts';
 import type { LinkSpecifier } from './messaging.ts';
 import { RelayCell } from './relay-cell.ts';
