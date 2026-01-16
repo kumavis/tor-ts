@@ -1,4 +1,25 @@
 export { sha256, sha1 } from 'tor-crypto';
+import { randomBytes } from 'tor-crypto';
+
+/**
+ * Fisher-Yates shuffle using cryptographically secure random bytes.
+ * Works in both Node.js and browser environments via tor-crypto.
+ *
+ * @param arr - Array to shuffle in place
+ * @returns The same array, shuffled
+ */
+export function shuffleInPlace<T>(arr: T[]): T[] {
+  for (let i = arr.length - 1; i > 0; i--) {
+    const randBytes = randomBytes(4);
+    // Use 3 bytes for randomness (up to ~16M), mod by (i+1)
+    const rand = (randBytes[0]! | (randBytes[1]! << 8) | (randBytes[2]! << 16)) >>> 0;
+    const j = rand % (i + 1);
+    const tmp = arr[i]!;
+    arr[i] = arr[j]!;
+    arr[j] = tmp;
+  }
+  return arr;
+}
 
 export class BytesReader {
   data: Buffer;

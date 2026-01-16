@@ -17,7 +17,21 @@ export * as mainnet from './build-circuit/mainnet.ts';
 // export * as channel from './channel'
 export { Circuit } from './circuit.ts';
 export { TlsChannelConnection } from './channel.ts';
+export { shuffleInPlace } from './util.ts';
 export * as hiddenService from './hidden-service.ts';
+// Consensus parsing (from build-circuit/directory)
+export {
+  parseMicroDescConsensus,
+  parseAndVerifyConsensus,
+  dangerouslyTrustUnverifiedConsensus,
+  type MicroDescNodeInfo,
+  type VerifiedMicroDescConsensus,
+  type UnverifiedMicroDescConsensus,
+  type VerifyConsensusOptions,
+  type ParseAndVerifyConsensusResult,
+} from './build-circuit/directory.ts';
+
+// Directory client
 export {
   DirectoryClient,
   lookupOnionKey,
@@ -25,17 +39,22 @@ export {
   lookupPeerInfoWithEd25519IdentityKey,
   extractNtorOnionKeyFromDescriptor,
   extractEd25519IdentityFromDescriptor,
-  parseMicroDescConsensus,
   // Microdescriptor parsing
   parseMicrodescriptor,
   parseMicrodescriptorBatch,
   fetchExitPolicies,
-  type MicroDescNodeInfo,
-  type MicroDescConsensus,
-  type ParseMicroDescConsensusOptions,
+  // Consensus fetching
+  fetchAndVerifyConsensus,
+  type FetchConsensusOptions,
+  type FetchConsensusResult,
   type DirectoryResponse,
   type ParsedMicrodescriptor,
-  // Consensus signature verification
+  type DownloadProgress,
+  type DownloadProgressCallback,
+} from './directory-client.ts';
+
+// Consensus signature verification (from consensus-signature)
+export {
   DIRECTORY_AUTHORITIES,
   verifyConsensusSignatures,
   parseConsensusSignatures,
@@ -46,9 +65,19 @@ export {
   type ConsensusVerificationResult,
   type DirectoryAuthorityIdentity,
   type AuthorityKeyCertificate,
-  type VerifyConsensusOptions,
   type SignatureVerificationResult,
-} from './directory-client.ts';
+} from './consensus-signature.ts';
+
+// Consensus manager
+export {
+  ConsensusManager,
+  isConsensusFresh,
+  isConsensusTtlValid as isConsensusValid,
+  type ConsensusManagerOptions,
+  type ConsensusStatus,
+  type ConsensusRefreshOptions,
+  type ConsensusUpdateListener,
+} from './consensus-manager.ts';
 
 // Exit policy parsing and matching
 export {

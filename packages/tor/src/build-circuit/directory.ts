@@ -271,7 +271,10 @@ export type MicroDescNodeInfo = {
   exitPolicy?: ExitPolicy;
 };
 
-export type MicroDescConsensus = {
+/**
+ * Base consensus data shared between verified and unverified.
+ */
+type MicroDescConsensusBase = {
   validAfter: Date | undefined;
   freshUntil: Date | undefined;
   validUntil: Date | undefined;
@@ -279,8 +282,6 @@ export type MicroDescConsensus = {
   sharedRandPreviousValue: Buffer | undefined;
   sharedRandCurrentValue: Buffer | undefined;
   relays: MicroDescNodeInfo[];
-  /** Signature verification result, if verification was performed */
-  signatureVerification?: ConsensusVerificationResult | undefined;
   /**
    * Bandwidth weights for path selection.
    * Keys include: Wbd, Wbe, Wbg, Wbm, Wdb, Web, Wed, Wee, Weg, Wem,
@@ -291,9 +292,52 @@ export type MicroDescConsensus = {
 };
 
 /**
- * Options for parsing and verifying a microdesc consensus.
+ * Unverified consensus - signatures have not been checked.
+ * This type should NOT be used for building circuits on mainnet.
  */
-export type ParseMicroDescConsensusOptions = {
+export type UnverifiedMicroDescConsensus = MicroDescConsensusBase & {
+  readonly _verified: false;
+};
+
+/**
+ * Verified consensus - signatures have been cryptographically verified.
+ * This is safe to use for building circuits on mainnet.
+ */
+export type VerifiedMicroDescConsensus = MicroDescConsensusBase & {
+  readonly _verified: true;
+};
+
+/**
+ * Result of parsing and verifying a consensus.
+ */
+export type ParseAndVerifyConsensusResult = {
+  /** The verified consensus */
+  consensus: VerifiedMicroDescConsensus;
+  /** Signature verification details */
+  signatureVerification: ConsensusVerificationResult;
+};
+
+/**
+ * Trust an unverified consensus as if it were verified.
+ * ONLY use this when verification has been performed elsewhere or is intentionally skipped.
+ * Returns a new object with verified branding (does not mutate input).
+ */
+export function dangerouslyTrustUnverifiedConsensus(
+  consensus: UnverifiedMicroDescConsensus,
+  reason: string
+): VerifiedMicroDescConsensus {
+  console.warn(`[consensus] Trusting unverified consensus: ${reason}`);
+  const { _verified: _, ...base } = consensus;
+  return {
+    ...base,
+    _verified: true,
+  };
+}
+
+/**
+ * Options for verifying consensus signatures.
+ */
+export type VerifyConsensusOptions = {
   /**
    * Key certificates for signing key verification.
    *
@@ -302,23 +346,8 @@ export type ParseMicroDescConsensusOptions = {
    *
    * - For production: Fetch via DirectoryClient.downloadKeyCertificates()
    *   and parse with parseAllKeyCertificates()
-   * - For tests/Chutney: Pass [] with dangerouslySkipSignatureVerification
    */
   keyCertificates: AuthorityKeyCertificate[];
-
-  /**
-   * **DANGEROUS**: Skip consensus signature verification entirely.
-   *
-   * WARNING: This disables a critical security check. The consensus document
-   * could be forged by an attacker to direct you to malicious relays.
-   *
-   * Only use this option if:
-   * - You're in a test environment (like Chutney)
-   * - You're debugging/developing and understand the risks
-   *
-   * Default: false
-   */
-  dangerouslySkipSignatureVerification?: boolean;
 
   /**
    * Minimum number of valid signatures required.
@@ -340,38 +369,16 @@ export type ParseMicroDescConsensusOptions = {
 };
 
 /**
- * Parse a microdesc consensus document and verify signatures.
+ * Parse a microdesc consensus document (synchronous, no verification).
  *
- * By default, this function verifies that the consensus is signed by a
- * majority of known directory authorities. This is critical for security
- * as it prevents attacks where a malicious party provides a forged consensus.
- *
- * For test environments (like Chutney), you may disable verification:
- * ```typescript
- * parseMicroDescConsensus(content, {
- *   keyCertificates: [],
- *   dangerouslySkipSignatureVerification: true,
- * });
- * ```
+ * This returns an UnverifiedMicroDescConsensus which should NOT be used for
+ * building circuits on mainnet without verification. Use parseAndVerifyConsensus()
+ * for production use.
  *
  * @param microDescContent - The raw consensus document text
- * @param options - Parsing and verification options
- * @returns Parsed consensus with signature verification result
- * @throws Error if signature verification fails and throwOnVerificationFailure is true
+ * @returns {MicroDescConsensus} Parsed but unverified consensus
  */
-export async function parseMicroDescConsensus(
-  microDescContent: string,
-  options: ParseMicroDescConsensusOptions
-): Promise<MicroDescConsensus> {
-  const {
-    keyCertificates,
-    dangerouslySkipSignatureVerification = false,
-    requiredSignatures,
-    throwOnVerificationFailure = true,
-    now = Date.now(),
-  } = options;
-
-  const shouldVerify = !dangerouslySkipSignatureVerification;
+export function parseMicroDescConsensus(microDescContent: string): UnverifiedMicroDescConsensus {
   const lines = microDescContent.split('\n');
   let relayInfo: MicroDescNodeInfo | undefined;
   const relayInfos: MicroDescNodeInfo[] = [];
@@ -514,35 +521,9 @@ export async function parseMicroDescConsensus(
     }
   }
 
-  // Verify consensus signatures if requested
-  let signatureVerification: ConsensusVerificationResult | undefined;
-
-  if (shouldVerify) {
-    signatureVerification = await verifyConsensusSignatures(microDescContent, {
-      keyCertificates,
-      requiredSignatures,
-      now,
-    });
-
-    if (!signatureVerification.valid && throwOnVerificationFailure) {
-      const validSigs = signatureVerification.signatures
-        .filter((s) => s.valid)
-        .map((s) => s.nickname || s.identityFingerprint.slice(0, 8))
-        .join(', ');
-      const invalidSigs = signatureVerification.signatures
-        .filter((s) => !s.valid)
-        .map((s) => `${s.nickname || s.identityFingerprint.slice(0, 8)}: ${s.error}`)
-        .join('; ');
-
-      throw new Error(
-        `Consensus signature verification failed: ${signatureVerification.error}. ` +
-          `Valid signatures from: [${validSigs || 'none'}]. ` +
-          `Invalid: [${invalidSigs || 'none'}]`
-      );
-    }
-  }
-
+  // Return as unverified consensus
   return {
+    _verified: false,
     validAfter,
     freshUntil,
     validUntil,
@@ -550,8 +531,69 @@ export async function parseMicroDescConsensus(
     sharedRandPreviousValue,
     sharedRandCurrentValue,
     relays: relayInfos,
-    signatureVerification,
     bandwidthWeights,
+  };
+}
+
+/**
+ * Parse and verify a microdesc consensus document.
+ *
+ * This verifies that the consensus is signed by a majority of known directory
+ * authorities. This is critical for security as it prevents attacks where a
+ * malicious party provides a forged consensus.
+ *
+ * @param microDescContent - The raw consensus document text
+ * @param options - Verification options including key certificates
+ * @returns Object containing the verified consensus and signature verification details
+ * @throws Error if signature verification fails and throwOnVerificationFailure is true
+ */
+export async function parseAndVerifyConsensus(
+  microDescContent: string,
+  options: VerifyConsensusOptions
+): Promise<ParseAndVerifyConsensusResult> {
+  const {
+    keyCertificates,
+    requiredSignatures,
+    throwOnVerificationFailure = true,
+    now = Date.now(),
+  } = options;
+
+  // Parse first (synchronous)
+  const unverifiedConsensus = parseMicroDescConsensus(microDescContent);
+
+  // Verify signatures (async)
+  const signatureVerification = await verifyConsensusSignatures(microDescContent, {
+    keyCertificates,
+    requiredSignatures,
+    now,
+  });
+
+  if (!signatureVerification.valid && throwOnVerificationFailure) {
+    const validSigs = signatureVerification.signatures
+      .filter((s) => s.valid)
+      .map((s) => s.nickname || s.identityFingerprint.slice(0, 8))
+      .join(', ');
+    const invalidSigs = signatureVerification.signatures
+      .filter((s) => !s.valid)
+      .map((s) => `${s.nickname || s.identityFingerprint.slice(0, 8)}: ${s.error}`)
+      .join('; ');
+
+    throw new Error(
+      `Consensus signature verification failed: ${signatureVerification.error}. ` +
+        `Valid signatures from: [${validSigs || 'none'}]. ` +
+        `Invalid: [${invalidSigs || 'none'}]`
+    );
+  }
+
+  // Return verified consensus and verification result separately
+  const verifiedConsensus = {
+    ...unverifiedConsensus,
+    _verified: true,
+  } as VerifiedMicroDescConsensus;
+
+  return {
+    consensus: verifiedConsensus,
+    signatureVerification,
   };
 }
 

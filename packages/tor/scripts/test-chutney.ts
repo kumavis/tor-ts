@@ -15,6 +15,7 @@ import { linkSpecifierToAddressAndPort } from '../src/messaging.ts';
 import {
   dangerouslyDownloadMicrodescFromDirectory,
   parseMicroDescConsensus,
+  dangerouslyTrustUnverifiedConsensus,
   dangerouslyLookupPeerInfo,
 } from '../src/build-circuit/directory.ts';
 import type { MicroDescNodeInfo } from '../src/build-circuit/directory.ts';
@@ -23,11 +24,14 @@ async function getStandardChutneyCircuitPath() {
   const loopback = '127.0.0.1';
   const directoryServer = `${loopback}:7000`;
   const microDescContent = await dangerouslyDownloadMicrodescFromDirectory(directoryServer);
-  // Chutney uses local test authorities, not mainnet - skip verification
-  const consensus = await parseMicroDescConsensus(microDescContent, {
-    keyCertificates: [],
-    dangerouslySkipSignatureVerification: true,
-  });
+  const unverified = parseMicroDescConsensus(microDescContent);
+
+  // SKIP VERIFICATION: Chutney is a test network with local directory authorities
+  // that don't match the hardcoded mainnet authorities.
+  const consensus = dangerouslyTrustUnverifiedConsensus(
+    unverified,
+    'Chutney test network (local authorities, no mainnet keys)'
+  );
   const microDescNodeInfos = consensus.relays;
 
   // Build a circuit plan with specific onion_router_port's, but ensure all entries are found

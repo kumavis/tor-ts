@@ -4,11 +4,10 @@ import { TlsChannelConnection } from '../channel.ts';
 import {
   DirectoryClient,
   lookupPeerInfo,
-  parseMicroDescConsensus,
-  parseAllKeyCertificates,
   fetchExitPolicies,
+  fetchAndVerifyConsensus,
 } from '../directory-client.ts';
-import type { MicroDescNodeInfo, MicroDescConsensus } from './directory.ts';
+import type { MicroDescNodeInfo, VerifiedMicroDescConsensus } from './directory.ts';
 import {
   pickRelayWithFlags,
   filterRelaysByFlags,
@@ -108,20 +107,8 @@ export async function getRandomCircuitPathSafe(
     fetchExitPoliciesBeforeSelection = true,
   } = options;
 
-  const client = new DirectoryClient(directoryCircuit);
-
-  // Download key certificates for signature verification
-  // These contain the signing keys that authorities use to sign the consensus
-  const keyCertsText = await client.downloadKeyCertificates();
-  const keyCertificates = parseAllKeyCertificates(keyCertsText);
-
-  // Download and verify the consensus using the key certificates
-  const microDescContent = await client.downloadMicrodescConsensus();
-  const consensus = await parseMicroDescConsensus(microDescContent, { keyCertificates });
-
-  if (consensus.relays.length === 0) {
-    throw new Error('No relays parsed from consensus');
-  }
+  // Fetch and verify consensus using the standard flow
+  const { consensus, dirClient: client } = await fetchAndVerifyConsensus(directoryCircuit);
 
   // Select relays based on options
   const circuitPlan = useBandwidthWeighting
@@ -148,7 +135,7 @@ export async function getRandomCircuitPathSafe(
  */
 async function selectRelaysWithBandwidthWeighting(
   client: DirectoryClient,
-  consensus: MicroDescConsensus,
+  consensus: VerifiedMicroDescConsensus,
   targetPorts: number[],
   fetchPolicies: boolean
 ): Promise<MicroDescNodeInfo[]> {

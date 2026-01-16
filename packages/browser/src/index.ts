@@ -19,18 +19,11 @@
  */
 
 import { Circuit } from 'tor/circuit';
-import type { PeerInfo } from 'tor/circuit';
-import {
-  DirectoryClient,
-  parseMicroDescConsensus,
-  lookupPeerInfo,
-  parseAllKeyCertificates,
-} from 'tor/directory-client';
-import type { DownloadProgress } from 'tor/directory-client';
+import { lookupPeerInfo } from 'tor/directory-client';
 import { pickRelayWithFlags } from 'tor/build-circuit/util';
 import { SnowflakeBrowserChannel } from './snowflake-channel.ts';
 import { fetchHtml } from './http-fetch.ts';
-import { getCachedConsensus, cacheConsensus } from './consensus-cache.ts';
+import { performBootstrap, type BrowserBootstrapOptions } from './bootstrap.ts';
 
 export { SnowflakeBrowserChannel } from './snowflake-channel.ts';
 export { fetchViaTor, fetchHtml } from './http-fetch.ts';
@@ -38,7 +31,20 @@ export type { TorFetchResponse } from './http-fetch.ts';
 export { pickRelayWithFlags } from 'tor/build-circuit/util';
 export type { MicroDescNodeInfo } from 'tor/build-circuit/directory';
 export type { DownloadProgress } from 'tor/directory-client';
-export { clearCachedConsensus, getConsensusCacheStatus } from './consensus-cache.ts';
+
+// Consensus caching utilities for sessionStorage
+export {
+  getCachedConsensusText as getCachedConsensusRaw,
+  cacheConsensusText as cacheConsensusRaw,
+  clearCachedConsensus,
+  hasCachedConsensus,
+  getConsensusCacheStatus,
+} from './consensus-cache.ts';
+export type { ConsensusCacheStatus } from './consensus-cache.ts';
+
+// Re-export bootstrap utilities
+export { performBootstrap } from './bootstrap.ts';
+export type { BrowserBootstrapOptions, BootstrapResult } from './bootstrap.ts';
 
 // Hidden service (.onion) support
 export {
@@ -56,32 +62,7 @@ export type {
   IntroPoint,
 } from './hidden-service.ts';
 
-export type BrowserCircuitOptions = {
-  relayUrl?: string;
-  onStatus?: (status: string) => void;
-  onConsensusProgress?: (progress: DownloadProgress) => void;
-  /**
-   * **DANGEROUS**: Skip consensus signature verification entirely.
-   *
-   * WARNING: This disables a critical security check. The consensus document
-   * could be forged by an attacker to direct you to malicious relays.
-   *
-   * Only use this option if:
-   * - You're in a test environment
-   * - You're debugging/developing and understand the risks
-   * - The crypto implementation for your platform is not yet complete
-   *
-   * Default: false
-   */
-  dangerouslySkipSignatureVerification?: boolean;
-  /**
-   * Skip using cached consensus from sessionStorage.
-   * Forces a fresh download even if a valid cached consensus exists.
-   *
-   * Default: false
-   */
-  skipConsensusCache?: boolean;
-};
+export type BrowserCircuitOptions = BrowserBootstrapOptions;
 
 export type BrowserCircuit = {
   circuit: Circuit;
@@ -98,101 +79,34 @@ export type BrowserCircuit = {
 export async function connectBrowserCircuit(
   options: BrowserCircuitOptions = {}
 ): Promise<BrowserCircuit> {
-  const {
-    relayUrl = 'wss://snowflake.torproject.net/',
-    onStatus,
-    onConsensusProgress,
-    dangerouslySkipSignatureVerification = false,
-    skipConsensusCache = false,
-  } = options;
+  const { onStatus } = options;
 
   const log = (msg: string) => {
     console.log(`[tor-browser] ${msg}`);
     onStatus?.(msg);
   };
 
-  // Step 1: Connect to Snowflake relay
-  log('Connecting to Snowflake relay...');
-  const channel = new SnowflakeBrowserChannel();
-  await channel.connect({ relayUrl });
+  // Perform common bootstrap (connect, build bootstrap circuit, get consensus)
+  const { channel, bootstrapCircuit, dirClient, consensus, entryPeerInfo } = await performBootstrap(
+    {
+      ...options,
+      logPrefix: 'tor-browser',
+    }
+  );
 
-  const entryRsaIdDigest = channel.peerIdentity?.rsaIdDigest;
-  if (!entryRsaIdDigest) {
-    channel.destroy();
-    throw new Error('Snowflake channel has no peer identity');
-  }
-
-  // Step 2: Build 1-hop bootstrap circuit using CREATE_FAST
-  log('Building bootstrap circuit...');
-  const entryPeerInfo: PeerInfo = {
-    onionKey: Buffer.alloc(0), // Empty triggers CREATE_FAST
-    rsaIdDigest: entryRsaIdDigest,
-    linkSpecifiers: [],
-  };
-
-  const bootstrapCircuit = new Circuit({ path: [entryPeerInfo], channel });
-  await bootstrapCircuit.connect();
-
-  // Directory client for fetching consensus and relay descriptors
-  // Use a much longer timeout for browser environment where JS TLS is slower.
-  const dirClient = new DirectoryClient(bootstrapCircuit, { timeoutMs: 600_000 });
-
-  // Step 3: Get consensus - either from cache or download
-  let microDescContent: string;
-  const cachedConsensus = skipConsensusCache ? undefined : getCachedConsensus();
-
-  if (cachedConsensus) {
-    log('Using cached network consensus (still fresh)');
-    microDescContent = cachedConsensus.content;
-  } else {
-    // Fetch directory consensus over encrypted bootstrap circuit
-    // The full consensus is ~3.35MB and browser crypto runs at ~4KB/s = ~14 minutes.
-    log('Downloading network consensus (via Tor circuit)...');
-    microDescContent = await dirClient.downloadMicrodescConsensus(onConsensusProgress);
-
-    // Cache the consensus for future use
-    cacheConsensus(microDescContent);
-  }
-
-  // Step 3.5: Download key certificates for signature verification
-  // These contain the signing keys that authorities use to sign the consensus.
-  // Without these, verification would incorrectly use identity keys (which will fail).
-  let keyCertificates: ReturnType<typeof parseAllKeyCertificates> = [];
-  if (!dangerouslySkipSignatureVerification) {
-    log('Downloading authority key certificates...');
-    const keyCertsText = await dirClient.downloadKeyCertificates();
-    keyCertificates = parseAllKeyCertificates(keyCertsText);
-    log(`Downloaded ${keyCertificates.length} key certificates`);
-  }
-
-  // Use async version for browser (Web Crypto API is async)
-  const consensus = await parseMicroDescConsensus(microDescContent, {
-    dangerouslySkipSignatureVerification,
-    keyCertificates,
-  });
-
-  if (consensus.relays.length === 0) {
-    bootstrapCircuit.destroy();
-    throw new Error('No relays found in consensus');
-  }
-
-  // Step 4: Select middle and exit nodes
+  // Select middle and exit nodes
   const middleNode = pickRelayWithFlags(consensus.relays, [], []);
   const exitNode = pickRelayWithFlags(consensus.relays, ['Exit'], [middleNode]);
 
   log(`Selected middle node: ${middleNode.nickname}`);
   log(`Selected exit node: ${exitNode.nickname}`);
 
-  // Step 5: Look up relay info over encrypted circuit
+  // Look up relay info over encrypted circuit
   log('Looking up relay descriptors (via Tor circuit)...');
   const middlePeerInfo = await lookupPeerInfo(dirClient, middleNode);
   const exitPeerInfo = await lookupPeerInfo(dirClient, exitNode);
 
-  // Step 6: Build full 3-hop circuit on the same channel
-  // Note: We create a new Circuit instance rather than extending the bootstrap circuit.
-  // Circuit.destroy() only cleans up circuit-level state (streams, crypto contexts),
-  // it does NOT close the underlying channel. This allows us to reuse the same
-  // Snowflake connection for the full circuit.
+  // Build full 3-hop circuit on the same channel
   log('Building full 3-hop circuit...');
   const fullCircuit = new Circuit({
     path: [entryPeerInfo, middlePeerInfo, exitPeerInfo],

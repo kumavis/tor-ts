@@ -1,4 +1,4 @@
-import type { MicroDescNodeInfo, MicroDescConsensus } from './directory.ts';
+import type { MicroDescNodeInfo, VerifiedMicroDescConsensus } from './directory.ts';
 import { policyAllowsAllPorts, policyRejectsAll } from '../exit-policy.ts';
 
 /**
@@ -222,7 +222,7 @@ export function pickRelayWeighted(
 export function pickRelayWeightedForPosition(
   relays: MicroDescNodeInfo[],
   position: RelayPosition,
-  consensus: MicroDescConsensus,
+  consensus: VerifiedMicroDescConsensus,
   ignoreList: MicroDescNodeInfo[] = []
 ): MicroDescNodeInfo {
   // Filter out ignored relays
@@ -252,7 +252,7 @@ export function pickRelayWeightedForPosition(
 export function pickExitRelay(
   relays: MicroDescNodeInfo[],
   targetPorts: number[],
-  consensus: MicroDescConsensus,
+  consensus: VerifiedMicroDescConsensus,
   ignoreList: MicroDescNodeInfo[] = []
 ): MicroDescNodeInfo {
   // Filter to exits only
@@ -282,7 +282,7 @@ export function pickExitRelay(
  */
 export function pickGuardRelay(
   relays: MicroDescNodeInfo[],
-  consensus: MicroDescConsensus,
+  consensus: VerifiedMicroDescConsensus,
   ignoreList: MicroDescNodeInfo[] = []
 ): MicroDescNodeInfo {
   const guards = filterRelaysByFlags(relays, ['Guard'], ignoreList);
@@ -304,7 +304,7 @@ export function pickGuardRelay(
  */
 export function pickMiddleRelay(
   relays: MicroDescNodeInfo[],
-  consensus: MicroDescConsensus,
+  consensus: VerifiedMicroDescConsensus,
   ignoreList: MicroDescNodeInfo[] = []
 ): MicroDescNodeInfo {
   // Middle relays don't need special flags, just exclude already-selected relays
