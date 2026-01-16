@@ -56,5 +56,6 @@ test('v5 handshake', async (t) => {
   const handshakeCompleteP = connection.performHandshake();
   connection.onData(v5HandshakeFixture.serverHello);
   await handshakeCompleteP;
+  connection.destroy();
   t.pass();
 });

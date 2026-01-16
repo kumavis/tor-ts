@@ -58,6 +58,14 @@ export enum RelayCell {
   INTRO_ESTABLISHED = 38,
   RENDEZVOUS_ESTABLISHED = 39,
   INTRODUCE_ACK = 40,
+
+  // Circuit padding (padding-spec.txt section 3)
+  PADDING_NEGOTIATE = 41,
+  PADDING_NEGOTIATED = 42,
+
+  // Stream-level flow control (prop324)
+  XON = 43,
+  XOFF = 44,
 }
 
 const _relayCellNames = {
