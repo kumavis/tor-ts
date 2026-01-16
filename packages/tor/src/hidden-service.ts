@@ -373,7 +373,13 @@ function base32DecodeLowerNoPad(s: string): Buffer {
 }
 
 export function parseOnionV3Address(onion: string): { publicIdentityKey: Buffer } {
-  const host = onion.toLowerCase().endsWith('.onion') ? onion.slice(0, -'.onion'.length) : onion;
+  // Strip .onion suffix and any subdomain prefix (per address-spec.md: [ignored].[onion_address].onion)
+  const withoutSuffix = onion.toLowerCase().endsWith('.onion')
+    ? onion.slice(0, -'.onion'.length)
+    : onion;
+  // The actual onion address is the last dot-separated component (subdomains are for vhosting)
+  const parts = withoutSuffix.split('.');
+  const host = parts[parts.length - 1] ?? '';
   if (host.length !== 56) {
     throw new Error(`Expected v3 onion address host length 56, got ${host.length}`);
   }
