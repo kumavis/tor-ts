@@ -328,9 +328,17 @@ export class CircuitStream extends EventEmitter {
   source: ReadableStream;
   sink: WritableStream;
 
-  // Flow control: track cells received since last SENDME
+  // Flow control: track cells received since last SENDME (deliver window)
   deliverWindow = STREAM_WINDOW_START;
   cellsSinceLastSendme = 0;
+
+  // Flow control: track cells we can send (package window)
+  // Per tor-spec 7.3: "The stream-level PACKAGE_WINDOW and the circuit PACKAGE_WINDOW
+  // both start at 500 and the stream-level SENDME increment is 50."
+  packageWindow = STREAM_WINDOW_START;
+
+  // Promise that resolves when package window has capacity
+  private packageWindowWaiters: Array<() => void> = [];
 
   constructor() {
     super();
@@ -360,6 +368,108 @@ export class CircuitStream extends EventEmitter {
     return false;
   }
 
+  /**
+   * Record that we sent a DATA cell on this stream.
+   * Decrements package window. Returns true if we can send more.
+   */
+  recordSentCell(): boolean {
+    this.packageWindow--;
+    return this.packageWindow > 0;
+  }
+
+  /**
+   * Handle incoming SENDME for this stream - increment package window.
+   * Per tor-spec 7.3: increment by 50 cells.
+   */
+  handleSendme(): void {
+    this.packageWindow += STREAM_SENDME_INCREMENT;
+    // Wake up any waiters
+    this.wakePackageWindowWaiters();
+  }
+
+  // XON/XOFF flow control (prop324)
+  private xoffActive = false;
+  private xonWaiters: Array<() => void> = [];
+
+  /**
+   * Handle XOFF: stop sending on this stream.
+   * Per prop324: the remote side's buffer is full.
+   */
+  handleXoff(): void {
+    this.xoffActive = true;
+  }
+
+  /**
+   * Handle XON: resume sending on this stream.
+   * Per prop324: data contains the rate at which we can send.
+   */
+  handleXon(_data: Buffer): void {
+    // TODO: parse XON data for rate limit (prop324)
+    this.xoffActive = false;
+    // Wake up any XON waiters
+    const waiters = this.xonWaiters.splice(0);
+    for (const resolve of waiters) {
+      resolve();
+    }
+  }
+
+  /**
+   * Wait until not XOFF'd.
+   */
+  private async waitForXon(): Promise<void> {
+    if (!this.xoffActive) return;
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        this.off('end', onEnd);
+      };
+      const onEnd = () => {
+        cleanup();
+        reject(new Error('Stream ended while waiting for XON'));
+      };
+      this.once('end', onEnd);
+      this.xonWaiters.push(() => {
+        cleanup();
+        resolve();
+      });
+    });
+  }
+
+  private wakePackageWindowWaiters(): void {
+    const waiters = this.packageWindowWaiters.splice(0);
+    for (const resolve of waiters) {
+      resolve();
+    }
+  }
+
+  /**
+   * Wait until package window has capacity to send.
+   * Also waits for XON if XOFF'd.
+   */
+  async waitForPackageWindow(): Promise<void> {
+    if (this.destroyed) {
+      throw new Error('Stream is destroyed');
+    }
+    // Wait for XOFF to clear
+    await this.waitForXon();
+    if (this.packageWindow > 0) {
+      return;
+    }
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        this.off('end', onEnd);
+      };
+      const onEnd = () => {
+        cleanup();
+        reject(new Error('Stream ended while waiting for package window'));
+      };
+      this.once('end', onEnd);
+      this.packageWindowWaiters.push(() => {
+        cleanup();
+        resolve();
+      });
+    });
+  }
+
   close() {
     this.destroy();
   }
@@ -369,6 +479,13 @@ export class CircuitStream extends EventEmitter {
     if (err) {
       this.connectionPromiseKit.reject(err);
       this.emit('error', err);
+    }
+    // Wake up any package window waiters with rejection
+    this.wakePackageWindowWaiters();
+    // Wake up any XON waiters
+    const xonWaiters = this.xonWaiters.splice(0);
+    for (const resolve of xonWaiters) {
+      resolve();
     }
     this.emit('end');
   }
@@ -384,10 +501,15 @@ export class Circuit extends EventEmitter {
   streams: Array<CircuitStream> = [];
   private loggedIgnoredRelayCommands = new Set<number>();
 
-  // Circuit-level flow control
+  // Circuit-level flow control (receive side - deliver window)
   private circuitDeliverWindow = CIRCUIT_WINDOW_START;
   private circuitCellsSinceLastSendme = 0;
   private circuitSendmeCount = 0;
+
+  // Circuit-level flow control (send side - package window)
+  // Per tor-spec 7.3: "The circuit PACKAGE_WINDOW starts at 1000"
+  private circuitPackageWindow = CIRCUIT_WINDOW_START;
+  private circuitPackageWindowWaiters: Array<() => void> = [];
 
   // SENDME queue to prevent race conditions
   // For circuit SENDME, we include the digest captured at queue time
@@ -686,14 +808,23 @@ export class Circuit extends EventEmitter {
         return;
       }
       case RelayCell.SENDME: {
-        // Flow control message. We currently don't implement SENDME-based windows,
-        // but we should never crash on it (real relays send it routinely).
-        if (!this.loggedIgnoredRelayCommands.has(relayCommand)) {
-          this.loggedIgnoredRelayCommands.add(relayCommand);
-          console.log(
-            `ignoring RELAY_${RelayCell[relayCommand] ?? relayCommand} (${relayCommand}) ` +
-              `for streamId=${streamId} on ${targetHop.toString()} (flow control not implemented)`
-          );
+        // Flow control message - increment package window
+        // Per tor-spec 7.3: SENDME with streamId=0 is circuit-level, otherwise stream-level
+        if (streamId === 0) {
+          // Circuit-level SENDME: increment circuit package window by 100
+          this.circuitPackageWindow += CIRCUIT_SENDME_INCREMENT;
+          // Wake up any waiters blocked on circuit package window
+          const waiters = this.circuitPackageWindowWaiters.splice(0);
+          for (const resolve of waiters) {
+            resolve();
+          }
+        } else {
+          // Stream-level SENDME: increment stream package window by 50
+          if (stream) {
+            stream.handleSendme();
+          } else {
+            console.warn(`Got SENDME for unknown streamId=${streamId}`);
+          }
         }
         return;
       }
@@ -704,6 +835,33 @@ export class Circuit extends EventEmitter {
           console.log(
             `ignoring RELAY_${RelayCell[relayCommand] ?? relayCommand} (${relayCommand}) ` +
               `for streamId=${streamId} on ${targetHop.toString()}`
+          );
+        }
+        return;
+      }
+      case RelayCell.XON: {
+        // Stream-level flow control: resume sending on this stream
+        // Per prop324: XON contains the new send rate
+        if (stream) {
+          stream.handleXon(data);
+        }
+        return;
+      }
+      case RelayCell.XOFF: {
+        // Stream-level flow control: stop sending on this stream
+        if (stream) {
+          stream.handleXoff();
+        }
+        return;
+      }
+      case RelayCell.PADDING_NEGOTIATE:
+      case RelayCell.PADDING_NEGOTIATED: {
+        // Circuit-level padding negotiation - log and ignore for now
+        if (!this.loggedIgnoredRelayCommands.has(relayCommand)) {
+          this.loggedIgnoredRelayCommands.add(relayCommand);
+          console.log(
+            `ignoring RELAY_${RelayCell[relayCommand] ?? relayCommand} (${relayCommand}) ` +
+              `for streamId=${streamId} (circuit padding not implemented)`
           );
         }
         return;
@@ -720,13 +878,51 @@ export class Circuit extends EventEmitter {
       throw new Error('stream is destroyed');
     }
     for (const chunk of chunkDataForRelayDataCells(data)) {
+      // Flow control: wait for both circuit and stream package windows
+      // Per tor-spec 7.3: "If a package window reaches 0, the relay or client
+      // stops reading from TCP connections for all streams on the corresponding
+      // circuit, and sends no more DATA-bearing cells"
+      await this.waitForCircuitPackageWindow();
+      await stream.waitForPackageWindow();
+
       const relayCell = {
         streamId,
         relayCommand: RelayCell.DATA,
         data: chunk,
       };
       await this.sendRelayMessage(relayCell);
+
+      // Decrement package windows after sending
+      this.circuitPackageWindow--;
+      stream.recordSentCell();
     }
+  }
+
+  /**
+   * Wait until circuit package window has capacity to send.
+   * Per tor-spec 7.3: we must wait for SENDME from relay before sending more.
+   */
+  private async waitForCircuitPackageWindow(): Promise<void> {
+    if (this.isDestroyed) {
+      throw new Error('Circuit is destroyed');
+    }
+    if (this.circuitPackageWindow > 0) {
+      return;
+    }
+    return new Promise((resolve, reject) => {
+      const cleanup = () => {
+        this.off('destroyed', onDestroyed);
+      };
+      const onDestroyed = () => {
+        cleanup();
+        reject(new Error('Circuit destroyed while waiting for package window'));
+      };
+      this.once('destroyed', onDestroyed);
+      this.circuitPackageWindowWaiters.push(() => {
+        cleanup();
+        resolve();
+      });
+    });
   }
 
   /**
@@ -924,6 +1120,15 @@ export class Circuit extends EventEmitter {
   destroy(options?: { preserveChannel?: boolean }) {
     if (this.isDestroyed) return;
     this.isDestroyed = true;
+
+    // Emit destroyed event for any waiters (e.g., package window waiters)
+    this.emit('destroyed');
+
+    // Wake up any package window waiters
+    const waiters = this.circuitPackageWindowWaiters.splice(0);
+    for (const resolve of waiters) {
+      resolve(); // They'll check isDestroyed flag
+    }
 
     if (this.unsubscribeFromChannel) {
       this.unsubscribeFromChannel();

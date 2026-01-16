@@ -26,6 +26,25 @@ import type { GetTime } from './time.ts';
 
 const defaultLinkSupportedVersions = [3, 4, 5];
 
+// Link-level padding parameters (per padding-spec/connection-level-padding.md)
+// These defeat ISP Netflow/traffic analysis by preventing "inactive flow timeout" records.
+
+/** Low end of netflow padding interval (milliseconds) */
+const NF_ITO_LOW_MS = 1500;
+/** High end of netflow padding interval (milliseconds) */
+const NF_ITO_HIGH_MS = 9500;
+/** How long to keep idle channels open with netflow padding (milliseconds) */
+const NF_CONNTIMEOUT_CLIENTS_MS = 30 * 60 * 1000; // 30 minutes
+/** KeepalivePeriod - close channel after this if no circuits and no traffic (milliseconds) */
+const KEEPALIVE_PERIOD_MS = 5 * 60 * 1000; // 5 minutes
+
+export interface ChannelConnectionOptions {
+  isInitiator?: boolean;
+  getTime?: GetTime;
+  /** Enable netflow padding (PADDING cells for keep-alive). Default: true */
+  enablePadding?: boolean;
+}
+
 export class ChannelConnection {
   isInitiator: boolean;
   getTime: GetTime;
@@ -49,12 +68,20 @@ export class ChannelConnection {
   _outgoingHandshakeDigestData: any;
   _incomingDataBuffer: Buffer;
 
+  // Keep-alive / padding state
+  private paddingEnabled: boolean;
+  private paddingTimer: ReturnType<typeof setTimeout> | undefined;
+  private lastTrafficTime: number = 0;
+  private idleTimeoutTimer: ReturnType<typeof setTimeout> | undefined;
+
   constructor({
     isInitiator = true,
     getTime = defaultGetTime,
-  }: { isInitiator?: boolean; getTime?: GetTime } = {}) {
+    enablePadding = true,
+  }: ChannelConnectionOptions = {}) {
     this.isInitiator = isInitiator;
     this.getTime = getTime;
+    this.paddingEnabled = enablePadding;
     this.incommingCommands = new EventEmitter();
     this.state = {
       linkProtocolVersion: undefined,
@@ -128,6 +155,12 @@ export class ChannelConnection {
       addresses: [],
     });
     this.state.handShakeInProgress = false;
+
+    // Start keep-alive padding timer after handshake
+    this.recordLastTrafficTime();
+    if (this.paddingEnabled) {
+      this.schedulePaddingCell();
+    }
   }
   sendVersions(versionsCell: CellVersions): void {
     this.sendMessage(MessageCells.VERSIONS, versionsCell);
@@ -173,9 +206,14 @@ export class ChannelConnection {
         if (handShakeInProgress) {
           this._incommingHandshakeDigestData.push(cell.data);
         }
-        this.incommingCommands.emit(cell.commandName, cell);
-        this.incommingCommands.emit('*', cell);
+        // PADDING cells (command 0) are ignored per spec - they're just keep-alive
+        if (cell.command !== MessageCells.PADDING) {
+          this.incommingCommands.emit(cell.commandName, cell);
+          this.incommingCommands.emit('*', cell);
+        }
       }
+      // Record traffic for keep-alive purposes (including PADDING)
+      this.recordLastTrafficTime();
     }
   }
   sendMessage(messageType: number, messageParams: any): void {
@@ -190,6 +228,7 @@ export class ChannelConnection {
       this._outgoingHandshakeDigestData.push(serializedCell);
     }
     this.sendData(serializedCell);
+    this.recordLastTrafficTime();
   }
   sendMessageWithPayload(circuitId: Buffer, messageType: number, payloadBytes: Buffer): void {
     const { handShakeInProgress } = this.state;
@@ -200,6 +239,7 @@ export class ChannelConnection {
       this._outgoingHandshakeDigestData.push(serializedCell);
     }
     this.sendData(serializedCell);
+    this.recordLastTrafficTime();
   }
   receiveEvent(eventName: string): Promise<any> {
     return receiveEvent(eventName, this.incommingCommands);
@@ -229,11 +269,93 @@ export class ChannelConnection {
     }
     return version;
   }
+
+  /**
+   * Record that traffic was sent/received on this channel.
+   * Resets the padding timer and updates idle timeout.
+   */
+  recordLastTrafficTime(): void {
+    this.lastTrafficTime = Date.now();
+  }
+
+  /**
+   * Schedule a PADDING cell to be sent after a random interval.
+   * Per padding-spec: use max(X, X) distribution where X ~ U[nf_ito_low, nf_ito_high]
+   * This biases toward higher values (expected ~5.5 seconds).
+   */
+  private schedulePaddingCell(): void {
+    if (this.paddingTimer) {
+      clearTimeout(this.paddingTimer);
+    }
+
+    // max(X, X) distribution - sample twice, take max
+    const sample1 = NF_ITO_LOW_MS + Math.random() * (NF_ITO_HIGH_MS - NF_ITO_LOW_MS);
+    const sample2 = NF_ITO_LOW_MS + Math.random() * (NF_ITO_HIGH_MS - NF_ITO_LOW_MS);
+    const delayMs = Math.max(sample1, sample2);
+
+    this.paddingTimer = setTimeout(() => {
+      this.sendPaddingCellIfNeeded();
+    }, delayMs);
+  }
+
+  /**
+   * Send a PADDING cell if no traffic has been sent recently.
+   * Per padding-spec: PADDING cells are fixed-length cells (512 bytes)
+   * with command=0 and zero-filled payload.
+   */
+  private sendPaddingCellIfNeeded(): void {
+    // Check if we're still connected
+    if (this.state.linkProtocolVersion === undefined) {
+      return; // Not connected yet or already destroyed
+    }
+
+    const timeSinceTraffic = Date.now() - this.lastTrafficTime;
+    if (timeSinceTraffic >= NF_ITO_LOW_MS) {
+      // Send PADDING cell
+      // PADDING cells have circuitId=0 and command=0, with zero payload
+      const circIdLen = circuitIdLengthForProtocolVersion(this.state.linkProtocolVersion);
+      const paddingCell = Buffer.alloc(circIdLen + 1 + 509); // circId + command + payload
+      // Everything is zero by default (circId=0, command=PADDING=0, payload=zeros)
+      this.sendData(paddingCell);
+      this.recordLastTrafficTime();
+    }
+
+    // Schedule next padding check
+    this.schedulePaddingCell();
+  }
+
+  /**
+   * Get the time since last traffic in milliseconds.
+   */
+  getTimeSinceLastTraffic(): number {
+    return Date.now() - this.lastTrafficTime;
+  }
+
+  /**
+   * Check if this channel has been idle for too long.
+   * With padding enabled: uses nf_conntimeout_clients (30 min)
+   * Without padding: uses KeepalivePeriod (5 min)
+   */
+  isIdleTimeout(): boolean {
+    const timeout = this.paddingEnabled ? NF_CONNTIMEOUT_CLIENTS_MS : KEEPALIVE_PERIOD_MS;
+    return this.getTimeSinceLastTraffic() >= timeout;
+  }
+
   // virtual - override
   sendData(_serializedCell: any) {
     throw new Error("virtual method 'sendData' not implemented.");
   }
+
   destroy() {
+    // Clear padding timer
+    if (this.paddingTimer) {
+      clearTimeout(this.paddingTimer);
+      this.paddingTimer = undefined;
+    }
+    if (this.idleTimeoutTimer) {
+      clearTimeout(this.idleTimeoutTimer);
+      this.idleTimeoutTimer = undefined;
+    }
     this.incommingCommands.removeAllListeners();
   }
 }
