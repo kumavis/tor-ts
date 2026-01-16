@@ -14,12 +14,9 @@ import https from 'node:https';
 import test from 'ava';
 import { Circuit } from 'tor/circuit';
 import type { PeerInfo } from 'tor/circuit';
-import {
-  DirectoryClient,
-  parseMicroDescConsensus,
-  lookupPeerInfo,
-  parseAllKeyCertificates,
-} from 'tor/directory-client';
+import { parseAndVerifyConsensus } from 'tor/build-circuit/directory';
+import { DirectoryClient, lookupPeerInfo } from 'tor/directory-client';
+import { parseAllKeyCertificates } from 'tor';
 import { pickRelayWithFlags } from 'tor/build-circuit/util';
 import { getTorAgentForUrl } from 'tor/node';
 
@@ -55,7 +52,7 @@ test.serial('snowflake live: build circuit + fetch example.com (optional)', asyn
   const keyCertificates = parseAllKeyCertificates(keyCertsText);
 
   const microDescContent = await dirClient.downloadMicrodescConsensus();
-  const consensus = await parseMicroDescConsensus(microDescContent, {
+  const { consensus } = await parseAndVerifyConsensus(microDescContent, {
     keyCertificates,
   });
   const microDescNodeInfos = consensus.relays;

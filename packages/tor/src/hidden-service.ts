@@ -1,8 +1,6 @@
 import crypto from 'node:crypto';
-import fs from 'node:fs/promises';
-import path from 'node:path';
 import { x25519, ed25519, sha3_256, shake256 } from 'tor-crypto';
-import { BytesReader, Mutex } from './util.ts';
+import { BytesReader, shuffleInPlace } from './util.ts';
 import type { LinkSpecifier } from './messaging.ts';
 import { RelayCell } from './relay-cell.ts';
 import { makeAes256CtrKey } from './aes.ts';
@@ -17,7 +15,6 @@ import {
 import { TlsChannelConnection } from './channel.ts';
 import {
   getChutneyMicrodescConsensus,
-  getChutneyMicrodescConsensusSafe,
   getRandomChutneyCircuitPath,
   getRandomChutneyCircuitPathToTargetSafe,
 } from './build-circuit/chutney.ts';
@@ -27,7 +24,7 @@ import {
   lookupPeerInfo,
   lookupPeerInfoWithEd25519IdentityKey,
 } from './directory-client.ts';
-import type { MicroDescConsensus } from './build-circuit/directory.ts';
+import type { VerifiedMicroDescConsensus } from './build-circuit/directory.ts';
 
 const HASH_LEN = 32; // SHA3-256
 const MAC_KEY_LEN = 32;
@@ -35,29 +32,6 @@ const S_KEY_LEN = 32; // AES-256 key
 const S_IV_LEN = 16; // AES block/iv length
 
 const RELAY_PAYLOAD_LEN = 509 - 11;
-
-/**
- * Checks if a consensus is still considered "fresh" for HS operations.
- * A consensus is fresh if the current time is before its `freshUntil` timestamp.
- * If `freshUntil` is not available, we estimate it as `validAfter + votingInterval`.
- */
-function isConsensusFresh(consensus: MicroDescConsensus): boolean {
-  const now = Date.now();
-  if (consensus.freshUntil) {
-    return now < consensus.freshUntil.getTime();
-  }
-  // If freshUntil is missing, estimate based on validAfter + 1 voting interval.
-  // On mainnet this is 1 hour; on Chutney it's typically 20 seconds.
-  // Use a conservative default of 1 hour if validAfter is also missing.
-  if (consensus.validAfter) {
-    // Default voting interval is 1 hour (3600s), but Chutney uses ~20s.
-    // Without freshUntil, assume the consensus becomes stale after 1 voting interval.
-    const votingIntervalMs = 3600 * 1000;
-    return now < consensus.validAfter.getTime() + votingIntervalMs;
-  }
-  // No timing info available; consider stale to be safe
-  return false;
-}
 
 /**
  * Time period information derived from a consensus, used for HS descriptor location.
@@ -69,130 +43,119 @@ export interface TimePeriodInfo {
   spreadFetch: number;
 }
 
+// ============================================================================
+// Generic Hidden Service Connection Types
+// ============================================================================
+
 /**
- * Manages consensus state for hidden service operations.
+ * Function type for building circuits to a target relay.
+ * This abstracts the platform-specific circuit building (browser vs Node.js).
  *
- * This class:
- * - Holds the current consensus and refreshes it when stale
- * - Uses a mutex to prevent concurrent refresh attempts
- * - Computes time period information from the consensus
- * - Fetches new consensus safely over the bootstrap circuit
+ * @param target - The target relay (final hop)
+ * @param options.avoid - Relays to avoid in path selection
+ * @returns A connected circuit
  */
-export class ChutneyConsensusManager {
-  private readonly mutex = new Mutex();
-  private readonly bootstrapCircuit: Circuit;
-  private readonly hsdirInterval: number;
-  private consensus: MicroDescConsensus;
+export type BuildCircuitFn = (
+  target: PeerInfo,
+  options?: { avoid?: PeerInfo[] }
+) => Promise<Circuit>;
 
-  constructor(bootstrapCircuit: Circuit, initialConsensus: MicroDescConsensus) {
-    this.bootstrapCircuit = bootstrapCircuit;
-    this.consensus = initialConsensus;
-    this.hsdirInterval = initialConsensus.params['hsdir-interval'] ?? 1440;
-  }
-
-  /**
-   * Returns a fresh consensus, fetching a new one if the current is stale.
-   * Uses mutex to prevent concurrent fetches.
-   */
-  async getConsensus(): Promise<MicroDescConsensus> {
-    // Quick check without lock
-    if (isConsensusFresh(this.consensus)) {
-      return this.consensus;
-    }
-
-    // Acquire mutex to prevent concurrent refreshes
-    const unlock = await this.mutex.lock();
-    try {
-      // Double-check after acquiring lock
-      if (isConsensusFresh(this.consensus)) {
-        return this.consensus;
-      }
-
-      // Actually refresh the consensus
-      console.log('hs: consensus stale, refreshing...');
-      const newConsensus = await getChutneyMicrodescConsensusSafe(this.bootstrapCircuit);
-      this.consensus = newConsensus;
-      console.log(
-        `hs: refreshed consensus valid-after=${newConsensus.validAfter?.toISOString() ?? 'unknown'}`
-      );
-      return this.consensus;
-    } finally {
-      unlock();
-    }
-  }
-
-  /**
-   * Computes time period information from the current consensus.
-   * Call this after getConsensus() to get derived HS timing values.
-   */
-  computeTimePeriodInfo(): TimePeriodInfo {
-    const c = this.consensus;
-    if (!c.validAfter) {
-      throw new Error('Consensus missing valid-after; cannot compute HS time period');
-    }
-
-    const timeArgs: Parameters<typeof computeTimePeriod>[0] = { validAfter: c.validAfter };
-    if (c.freshUntil) timeArgs.freshUntil = c.freshUntil;
-
-    // On mainnet, hsdir-interval == derived (votingIntervalSec * 24)/60 because the voting interval is 1h.
-    // On testing networks (including Chutney), Tor ignores hsdir-interval and derives the period length from
-    // the voting interval, which is typically much shorter than 1h. To match Tor behavior across both cases,
-    // only pass hsdir-interval when it matches the derived value; otherwise let computeTimePeriod derive it.
-    const votingIntervalSec = c.freshUntil
-      ? Math.floor((c.freshUntil.getTime() - c.validAfter.getTime()) / 1000)
-      : 3600;
-    const derivedPeriodMinutes = Math.max(1, Math.floor((votingIntervalSec * 24) / 60));
-    if (this.hsdirInterval === derivedPeriodMinutes) {
-      timeArgs.hsdirIntervalMinutes = this.hsdirInterval;
-    }
-
-    const { periodNum: basePeriodNum, periodLengthMinutes } = computeTimePeriod(timeArgs);
-    const periodCandidates = [basePeriodNum, basePeriodNum - 1n, basePeriodNum + 1n].filter(
-      (n) => n >= 0n
-    );
-    const nReplicas = Math.min(16, Math.max(1, c.params['hsdir_n_replicas'] ?? 2));
-    const spreadFetch = Math.min(128, Math.max(1, c.params['hsdir_spread_fetch'] ?? 3));
-
-    return { periodLengthMinutes, periodCandidates, nReplicas, spreadFetch };
-  }
-
-  /**
-   * Returns the current SRV values from the consensus, with disaster SRV fallbacks.
-   */
-  getSrvValues(periodLengthMinutes: bigint, periodNum: bigint): Buffer[] {
-    const disasterSrv = computeDisasterSrv({ periodLengthMinutes, periodNum });
-    return [
-      this.consensus.sharedRandCurrentValue ?? disasterSrv,
-      this.consensus.sharedRandPreviousValue ?? disasterSrv,
-    ];
-  }
+/**
+ * Options for the core hidden service connection flow.
+ */
+export interface HsConnectionOptions {
+  /** Overall timeout in milliseconds (default: 120000) */
+  overallTimeoutMs?: number;
+  /** Timeout per handshake operation (default: min of overallTimeoutMs, 120000) */
+  perHandshakeTimeoutMs?: number;
+  /** Max introduction attempts (default: 6) */
+  maxIntroAttempts?: number;
+  /** Logging function for status updates */
+  log?: (message: string) => void;
+  /** Generate random bytes (default: crypto.getRandomValues for browser compat) */
+  randomBytes?: (length: number) => Uint8Array;
 }
 
-async function tryReadChutneyEd25519IdentityKeyMap(): Promise<Map<string, Buffer> | undefined> {
-  const dataDir = process.env.CHUTNEY_DATA_DIR;
-  if (!dataDir) return undefined;
-  try {
-    const nodesDir = path.join(dataDir, 'nodes');
-    const entries = await fs.readdir(nodesDir, { withFileTypes: true });
-    const map = new Map<string, Buffer>();
-    for (const ent of entries) {
-      if (!ent.isDirectory()) continue;
-      const fpPath = path.join(nodesDir, ent.name, 'fingerprint-ed25519');
-      try {
-        const txt = await fs.readFile(fpPath, 'utf8');
-        const [nickname, b64] = txt.trim().split(/\s+/, 3);
-        if (!nickname || !b64) continue;
-        const key = Buffer.from(b64, 'base64');
-        if (key.length !== 32) continue;
-        map.set(nickname, key);
-      } catch {
-        // ignore missing files
-      }
-    }
-    return map;
-  } catch {
-    return undefined;
+/**
+ * Result of a successful hidden service connection.
+ */
+export interface HsConnectionResult {
+  /** The rendezvous circuit with virtual hop to the hidden service */
+  circuit: Circuit;
+  /** The parsed descriptor (contains intro points for reference) */
+  descriptor: HiddenServiceDescriptor;
+}
+
+/**
+ * Context for hidden service connection.
+ * Contains bootstrap resources and platform-specific circuit builder.
+ */
+export interface HsConnectionContext {
+  /** Verified consensus */
+  consensus: VerifiedMicroDescConsensus;
+  /** Bootstrap circuit for directory lookups */
+  bootstrapCircuit: Circuit;
+  /** Directory client for relay info lookups */
+  dirClient: DirectoryClient;
+  /** Function to build circuits to a target relay */
+  buildCircuit: BuildCircuitFn;
+}
+
+/**
+ * Computes time period information from a consensus for HS descriptor location.
+ *
+ * @param consensus - The consensus document
+ * @returns Time period info needed for HS operations
+ */
+export function computeTimePeriodInfo(consensus: VerifiedMicroDescConsensus): TimePeriodInfo {
+  if (!consensus.validAfter) {
+    throw new Error('Consensus missing valid-after; cannot compute HS time period');
   }
+
+  const hsdirInterval = consensus.params['hsdir-interval'] ?? 1440;
+  const timeArgs: Parameters<typeof computeTimePeriod>[0] = { validAfter: consensus.validAfter };
+  if (consensus.freshUntil) timeArgs.freshUntil = consensus.freshUntil;
+
+  // On mainnet, hsdir-interval == derived (votingIntervalSec * 24)/60 because the voting interval is 1h.
+  // On testing networks (including Chutney), Tor ignores hsdir-interval and derives the period length from
+  // the voting interval, which is typically much shorter than 1h. To match Tor behavior across both cases,
+  // only pass hsdir-interval when it matches the derived value; otherwise let computeTimePeriod derive it.
+  const votingIntervalSec = consensus.freshUntil
+    ? Math.floor((consensus.freshUntil.getTime() - consensus.validAfter.getTime()) / 1000)
+    : 3600;
+  const derivedPeriodMinutes = Math.max(1, Math.floor((votingIntervalSec * 24) / 60));
+  if (hsdirInterval === derivedPeriodMinutes) {
+    timeArgs.hsdirIntervalMinutes = hsdirInterval;
+  }
+
+  const { periodNum: basePeriodNum, periodLengthMinutes } = computeTimePeriod(timeArgs);
+  const periodCandidates = [basePeriodNum, basePeriodNum - 1n, basePeriodNum + 1n].filter(
+    (n) => n >= 0n
+  );
+  const nReplicas = Math.min(16, Math.max(1, consensus.params['hsdir_n_replicas'] ?? 2));
+  const spreadFetch = Math.min(128, Math.max(1, consensus.params['hsdir_spread_fetch'] ?? 3));
+
+  return { periodLengthMinutes, periodCandidates, nReplicas, spreadFetch };
+}
+
+/**
+ * Returns SRV values from a consensus for HS hash ring computation, with disaster SRV fallbacks.
+ *
+ * @param consensus - The consensus document
+ * @param periodLengthMinutes - The period length in minutes
+ * @param periodNum - The period number
+ * @returns Array of SRV values to try (current and previous, with disaster fallbacks)
+ */
+export function getSrvValues(
+  consensus: VerifiedMicroDescConsensus,
+  periodLengthMinutes: bigint,
+  periodNum: bigint
+): Buffer[] {
+  const disasterSrv = computeDisasterSrv({ periodLengthMinutes, periodNum });
+  return [
+    consensus.sharedRandCurrentValue ?? disasterSrv,
+    consensus.sharedRandPreviousValue ?? disasterSrv,
+  ];
 }
 
 function sha3(...parts: Buffer[]): Buffer {
@@ -358,7 +321,6 @@ export function selectHsdirsForFetch(params: {
   periodNum: bigint;
   nReplicas: number;
   spreadFetch: number;
-  shuffleInPlace: <T>(arr: T[]) => T[];
 }): PeerInfo[] {
   const ring = params.hsdirs
     .map((h) => {
@@ -399,7 +361,7 @@ export function selectHsdirsForFetch(params: {
     }
   }
 
-  return params.shuffleInPlace(out);
+  return shuffleInPlace(out);
 }
 
 function base32DecodeLowerNoPad(s: string): Buffer {
@@ -1083,7 +1045,16 @@ export async function buildIntroduce1Payload(params: {
   };
 }
 
-async function waitForRelayCommand(
+/**
+ * Wait for a specific relay command on a circuit.
+ * Useful for hidden service protocol handshakes (RENDEZVOUS, INTRODUCE_ACK, etc).
+ *
+ * @param circuit - The circuit to listen on
+ * @param relayCommand - The relay command to wait for
+ * @param timeoutMs - Timeout in milliseconds
+ * @returns The relay event data
+ */
+export async function waitForRelayCommand(
   circuit: Circuit,
   relayCommand: number,
   timeoutMs: number
@@ -1106,201 +1077,164 @@ async function waitForRelayCommand(
   });
 }
 
-export async function connectToHiddenServiceOverChutney(params: {
-  onionAddress: string;
-  port: number;
-  overallTimeoutMs?: number;
-}): Promise<{ circuit: Circuit; stream: CircuitStream }> {
-  function shuffleInPlace<T>(arr: T[]): T[] {
-    for (let i = arr.length - 1; i > 0; i--) {
-      const j = crypto.randomInt(i + 1);
-      const tmp = arr[i]!;
-      arr[i] = arr[j]!;
-      arr[j] = tmp;
-    }
-    return arr;
+// ============================================================================
+// Core Hidden Service Connection (Platform-Agnostic)
+// ============================================================================
+
+/**
+ * Core hidden service connection flow.
+ *
+ * This implements the full HSv3 client protocol:
+ * 1. Find HSDir nodes and fetch descriptor
+ * 2. Build rendezvous circuit and establish rendezvous point
+ * 3. Build intro circuit and send INTRODUCE1
+ * 4. Complete hs-ntor handshake on RENDEZVOUS2
+ *
+ * Platform-specific concerns (channel creation, path selection) are abstracted
+ * via the `buildCircuit` function in the context.
+ *
+ * @param ctx - Connection context with consensus, circuits, and circuit builder
+ * @param onionAddress - The .onion address to connect to
+ * @param options - Connection options
+ * @returns The rendezvous circuit with virtual hop to the hidden service
+ */
+export async function connectToHiddenServiceCore(
+  ctx: HsConnectionContext,
+  onionAddress: string,
+  options: HsConnectionOptions = {}
+): Promise<HsConnectionResult> {
+  const {
+    overallTimeoutMs = 120_000,
+    perHandshakeTimeoutMs = Math.min(overallTimeoutMs, 120_000),
+    maxIntroAttempts = 6,
+    log = () => {},
+    randomBytes = (len) => {
+      const arr = new Uint8Array(len);
+      crypto.getRandomValues(arr);
+      return arr;
+    },
+  } = options;
+
+  const { consensus, bootstrapCircuit, dirClient, buildCircuit } = ctx;
+
+  if (!consensus.validAfter) {
+    throw new Error('Consensus missing valid-after');
   }
 
-  const overallTimeoutMs = params.overallTimeoutMs ?? 120_000;
-  const descriptorTimeoutMs = Math.min(overallTimeoutMs, 6 * 60_000);
-  const perHandshakeTimeoutMs = Math.min(overallTimeoutMs, 120_000);
+  // Step 1: Parse onion address
+  log('Parsing onion address...');
+  const { publicIdentityKey } = parseOnionV3Address(onionAddress);
 
-  // Bootstrap: Get consensus using dangerous direct fetch (unavoidable for initial bootstrap)
-  const consensus: MicroDescConsensus = (await getChutneyMicrodescConsensus()).consensus;
+  // Step 2: Find HSDir nodes
+  log('Locating hidden service directory nodes...');
   const hsdirNodes = (consensus.relays ?? []).filter((r) => {
     if (!(r.flags ?? []).includes('HSDir')) return false;
     const hsdirProto = r.protocols?.HSDir;
     if (!hsdirProto) return false;
     return hsdirProto.split(',').some((v) => v.includes('2'));
   });
+
   if (hsdirNodes.length === 0) {
     throw new Error('No HSDir candidates found in consensus');
   }
 
-  if (!consensus.validAfter) {
-    throw new Error('Consensus missing valid-after; cannot compute HS time period');
-  }
-
-  console.log('hs: looking up descriptor (directory stream)');
-
-  // Spec-correct HSv3 descriptor location requires the HSDir hash ring, which
-  // depends on each HSDir's ed25519 identity key (from its server descriptor).
-  // We use safe lookups via a bootstrap circuit to avoid leaking our IP.
-  const localEd25519ByNickname = await tryReadChutneyEd25519IdentityKeyMap();
-
-  // Build HSDir candidates using safe directory lookups via a bootstrap circuit.
-  const hsdirCandidates: HsdirCandidate[] = [];
+  // Build HSDir candidates with Ed25519 identity keys
+  log('Looking up HSDir identity keys...');
   const shuffledHsdirNodes = shuffleInPlace([...hsdirNodes]);
 
-  // We need a bootstrap circuit to do safe directory lookups for the remaining nodes.
-  // Build a random bootstrap circuit using dangerous methods (unavoidable for first circuit).
-  let bootstrapCircuit: Circuit | undefined;
-  // Consensus manager handles fetching and caching consensus with mutex protection.
-  let consensusManager: ChutneyConsensusManager | undefined;
-  try {
-    // Build a random 3-hop circuit for directory lookups
-    const bootstrapPath = await getRandomChutneyCircuitPath();
-    const bootstrapFirst = bootstrapPath[0];
-    if (!bootstrapFirst) throw new Error('Empty bootstrap circuit path');
-
-    const bootstrapChannel = new TlsChannelConnection();
-    await bootstrapChannel.connectPeerInfo(bootstrapFirst);
-    bootstrapCircuit = new Circuit({ path: bootstrapPath, channel: bootstrapChannel });
-    await bootstrapCircuit.connect();
-
-    // Create consensus manager to handle stale consensus during retries.
-    // This prevents concurrent refresh attempts and encapsulates time period computation.
-    consensusManager = new ChutneyConsensusManager(bootstrapCircuit, consensus);
-
-    // Now use safe lookups for HSDir candidates
-    const dirClient = new DirectoryClient(bootstrapCircuit);
-    const results = await Promise.all(
-      shuffledHsdirNodes.map(async (n) => {
-        try {
-          const localEd25519 = localEd25519ByNickname?.get(n.nickname);
-          if (localEd25519) {
-            const peerInfo = await lookupPeerInfo(dirClient, n);
-            return { peerInfo, ed25519IdentityKey: localEd25519 } satisfies HsdirCandidate;
-          }
-          const { peerInfo, ed25519IdentityKey } = await lookupPeerInfoWithEd25519IdentityKey(
-            dirClient,
-            n
-          );
-          return { peerInfo, ed25519IdentityKey } satisfies HsdirCandidate;
-        } catch {
-          return undefined;
-        }
-      })
-    );
-    hsdirCandidates.push(...results.filter((x): x is HsdirCandidate => Boolean(x)));
-  } catch (err) {
-    bootstrapCircuit?.destroy();
-    throw err;
-  }
+  const hsdirCandidates: HsdirCandidate[] = [];
+  const batchSize = Math.min(10, shuffledHsdirNodes.length);
+  const hsdirResults = await Promise.all(
+    shuffledHsdirNodes.slice(0, batchSize).map(async (n) => {
+      try {
+        const { peerInfo, ed25519IdentityKey } = await lookupPeerInfoWithEd25519IdentityKey(
+          dirClient,
+          n
+        );
+        return { peerInfo, ed25519IdentityKey } satisfies HsdirCandidate;
+      } catch {
+        return undefined;
+      }
+    })
+  );
+  hsdirCandidates.push(...hsdirResults.filter((x): x is HsdirCandidate => Boolean(x)));
 
   if (hsdirCandidates.length === 0) {
-    bootstrapCircuit?.destroy();
-    throw new Error('Failed to build any HSDir candidates (peerinfo + ed25519 identity)');
+    throw new Error('Failed to build any HSDir candidates');
   }
 
-  const { publicIdentityKey } = parseOnionV3Address(params.onionAddress);
-
-  const deadline = Date.now() + descriptorTimeoutMs;
+  // Step 3: Compute time period info and fetch descriptor
+  const { periodLengthMinutes, periodCandidates, nReplicas, spreadFetch } =
+    computeTimePeriodInfo(consensus);
 
   let subcred: Buffer | undefined;
   let blindedPublicKey: Buffer | undefined;
-  let outerText: string | undefined;
+  let descriptor: HiddenServiceDescriptor | undefined;
 
-  while (!outerText && Date.now() <= deadline) {
-    // Get fresh consensus (refreshes automatically if stale).
-    // This is critical for fast-rotating networks like Chutney where the
-    // SRV and time period can change during the retry loop.
-    // Note: consensusManager is guaranteed to be set after bootstrap circuit setup.
-    await consensusManager!.getConsensus();
+  log('Fetching hidden service descriptor...');
+  const descriptorDeadline = Date.now() + Math.min(overallTimeoutMs, 180_000);
 
-    // Compute time period info from the (possibly refreshed) consensus
-    const { periodLengthMinutes, periodCandidates, nReplicas, spreadFetch } =
-      consensusManager!.computeTimePeriodInfo();
+  for (const periodNum of periodCandidates) {
+    if (descriptor) break;
+    if (Date.now() > descriptorDeadline) break;
 
-    for (const periodNum of periodCandidates) {
-      blindedPublicKey = deriveBlindedPublicKey({
-        publicIdentityKey,
-        periodNum,
+    blindedPublicKey = deriveBlindedPublicKey({
+      publicIdentityKey,
+      periodNum,
+      periodLengthMinutes,
+    });
+    subcred = deriveSubcredential({ publicIdentityKey, blindedPublicKey });
+
+    const srvValues = getSrvValues(consensus, periodLengthMinutes, periodNum);
+
+    for (const srv of srvValues) {
+      if (descriptor) break;
+
+      const hsdirPeersThisRound = selectHsdirsForFetch({
+        hsdirs: hsdirCandidates,
+        sharedRandomValue: srv,
+        blindedPublicKey,
         periodLengthMinutes,
+        periodNum,
+        nReplicas,
+        spreadFetch,
       });
-      subcred = deriveSubcredential({ publicIdentityKey, blindedPublicKey });
-      const z = toBase64UrlNoPad(blindedPublicKey);
 
-      // Get SRV values from consensus (with disaster SRV fallbacks)
-      const srvValues = consensusManager!.getSrvValues(periodLengthMinutes, periodNum);
+      for (const hsdirPeer of hsdirPeersThisRound) {
+        if (Date.now() > descriptorDeadline) break;
 
-      for (const srv of srvValues) {
-        const hsdirPeersThisRound = selectHsdirsForFetch({
-          hsdirs: hsdirCandidates,
-          sharedRandomValue: srv,
-          blindedPublicKey,
-          periodLengthMinutes,
-          periodNum,
-          nReplicas,
-          spreadFetch,
-          shuffleInPlace,
-        });
-
-        for (const hsdirPeer of hsdirPeersThisRound) {
-          const timeLeftMs = deadline - Date.now();
-          if (timeLeftMs <= 0) break;
-          const got = await fetchHsDescriptorOverChutneyDirectoryStream(
-            bootstrapCircuit!,
+        try {
+          const got = await fetchHsDescriptorOverDirectoryStream(
+            bootstrapCircuit,
             hsdirPeer,
-            z,
-            Math.min(perHandshakeTimeoutMs, timeLeftMs)
+            blindedPublicKey,
+            subcred,
+            perHandshakeTimeoutMs
           );
           if (got) {
-            outerText = got;
+            descriptor = got;
             break;
           }
+        } catch {
+          // Continue to next HSDir
         }
-        if (outerText) break;
       }
-      if (outerText) break;
-    }
-    if (!outerText) {
-      await new Promise((r) => setTimeout(r, 1000));
     }
   }
 
-  if (!outerText || !subcred || !blindedPublicKey) {
-    throw new Error('Failed to download hidden service descriptor from any HSDir candidate');
+  if (!descriptor || !subcred || !blindedPublicKey) {
+    throw new Error('Failed to download hidden service descriptor');
   }
 
-  const outer = parseHsDescriptorOuter(outerText);
-  const firstPlain = trimTrailingNuls(
-    decryptHsLayer({
-      ciphertext: outer.superencrypted,
-      secretData: blindedPublicKey,
-      subcred,
-      revisionCounter: outer.revisionCounter,
-      stringConstant: 'hsdir-superencrypted-data',
-    })
-  );
-  const firstText = firstPlain.toString('utf8');
-  const { innerEncrypted } = parseFirstLayerPlaintext(firstText);
-  const secondPlain = trimTrailingNuls(
-    decryptHsLayer({
-      ciphertext: innerEncrypted,
-      secretData: blindedPublicKey,
-      subcred,
-      revisionCounter: outer.revisionCounter,
-      stringConstant: 'hsdir-encrypted-data',
-    })
-  );
-  const descriptor = parseSecondLayerPlaintext(secondPlain.toString('utf8'));
+  log(`Found ${descriptor.introPoints.length} introduction point(s)`);
 
-  // Shuffle intro points for load balancing (per spec: client MAY try different intro points)
+  // Step 4: Shuffle intro points and select rendezvous point
   const introPoints = shuffleInPlace([...descriptor.introPoints]);
-  if (introPoints.length === 0) throw new Error('Descriptor contained no introduction points');
+  if (introPoints.length === 0) {
+    throw new Error('Descriptor contained no introduction points');
+  }
 
-  // Pick a rendezvous relay (any relay should work; prefer ones that can do HSRend=2 if present).
+  log('Selecting rendezvous point...');
   const rendCandidates = consensus.relays.filter((r) => {
     const versions = r.protocols?.HSRend;
     if (!versions) return true;
@@ -1311,25 +1245,14 @@ export async function connectToHiddenServiceOverChutney(params: {
     [],
     []
   );
-
-  // Look up rendezvous point PeerInfo safely via bootstrap circuit
-  const dirClient = new DirectoryClient(bootstrapCircuit!);
   const rendezvousPoint = await lookupPeerInfo(dirClient, rendNodeInfo);
 
-  // Build rendezvous circuit safely using the bootstrap circuit for directory lookups
-  console.log('hs: building rendezvous circuit');
-  const rendPath = await getRandomChutneyCircuitPathToTargetSafe(
-    bootstrapCircuit!,
-    rendezvousPoint
-  );
-  const rendChannel = new TlsChannelConnection();
-  const rendFirst = rendPath[0];
-  if (!rendFirst) throw new Error('Empty rendezvous circuit path');
-  await rendChannel.connectPeerInfo(rendFirst);
-  const rendCircuit = new Circuit({ path: rendPath, channel: rendChannel });
-  await rendCircuit.connect();
-  const rendezvousCookie = crypto.randomBytes(20);
-  console.log('hs: establish rendezvous');
+  // Step 5: Build rendezvous circuit and establish rendezvous
+  log('Building rendezvous circuit...');
+  const rendCircuit = await buildCircuit(rendezvousPoint, { avoid: [] });
+
+  const rendezvousCookie = Buffer.from(randomBytes(20));
+  log('Establishing rendezvous point...');
   await rendCircuit.sendRelayMessage({
     streamId: 0,
     relayCommand: RelayCell.ESTABLISH_RENDEZVOUS,
@@ -1337,38 +1260,22 @@ export async function connectToHiddenServiceOverChutney(params: {
   });
   await waitForRelayCommand(rendCircuit, RelayCell.RENDEZVOUS_ESTABLISHED, perHandshakeTimeoutMs);
 
-  // Try each introduction point until one succeeds (per spec: client MAY try different intro points on failure)
-  // Arti uses hs_intro_rend_attempts=6 by default, allowing cycling through intro points more than once
-  const maxIntroAttempts = Math.min(6, introPoints.length * 2);
+  // Step 6: Try intro points until one succeeds
   const introErrors: Error[] = [];
   let successfulIntro:
     | { intro: IntroPoint; introCircuit: Circuit; state: HsNtorClientState }
     | undefined;
 
   for (let attempt = 0; attempt < maxIntroAttempts; attempt++) {
-    // Cycle through intro points (modulo allows retrying the same points if maxIntroAttempts > introPoints.length)
     const intro = introPoints[attempt % introPoints.length]!;
 
     let introCircuit: Circuit | undefined;
     try {
-      // Build intro circuit safely using the bootstrap circuit for directory lookups
-      console.log(`hs: building intro circuit (attempt ${attempt + 1}/${maxIntroAttempts})`);
+      log(`Building introduction circuit (attempt ${attempt + 1}/${maxIntroAttempts})...`);
       const introPeer = peerInfoFromIntroPoint(intro);
-      const introPath = await getRandomChutneyCircuitPathToTargetSafe(
-        bootstrapCircuit!,
-        introPeer,
-        {
-          avoidRsaIdDigests: [rendezvousPoint.rsaIdDigest],
-        }
-      );
-      const introChannel = new TlsChannelConnection();
-      const introFirst = introPath[0];
-      if (!introFirst) throw new Error('Empty introduction circuit path');
-      await introChannel.connectPeerInfo(introFirst);
-      introCircuit = new Circuit({ path: introPath, channel: introChannel });
-      await introCircuit.connect();
+      introCircuit = await buildCircuit(introPeer, { avoid: [rendezvousPoint] });
 
-      console.log(`hs: send INTRODUCE1 (attempt ${attempt + 1}/${maxIntroAttempts})`);
+      log(`Sending introduction (attempt ${attempt + 1}/${maxIntroAttempts})...`);
       const { payload: introducePayload, state } = await buildIntroduce1Payload({
         introAuthKeyEd25519: intro.authKeyEd25519,
         serviceEncKey: intro.serviceEncKey,
@@ -1376,11 +1283,13 @@ export async function connectToHiddenServiceOverChutney(params: {
         rendezvousCookie,
         rendezvousPoint,
       });
+
       await introCircuit.sendRelayMessage({
         streamId: 0,
         relayCommand: RelayCell.INTRODUCE1,
         data: introducePayload,
       });
+
       const ack = await waitForRelayCommand(
         introCircuit,
         RelayCell.INTRODUCE_ACK,
@@ -1389,119 +1298,110 @@ export async function connectToHiddenServiceOverChutney(params: {
       if (ack.data.length < 2) throw new Error('INTRODUCE_ACK too short');
       const status = ack.data.readUInt16BE(0);
       if (status !== 0) {
-        // Per spec (rend-spec line 301-305): "If the INTRODUCE_ACK message indicates failure,
-        // the client MAY try a different introduction point."
-        // Status codes: 0=success, 1=service ID not recognized, 2=bad format, 3=can't relay
         throw new Error(`INTRODUCE_ACK status=${status}`);
       }
 
-      // Success! Keep the intro circuit alive until we're done with the state
       successfulIntro = { intro, introCircuit, state };
-      console.log(`hs: INTRODUCE1 succeeded on attempt ${attempt + 1}`);
+      log(`Introduction succeeded on attempt ${attempt + 1}`);
       break;
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err));
       introErrors.push(error);
-      console.log(`hs: intro attempt ${attempt + 1}/${maxIntroAttempts} failed: ${error.message}`);
-      // Clean up the failed intro circuit
+      log(`Introduction attempt ${attempt + 1}/${maxIntroAttempts} failed: ${error.message}`);
       introCircuit?.destroy();
-      // Continue to next intro point
     }
   }
 
   if (!successfulIntro) {
-    // Clean up before throwing
     rendCircuit.destroy();
-    bootstrapCircuit?.destroy();
     const errorSummary = introErrors.map((e) => e.message).join('; ');
-    throw new Error(`All ${maxIntroAttempts} introduction points failed: ${errorSummary}`);
+    throw new Error(`All ${maxIntroAttempts} introduction attempts failed: ${errorSummary}`);
   }
 
   const { introCircuit, state } = successfulIntro;
-
-  // Now safe to destroy the intro circuit (we have the state we need)
   introCircuit.destroy();
 
-  // Clean up the bootstrap circuit now that we've built all needed circuits
-  bootstrapCircuit?.destroy();
-
-  // Wait for RENDEZVOUS2 and finish hs-ntor handshake, adding a virtual hop
-  console.log('hs: await RENDEZVOUS2');
+  // Step 7: Wait for RENDEZVOUS2 and complete hs-ntor
+  log('Waiting for rendezvous completion...');
   const r2 = await waitForRelayCommand(rendCircuit, RelayCell.RENDEZVOUS2, overallTimeoutMs);
   if (r2.data.length < 64) throw new Error('RENDEZVOUS2 too short');
+
   const Y = r2.data.subarray(0, 32);
   const auth = r2.data.subarray(32, 64);
   const { NTOR_KEY_SEED } = hsNtorComplete({ state, Y, auth });
   const cipherPair = makeHsRendezvousCipherPairFromKeySeed(NTOR_KEY_SEED);
   rendCircuit.addVirtualHop(cipherPair);
 
-  console.log('hs: open stream');
-  const stream = await rendCircuit.open(`${params.onionAddress}:${params.port}`);
-  return { circuit: rendCircuit, stream };
+  log('Connected to hidden service!');
+
+  return { circuit: rendCircuit, descriptor };
 }
 
-async function fetchHsDescriptorOverChutneyDirectoryStream(
-  bootstrapCircuit: Circuit,
-  hsdirPeer: PeerInfo,
-  z: string,
-  timeoutMs: number
-): Promise<string | undefined> {
-  // Use safe circuit path building via the bootstrap circuit
-  const path = await getRandomChutneyCircuitPathToTargetSafe(bootstrapCircuit, hsdirPeer);
-  const first = path[0];
-  if (!first) throw new Error('Empty HSDir circuit path');
+export async function connectToHiddenServiceOverChutney(params: {
+  onionAddress: string;
+  port: number;
+  overallTimeoutMs?: number;
+}): Promise<{ circuit: Circuit; stream: CircuitStream }> {
+  const overallTimeoutMs = params.overallTimeoutMs ?? 120_000;
 
-  const channel = new TlsChannelConnection();
-  await channel.connectPeerInfo(first);
-  const circuit = new Circuit({ path, channel });
-  try {
+  // Bootstrap: Get consensus using dangerous direct fetch (unavoidable for initial bootstrap)
+  console.log('hs: bootstrapping...');
+  const { consensus } = await getChutneyMicrodescConsensus();
+
+  if (!consensus.validAfter) {
+    throw new Error('Consensus missing valid-after; cannot compute HS time period');
+  }
+
+  // Build a random bootstrap circuit for directory lookups
+  const bootstrapPath = await getRandomChutneyCircuitPath();
+  const bootstrapFirst = bootstrapPath[0];
+  if (!bootstrapFirst) throw new Error('Empty bootstrap circuit path');
+
+  const bootstrapChannel = new TlsChannelConnection();
+  await bootstrapChannel.connectPeerInfo(bootstrapFirst);
+  const bootstrapCircuit = new Circuit({ path: bootstrapPath, channel: bootstrapChannel });
+  await bootstrapCircuit.connect();
+
+  const dirClient = new DirectoryClient(bootstrapCircuit);
+
+  // Chutney circuit builder: creates new TLS channel per circuit
+  const buildCircuit: BuildCircuitFn = async (target, options) => {
+    const avoidRsaIdDigests = options?.avoid?.map((p) => p.rsaIdDigest);
+    const path = await getRandomChutneyCircuitPathToTargetSafe(
+      bootstrapCircuit,
+      target,
+      avoidRsaIdDigests ? { avoidRsaIdDigests } : undefined
+    );
+    const first = path[0];
+    if (!first) throw new Error('Empty circuit path');
+
+    const channel = new TlsChannelConnection();
+    await channel.connectPeerInfo(first);
+    const circuit = new Circuit({ path, channel });
     await circuit.connect();
-    const stream = await circuit.openDirectoryStream();
+    return circuit;
+  };
 
-    const requestText =
-      `GET /tor/hs/3/${encodeURIComponent(z)} HTTP/1.0\r\n` +
-      `Host: hsdir\r\n` +
-      `Connection: close\r\n` +
-      `\r\n`;
-
-    const chunks: Buffer[] = [];
-    stream.on('data', (d: Buffer) => chunks.push(Buffer.from(d)));
-    const endedP = new Promise<void>((resolve, reject) => {
-      stream.once('end', (err?: Error) => {
-        if (err) reject(err);
-        else resolve();
-      });
-    });
-
-    await Promise.race([
-      stream.write(Buffer.from(requestText, 'ascii')),
-      new Promise<never>((_r, rej) =>
-        setTimeout(() => rej(new Error('dir request write timeout')), timeoutMs)
-      ),
-    ]);
-    await Promise.race([
-      endedP,
-      new Promise<never>((_r, rej) =>
-        setTimeout(() => rej(new Error('dir request read timeout')), timeoutMs)
-      ),
-    ]);
-
-    const resp = Buffer.concat(chunks).toString('utf8');
-    if (!resp.startsWith('HTTP/')) return undefined;
-    if (!resp.includes(' 200 ')) {
-      if (process.env.TOR_TS_DEBUG_HS_DIR === '1') {
-        const statusLine = resp.split(/\r?\n/, 1)[0] ?? '(missing status line)';
-        // Keep this intentionally short; CI logs can be extremely noisy here.
-        console.warn(`hs: hsdir non-200 response (${resp.length} bytes): ${statusLine}`);
+  try {
+    const result = await connectToHiddenServiceCore(
+      { consensus, bootstrapCircuit, dirClient, buildCircuit },
+      params.onionAddress,
+      {
+        overallTimeoutMs,
+        log: (msg) => console.log(`hs: ${msg}`),
+        randomBytes: (len) => crypto.randomBytes(len),
       }
-      return undefined;
-    }
-    const split = resp.split('\r\n\r\n');
-    if (split.length < 2) return undefined;
-    return split.slice(1).join('\r\n\r\n');
-  } catch {
-    return undefined;
-  } finally {
-    circuit.destroy();
+    );
+
+    // Clean up bootstrap circuit
+    bootstrapCircuit.destroy();
+
+    // Open stream to the hidden service
+    console.log('hs: open stream');
+    const stream = await result.circuit.open(`${params.onionAddress}:${params.port}`);
+    return { circuit: result.circuit, stream };
+  } catch (err) {
+    bootstrapCircuit.destroy();
+    throw err;
   }
 }

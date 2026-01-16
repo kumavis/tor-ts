@@ -31,17 +31,14 @@ w Bandwidth=82000
 directory-footer
 `;
 
-// Helper to parse relays for tests (verification disabled for synthetic test data)
-async function parseRelaysForTest(content: string) {
-  const consensus = await parseMicroDescConsensus(content, {
-    keyCertificates: [],
-    dangerouslySkipSignatureVerification: true,
-  });
+// Helper to parse relays for tests (parseMicroDescConsensus is synchronous)
+function parseRelaysForTest(content: string) {
+  const consensus = parseMicroDescConsensus(content);
   return consensus.relays;
 }
 
-test('parseMicroDescConsensus: parses relay entries', async (t) => {
-  const relays = await parseRelaysForTest(sampleMicroDesc);
+test('parseMicroDescConsensus: parses relay entries', (t) => {
+  const relays = parseRelaysForTest(sampleMicroDesc);
 
   t.is(relays.length, 2);
 
@@ -76,12 +73,9 @@ test('parseMicroDescConsensus: parses relay entries', async (t) => {
   t.deepEqual(relay2.flags, ['Fast', 'Guard', 'Running', 'Stable', 'Valid']);
 });
 
-test('parseMicroDescConsensus: parses consensus metadata', async (t) => {
-  // Disable signature verification for unit tests with synthetic data
-  const consensus = await parseMicroDescConsensus(sampleMicroDesc, {
-    keyCertificates: [],
-    dangerouslySkipSignatureVerification: true,
-  });
+test('parseMicroDescConsensus: parses consensus metadata', (t) => {
+  // parseMicroDescConsensus is synchronous and returns UnverifiedMicroDescConsensus
+  const consensus = parseMicroDescConsensus(sampleMicroDesc);
 
   t.truthy(consensus.validAfter);
   t.truthy(consensus.freshUntil);
@@ -96,15 +90,11 @@ test('parseMicroDescConsensus: parses consensus metadata', async (t) => {
   t.is(consensus.relays.length, 2);
 });
 
-test('parseMicroDescConsensus: handles missing optional fields', async (t) => {
+test('parseMicroDescConsensus: handles missing optional fields', (t) => {
   const minimalDesc = `r MinimalRelay EF+2U8jxUGom9khzsh5ScaRzto2 2024-01-01 00:00:00 1.2.3.4 9001 0
 `;
 
-  // Disable signature verification for unit tests with synthetic data
-  const consensus = await parseMicroDescConsensus(minimalDesc, {
-    keyCertificates: [],
-    dangerouslySkipSignatureVerification: true,
-  });
+  const consensus = parseMicroDescConsensus(minimalDesc);
   t.is(consensus.relays.length, 1);
 
   const relay = consensus.relays[0]!;
@@ -116,8 +106,8 @@ test('parseMicroDescConsensus: handles missing optional fields', async (t) => {
   t.is(relay.mKey, undefined);
 });
 
-test('parseMicroDescConsensus: parses rsaIdDigest from base64', async (t) => {
-  const relays = await parseRelaysForTest(sampleMicroDesc);
+test('parseMicroDescConsensus: parses rsaIdDigest from base64', (t) => {
+  const relays = parseRelaysForTest(sampleMicroDesc);
   const relay = relays[0]!;
 
   // rsaIdDigest should be a 20-byte buffer decoded from base64
@@ -125,16 +115,16 @@ test('parseMicroDescConsensus: parses rsaIdDigest from base64', async (t) => {
   t.is(relay.rsaIdDigest.length, 20);
 });
 
-test('parseMicroDescConsensus: parses mKey from base64', async (t) => {
-  const relays = await parseRelaysForTest(sampleMicroDesc);
+test('parseMicroDescConsensus: parses mKey from base64', (t) => {
+  const relays = parseRelaysForTest(sampleMicroDesc);
   const relay = relays[0]!;
 
   t.truthy(relay.mKey);
   t.true(Buffer.isBuffer(relay.mKey));
 });
 
-test('parseMicroDescConsensus: parses protocols', async (t) => {
-  const relays = await parseRelaysForTest(sampleMicroDesc);
+test('parseMicroDescConsensus: parses protocols', (t) => {
+  const relays = parseRelaysForTest(sampleMicroDesc);
   const relay = relays[0]!;
 
   t.is(relay.protocols['Conflux'], '1');
@@ -143,8 +133,8 @@ test('parseMicroDescConsensus: parses protocols', async (t) => {
   t.is(relay.protocols['LinkAuth'], '1,3');
 });
 
-test('microDescNodeInfoToPeerInfo: creates PeerInfo with correct link specifiers', async (t) => {
-  const relays = await parseRelaysForTest(sampleMicroDesc);
+test('microDescNodeInfoToPeerInfo: creates PeerInfo with correct link specifiers', (t) => {
+  const relays = parseRelaysForTest(sampleMicroDesc);
   const nodeInfo = relays[0]!;
   const onionKey = Buffer.alloc(32).fill(0x42);
 
@@ -171,18 +161,18 @@ test('microDescNodeInfoToPeerInfo: creates PeerInfo with correct link specifiers
   t.is(legacyIdSpec!.data.length, 20); // SHA1 fingerprint
 });
 
-test('parseMicroDescConsensus: handles empty input', async (t) => {
-  const relays = await parseRelaysForTest('');
+test('parseMicroDescConsensus: handles empty input', (t) => {
+  const relays = parseRelaysForTest('');
   t.is(relays.length, 0);
 });
 
-test('parseMicroDescConsensus: handles input with no relay entries', async (t) => {
+test('parseMicroDescConsensus: handles input with no relay entries', (t) => {
   const headerOnly = `network-status-version 3 microdesc
 vote-status consensus
 valid-after 2024-01-01 00:00:00
 directory-footer
 `;
 
-  const relays = await parseRelaysForTest(headerOnly);
+  const relays = parseRelaysForTest(headerOnly);
   t.is(relays.length, 0);
 });

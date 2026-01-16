@@ -5,9 +5,10 @@ import path from 'node:path';
 import {
   dangerouslyDownloadMicrodescFromDirectory,
   parseMicroDescConsensus,
+  dangerouslyTrustUnverifiedConsensus,
   dangerouslyLookupPeerInfo,
 } from './directory.ts';
-import type { MicroDescConsensus, MicroDescNodeInfo } from './directory.ts';
+import type { MicroDescNodeInfo, VerifiedMicroDescConsensus } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
 import { DirectoryClient, lookupPeerInfo } from '../directory-client.ts';
 
@@ -67,16 +68,20 @@ export async function discoverChutneyDirectoryServer(): Promise<string> {
 
 export async function getChutneyMicrodescConsensus(): Promise<{
   directoryServer: string;
-  consensus: MicroDescConsensus;
+  consensus: VerifiedMicroDescConsensus;
 }> {
   const directoryServer = await discoverDirectoryServerIpPort();
   const microDescContent = await dangerouslyDownloadMicrodescFromDirectory(directoryServer);
-  // Disable signature verification for Chutney - test networks use local
-  // directory authorities that don't match the hardcoded mainnet authorities
-  const consensus = await parseMicroDescConsensus(microDescContent, {
-    keyCertificates: [],
-    dangerouslySkipSignatureVerification: true,
-  });
+  const unverified = parseMicroDescConsensus(microDescContent);
+
+  // SKIP VERIFICATION: Chutney is a test network with local directory authorities
+  // that don't match the hardcoded mainnet authorities. Signature verification
+  // would always fail because the test authorities' keys aren't known.
+  const consensus = dangerouslyTrustUnverifiedConsensus(
+    unverified,
+    'Chutney test network (local authorities, no mainnet keys)'
+  );
+
   return { directoryServer, consensus };
 }
 
@@ -223,15 +228,17 @@ export async function getRandomChutneyCircuitPathToTarget(
  */
 export async function getChutneyMicrodescConsensusSafe(
   directoryCircuit: Circuit
-): Promise<MicroDescConsensus> {
+): Promise<VerifiedMicroDescConsensus> {
   const client = new DirectoryClient(directoryCircuit);
   const microDescContent = await client.downloadMicrodescConsensus();
-  // Disable signature verification for Chutney - test networks use local
-  // directory authorities that don't match the hardcoded mainnet authorities
-  return await parseMicroDescConsensus(microDescContent, {
-    keyCertificates: [],
-    dangerouslySkipSignatureVerification: true,
-  });
+  const unverified = parseMicroDescConsensus(microDescContent);
+
+  // SKIP VERIFICATION: Chutney is a test network with local directory authorities
+  // that don't match the hardcoded mainnet authorities.
+  return dangerouslyTrustUnverifiedConsensus(
+    unverified,
+    'Chutney test network (local authorities, no mainnet keys)'
+  );
 }
 
 /**
@@ -244,12 +251,14 @@ export async function getRandomChutneyCircuitPathSafe(
 ): Promise<PeerInfo[]> {
   const client = new DirectoryClient(directoryCircuit);
   const microDescContent = await client.downloadMicrodescConsensus();
-  // Disable signature verification for Chutney - test networks use local
-  // directory authorities that don't match the hardcoded mainnet authorities
-  const consensus = await parseMicroDescConsensus(microDescContent, {
-    keyCertificates: [],
-    dangerouslySkipSignatureVerification: true,
-  });
+  const unverified = parseMicroDescConsensus(microDescContent);
+
+  // SKIP VERIFICATION: Chutney is a test network with local directory authorities
+  // that don't match the hardcoded mainnet authorities.
+  const consensus = dangerouslyTrustUnverifiedConsensus(
+    unverified,
+    'Chutney test network (local authorities, no mainnet keys)'
+  );
   const microDescNodeInfos = consensus.relays;
 
   const circuitPlan: Array<MicroDescNodeInfo> = [];
@@ -295,12 +304,14 @@ export async function getRandomChutneyCircuitPathToTargetSafe(
 ): Promise<PeerInfo[]> {
   const client = new DirectoryClient(directoryCircuit);
   const microDescContent = await client.downloadMicrodescConsensus();
-  // Disable signature verification for Chutney - test networks use local
-  // directory authorities that don't match the hardcoded mainnet authorities
-  const consensus = await parseMicroDescConsensus(microDescContent, {
-    keyCertificates: [],
-    dangerouslySkipSignatureVerification: true,
-  });
+  const unverified = parseMicroDescConsensus(microDescContent);
+
+  // SKIP VERIFICATION: Chutney is a test network with local directory authorities
+  // that don't match the hardcoded mainnet authorities.
+  const consensus = dangerouslyTrustUnverifiedConsensus(
+    unverified,
+    'Chutney test network (local authorities, no mainnet keys)'
+  );
   const microDescNodeInfos = consensus.relays;
 
   const avoid = new Set<string>([

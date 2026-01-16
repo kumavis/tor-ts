@@ -397,40 +397,131 @@ export function parseMicrodescriptorBatch(
   return result;
 }
 
-// Re-export types from directory.ts for convenience
-import type {
-  MicroDescNodeInfo,
-  MicroDescConsensus,
-  ParseMicroDescConsensusOptions,
-} from './build-circuit/directory.ts';
-import { parseMicroDescConsensus, microDescNodeInfoToPeerInfo } from './build-circuit/directory.ts';
-
-export {
+import type { MicroDescNodeInfo, VerifiedMicroDescConsensus } from './build-circuit/directory.ts';
+import {
   parseMicroDescConsensus,
-  type MicroDescNodeInfo,
-  type MicroDescConsensus,
-  type ParseMicroDescConsensusOptions,
+  parseAndVerifyConsensus,
+  microDescNodeInfoToPeerInfo,
+  dangerouslyTrustUnverifiedConsensus,
+} from './build-circuit/directory.ts';
+
+import type { AuthorityKeyCertificate } from './consensus-signature.ts';
+import { parseAllKeyCertificates } from './consensus-signature.ts';
+
+/**
+ * Options for fetching and verifying consensus.
+ */
+export type FetchConsensusOptions = {
+  /**
+   * Timeout for directory operations in milliseconds.
+   * Default: 30000 (30 seconds)
+   */
+  timeoutMs?: number;
+
+  /**
+   * **DANGEROUS**: Skip consensus signature verification entirely.
+   *
+   * WARNING: This disables a critical security check. The consensus document
+   * could be forged by an attacker to direct you to malicious relays.
+   *
+   * Only use this option if:
+   * - You're in a test environment
+   * - You're debugging/developing and understand the risks
+   * - The crypto implementation for your platform is not yet complete
+   *
+   * Default: false
+   */
+  dangerouslySkipSignatureVerification?: boolean;
+
+  /**
+   * Callback for consensus download progress.
+   */
+  onProgress?: DownloadProgressCallback;
+
+  /**
+   * Callback for status updates.
+   */
+  onStatus?: (status: string) => void;
 };
 
+/**
+ * Result of fetching and verifying consensus.
+ */
+export type FetchConsensusResult = {
+  /** The parsed and verified consensus */
+  consensus: VerifiedMicroDescConsensus;
+  /** The raw consensus content (useful for caching) */
+  rawContent: string;
+  /** The key certificates used for verification */
+  keyCertificates: AuthorityKeyCertificate[];
+  /** The DirectoryClient used (can be reused for further lookups) */
+  dirClient: DirectoryClient;
+};
+
+/**
+ * Fetch and verify consensus from a directory server via a Tor circuit.
+ *
+ * This is the standard flow for obtaining a verified consensus:
+ * 1. Download key certificates from directory authorities
+ * 2. Download the microdescriptor consensus
+ * 3. Parse and verify consensus signatures
+ *
+ * @param circuit - The circuit to use for directory requests
+ * @param options - Options for fetching and verification
+ * @returns The verified consensus and related data
+ */
+export async function fetchAndVerifyConsensus(
+  circuit: Circuit,
+  options: FetchConsensusOptions = {}
+): Promise<FetchConsensusResult> {
+  const { timeoutMs, dangerouslySkipSignatureVerification = false, onProgress, onStatus } = options;
+
+  const dirClient = new DirectoryClient(circuit, timeoutMs ? { timeoutMs } : undefined);
+
+  // Download consensus
+  onStatus?.('Downloading network consensus...');
+  const rawContent = await dirClient.downloadMicrodescConsensus(onProgress);
+
+  let consensus: VerifiedMicroDescConsensus;
+  let keyCertificates: AuthorityKeyCertificate[] = [];
+
+  if (dangerouslySkipSignatureVerification) {
+    // Parse without verification - only for testing (e.g., Chutney)
+    const unverified = parseMicroDescConsensus(rawContent);
+    // SKIP VERIFICATION: Caller explicitly requested dangerouslySkipSignatureVerification.
+    // This should only be used in test environments (Chutney) where directory
+    // authorities don't match mainnet authorities.
+    consensus = dangerouslyTrustUnverifiedConsensus(
+      unverified,
+      'dangerouslySkipSignatureVerification=true (caller explicitly skipped)'
+    );
+  } else {
+    // Download key certificates for signature verification
+    onStatus?.('Downloading authority key certificates...');
+    const keyCertsText = await dirClient.downloadKeyCertificates();
+    keyCertificates = parseAllKeyCertificates(keyCertsText);
+    onStatus?.(`Downloaded ${keyCertificates.length} key certificates`);
+
+    // Parse and verify
+    const result = await parseAndVerifyConsensus(rawContent, {
+      keyCertificates,
+    });
+    consensus = result.consensus;
+  }
+
+  if (consensus.relays.length === 0) {
+    throw new Error('No relays found in consensus');
+  }
+
+  return {
+    consensus,
+    rawContent,
+    keyCertificates,
+    dirClient,
+  };
+}
+
 // Re-export consensus signature types
-export type {
-  ConsensusSignature,
-  ConsensusVerificationResult,
-  DirectoryAuthorityIdentity,
-  AuthorityKeyCertificate,
-  VerifyConsensusOptions,
-  SignatureVerificationResult,
-} from './consensus-signature.ts';
-
-export {
-  DIRECTORY_AUTHORITIES,
-  verifyConsensusSignatures,
-  parseConsensusSignatures,
-  parseAllKeyCertificates,
-  findAuthorityByFingerprint,
-  extractAuthorityFingerprints,
-} from './consensus-signature.ts';
-
 /**
  * Safely look up a relay's onion key by downloading its server descriptor
  * through a circuit directory stream.
