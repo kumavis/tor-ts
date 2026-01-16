@@ -20,7 +20,7 @@
   "scripts": {
     "dev": "yarn workspace tor dev",
     "test": "yarn workspaces foreach -A run test",
-    "typecheck": "yarn workspace tor typecheck && yarn workspace snowflake typecheck && yarn workspace browser typecheck && yarn workspace tor-example-node-fetch typecheck && yarn workspace tor-example-http-proxy typecheck",
+    "typecheck": "yarn workspaces foreach -A run typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
     "lint": "eslint . --ext .ts,.js,.cjs",
