@@ -3,7 +3,7 @@ import { once } from 'node:events';
 import fs from 'node:fs/promises';
 import type net from 'node:net';
 
-import { connectToHiddenServiceOverChutney } from '../src/hidden-service.ts';
+import { makeChutneyTorClient } from '../src/build-circuit/chutney.ts';
 
 async function withTimeout<T>(label: string, ms: number, promise: Promise<T>): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
@@ -96,12 +96,28 @@ async function main() {
     }
     console.log('hidden service address:', onionAddress);
 
-    const { circuit, stream } = await withTimeout(
-      'connect to hidden service over chutney',
-      overallTimeoutMs + 90_000,
-      connectToHiddenServiceOverChutney({ onionAddress, port: hsVirtPort, overallTimeoutMs })
+    // Create Chutney client
+    const client = await withTimeout(
+      'create chutney client',
+      overallTimeoutMs,
+      makeChutneyTorClient({ onStatus: (msg) => console.log(`client: ${msg}`) })
     );
-    console.log('hs: connected, issuing HTTP request');
+
+    // Connect to hidden service
+    const { circuit } = await withTimeout(
+      'connect to hidden service',
+      overallTimeoutMs + 90_000,
+      client.connectToHiddenService(onionAddress, hsVirtPort, { overallTimeoutMs })
+    );
+    console.log('hs: connected, opening stream');
+
+    // Open stream to the hidden service
+    const stream = await withTimeout(
+      'open stream',
+      30_000,
+      circuit.open(`${onionAddress}:${hsVirtPort}`)
+    );
+    console.log('hs: stream open, issuing HTTP request');
 
     const responseChunks: Buffer[] = [];
     stream.on('data', (data: Buffer) => {
@@ -150,7 +166,7 @@ async function main() {
     console.log('hs: assertions passed, tearing down');
     // Best-effort close to avoid waiting for remote END cells.
     stream.destroy();
-    circuit.destroy();
+    client.destroy();
   } finally {
     // Ensure the process doesn't hang on lingering keepalive connections.
     for (const s of openSockets) s.destroy();

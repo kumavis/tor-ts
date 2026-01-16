@@ -105,24 +105,29 @@ async function wrapWithTLS(stream: CircuitStream, host: string): Promise<Transpo
 
       // Handle TLS end
       onTlsEnd: (error?: Error) => {
-        if (error && !handshakeComplete) {
-          safeReject(error);
-        } else if (error) {
-          for (const listener of errorListeners) {
-            listener(error);
-          }
-        }
-        if (!ended) {
-          ended = true;
-          if (endListeners.length > 0) {
-            for (const listener of endListeners) {
-              listener();
+        // Wait for any pending TLS processing to complete before firing end
+        // This prevents a race condition where CLOSE_NOTIFY arrives but data
+        // is still being processed in the queue
+        processingQueue.then(() => {
+          if (error && !handshakeComplete) {
+            safeReject(error);
+          } else if (error) {
+            for (const listener of errorListeners) {
+              listener(error);
             }
-          } else {
-            // Mark that end should be fired when listeners are added
-            endPending = true;
           }
-        }
+          if (!ended) {
+            ended = true;
+            if (endListeners.length > 0) {
+              for (const listener of endListeners) {
+                listener();
+              }
+            } else {
+              // Mark that end should be fired when listeners are added
+              endPending = true;
+            }
+          }
+        });
       },
 
       // Ignore certificate events and session tickets
@@ -277,7 +282,7 @@ export interface FetchViaTorOptions {
  * Supports HTTP and HTTPS (TLS is performed inside the Tor stream for HTTPS).
  * Automatically follows redirects (3xx responses) up to maxRedirects times.
  */
-export async function fetchViaTor(
+export async function fetchViaTorCircuit(
   circuit: Circuit,
   url: string,
   options: FetchViaTorOptions = {}
@@ -357,6 +362,11 @@ async function fetchViaTorInternal(
           redirectMethod = 'GET';
         }
       }
+
+      // Clean up current transport before following redirect
+      // This is essential to properly close the stream and avoid resource leaks
+      transport.removeAllListeners();
+      transport.destroy();
 
       return fetchViaTorInternal(
         circuit,
@@ -482,21 +492,4 @@ async function readHttpResponse(transport: Transport, timeout: number): Promise<
       reject(err);
     });
   });
-}
-
-/**
- * Simple helper to fetch HTML content.
- */
-export async function fetchHtml(circuit: Circuit, url: string): Promise<string> {
-  const response = await fetchViaTor(circuit, url, {
-    headers: {
-      Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-    },
-  });
-
-  if (response.status >= 400) {
-    throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
-  }
-
-  return response.body;
 }

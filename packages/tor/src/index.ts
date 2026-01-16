@@ -15,8 +15,16 @@ export * as mainnet from './build-circuit/mainnet.ts';
 // export * as messaging from './messaging'
 // export * as circuit from './circuit'
 // export * as channel from './channel'
-export { Circuit } from './circuit.ts';
-export { TlsChannelConnection } from './channel.ts';
+export { Circuit, DEFAULT_CIRCUIT_BUILD_TIMEOUT_MS, MAX_CIRCUIT_DIRTINESS_MS } from './circuit.ts';
+export {
+  TlsChannelConnection,
+  ChannelManager as GenericChannelManager,
+  createTlsChannelManager,
+  isTlsChannelAlive,
+  type TlsChannelManager,
+  type ChannelFactory,
+  type ChannelHealthCheck,
+} from './channel.ts';
 export { shuffleInPlace } from './util.ts';
 export * as hiddenService from './hidden-service.ts';
 // Consensus parsing (from build-circuit/directory)
@@ -103,3 +111,44 @@ export {
   type FallbackDirEntry,
   type FallbackDirsData,
 } from './fallback-dirs.ts';
+
+// Stream retry logic
+export {
+  RelayEndReasons,
+  RelayEndReasonNames,
+  getStreamRetryBehavior,
+  isRetryableEndReason,
+  type StreamRetryBehavior,
+} from './relay-cell.ts';
+
+// Directory request retry constants
+export { MAX_DIRECTORY_REQUEST_RETRIES } from './directory-client.ts';
+
+// Tor Client (shared across all platforms)
+export {
+  TorClient,
+  type TorClientDeps,
+  type BuildGeneralCircuitFn,
+  type FetchOverCircuitFn,
+  type FetchOptions,
+  type FetchResponse,
+  type HsConnectionResult,
+  type CircuitResult,
+} from './client.ts';
+
+// Chutney Tor Client (test network)
+export {
+  makeChutneyTorClient,
+  type ChutneyTorClient,
+  type ChutneyTorClientOptions,
+} from './build-circuit/chutney.ts';
+
+// Node.js Tor Client (main network)
+export {
+  makeNodejsTorClient,
+  type NodeTorClient,
+  type NodeTorClientOptions,
+} from './build-circuit/node-client.ts';
+
+// Node.js HTTP fetch over Tor
+export { fetchViaTorCircuit } from './http-fetch.ts';

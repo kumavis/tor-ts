@@ -203,10 +203,13 @@ export class ConsensusManager {
   }
 
   /**
-   * Get the current consensus, refreshing if stale.
+   * Get the current consensus, refreshing only if expired.
+   *
+   * Returns the cached consensus if it's still valid (even if no longer fresh).
+   * Only triggers a refresh if the consensus has expired (current time >= validUntil).
    */
   async getConsensus(): Promise<VerifiedMicroDescConsensus> {
-    if (this.consensus && isConsensusFresh(this.consensus)) {
+    if (this.consensus && isConsensusTtlValid(this.consensus)) {
       return this.consensus;
     }
     return this.refresh();
@@ -274,14 +277,7 @@ export class ConsensusManager {
     const onStatus = mergedOptions.onStatus;
 
     onStatus?.('Refreshing consensus...');
-    const result = await fetchAndVerifyConsensus(this.circuit, {
-      ...(mergedOptions.timeoutMs !== undefined && { timeoutMs: mergedOptions.timeoutMs }),
-      ...(mergedOptions.dangerouslySkipSignatureVerification !== undefined && {
-        dangerouslySkipSignatureVerification: mergedOptions.dangerouslySkipSignatureVerification,
-      }),
-      ...(mergedOptions.onProgress && { onProgress: mergedOptions.onProgress }),
-      ...(onStatus && { onStatus }),
-    });
+    const result = await this.fetchConsensus(mergedOptions);
 
     this.consensus = result.consensus;
 
@@ -299,6 +295,23 @@ export class ConsensusManager {
     );
 
     return result.consensus;
+  }
+
+  /**
+   * Fetch and verify consensus from the network.
+   * Override this method in subclasses for different networks (e.g., Chutney).
+   */
+  protected async fetchConsensus(
+    options: ConsensusRefreshOptions
+  ): Promise<{ consensus: VerifiedMicroDescConsensus; rawContent: string }> {
+    return fetchAndVerifyConsensus(this.circuit, {
+      ...(options.timeoutMs !== undefined && { timeoutMs: options.timeoutMs }),
+      ...(options.dangerouslySkipSignatureVerification !== undefined && {
+        dangerouslySkipSignatureVerification: options.dangerouslySkipSignatureVerification,
+      }),
+      ...(options.onProgress && { onProgress: options.onProgress }),
+      ...(options.onStatus && { onStatus: options.onStatus }),
+    });
   }
 
   /**

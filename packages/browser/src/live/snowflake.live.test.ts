@@ -7,16 +7,16 @@
  * - Access to snowflake.torproject.net
  * - May take 60-180 seconds to complete
  *
- * The circuit is established ONCE at the start and shared across all tests
+ * The client is established ONCE at the start and shared across all tests
  * to avoid repeatedly downloading the ~3.35MB consensus.
  */
 
 import { describe, it, expect, beforeAll, afterAll } from 'vitest';
-import { connectBrowserCircuit, fetchHtml } from '../index.ts';
-import type { BrowserCircuit } from '../index.ts';
+import { makeBrowserTorClient, fetchHtml } from '../index.ts';
+import type { BrowserTorClient } from '../index.ts';
 
-// Shared circuit - established once, used by all tests
-let sharedCircuit: BrowserCircuit | null = null;
+// Shared client - established once, used by all tests
+let sharedClient: BrowserTorClient | null = null;
 const statusMessages: string[] = [];
 
 /**
@@ -24,10 +24,10 @@ const statusMessages: string[] = [];
  * This downloads the consensus (~3.35MB) which is slow in browser JS TLS.
  */
 beforeAll(async () => {
-  console.log('[test] Establishing shared Tor circuit via Snowflake...');
+  console.log('[test] Establishing shared Tor client via Snowflake...');
   console.log('[test] This downloads ~3.35MB consensus - please be patient...');
 
-  sharedCircuit = await connectBrowserCircuit({
+  const result = await makeBrowserTorClient({
     onStatus: (status) => {
       console.log('[test] Status:', status);
       statusMessages.push(status);
@@ -43,26 +43,27 @@ beforeAll(async () => {
     // Signature verification is enabled - uses pure-JS RSA for Tor's unprefixed PKCS#1 v1.5 signatures
   });
 
-  console.log('[test] Shared circuit established!');
+  sharedClient = result.client;
+  console.log('[test] Shared client established!');
 }, 600_000); // 10 minute timeout - consensus download via JS TLS is slow
 
 /**
- * Global teardown - destroy the circuit after all tests.
+ * Global teardown - destroy the client after all tests.
  */
 afterAll(() => {
-  if (sharedCircuit) {
-    console.log('[test] Destroying shared circuit...');
-    sharedCircuit.destroy();
-    sharedCircuit = null;
+  if (sharedClient) {
+    console.log('[test] Destroying shared client...');
+    sharedClient.destroy();
+    sharedClient = null;
   }
 });
 
-describe('Snowflake Live: Circuit Connection', () => {
-  it('establishes a valid circuit', () => {
-    expect(sharedCircuit).toBeDefined();
-    expect(sharedCircuit!.circuit).toBeDefined();
-    expect(sharedCircuit!.channel).toBeDefined();
-    expect(typeof sharedCircuit!.destroy).toBe('function');
+describe('Snowflake Live: Client Connection', () => {
+  it('establishes a valid client', () => {
+    expect(sharedClient).toBeDefined();
+    expect(sharedClient!.consensus).toBeDefined();
+    expect(typeof sharedClient!.fetch).toBe('function');
+    expect(typeof sharedClient!.destroy).toBe('function');
   }, 180_000);
 
   it('received status updates during connection', () => {
@@ -79,19 +80,21 @@ describe('Snowflake Live: Circuit Connection', () => {
     ).toBe(true);
   }, 180_000);
 
-  it('received circuit established message', () => {
-    expect(statusMessages.some((s) => s.includes('established') || s.includes('Circuit'))).toBe(
-      true
-    );
+  it('received client established message', () => {
+    expect(
+      statusMessages.some(
+        (s) => s.includes('established') || s.includes('Client') || s.includes('initialized')
+      )
+    ).toBe(true);
   }, 180_000);
 });
 
 describe('Snowflake Live: Fetch via Tor', () => {
   it('fetches example.com HTML through Tor', async () => {
-    expect(sharedCircuit).toBeDefined();
+    expect(sharedClient).toBeDefined();
 
     console.log('[test] Fetching https://example.com/...');
-    const html = await fetchHtml(sharedCircuit!.circuit, 'https://example.com/');
+    const html = await fetchHtml(sharedClient!, 'https://example.com/');
 
     expect(html).toBeDefined();
     expect(typeof html).toBe('string');
@@ -101,32 +104,32 @@ describe('Snowflake Live: Fetch via Tor', () => {
   }, 180_000);
 
   it('fetches httpbin.org/ip to verify exit node', async () => {
-    expect(sharedCircuit).toBeDefined();
+    expect(sharedClient).toBeDefined();
 
     console.log('[test] Fetching https://httpbin.org/ip...');
-    const response = await fetchHtml(sharedCircuit!.circuit, 'https://httpbin.org/ip');
+    const response = await sharedClient!.fetch('https://httpbin.org/ip');
 
     expect(response).toBeDefined();
-    expect(typeof response).toBe('string');
+    expect(response.status).toBe(200);
     // Response should be JSON with "origin" field containing an IP
-    expect(response).toContain('origin');
-    console.log('[test] Response:', response);
+    expect(response.body).toContain('origin');
+    console.log('[test] Response:', response.body);
   }, 180_000);
 });
 
 describe('Snowflake Live: Error Handling', () => {
   it('handles fetch to non-existent domain', async () => {
-    expect(sharedCircuit).toBeDefined();
+    expect(sharedClient).toBeDefined();
 
     await expect(
-      fetchHtml(sharedCircuit!.circuit, 'https://this-domain-definitely-does-not-exist-12345.com/')
+      sharedClient!.fetch('https://this-domain-definitely-does-not-exist-12345.com/')
     ).rejects.toThrow();
   }, 180_000);
 
   it('handles fetch with invalid URL', async () => {
-    expect(sharedCircuit).toBeDefined();
+    expect(sharedClient).toBeDefined();
 
-    await expect(fetchHtml(sharedCircuit!.circuit, 'not-a-valid-url')).rejects.toThrow();
+    await expect(sharedClient!.fetch('not-a-valid-url')).rejects.toThrow();
   }, 180_000);
 });
 

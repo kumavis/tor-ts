@@ -87,6 +87,12 @@ import { ReadableStream, WritableStream } from 'stream/web';
 const KEY_LEN = 16;
 const HASH_LEN = 20;
 
+// Circuit timing constants (per Tor spec path-spec/learning-timeouts.md)
+/** Default circuit build timeout in milliseconds (before learning) */
+export const DEFAULT_CIRCUIT_BUILD_TIMEOUT_MS = 60_000;
+/** MaxCircuitDirtiness - after this many ms since first stream, no new streams attach */
+export const MAX_CIRCUIT_DIRTINESS_MS = 10 * 60 * 1000; // 10 minutes
+
 const DestroyReasonNames: Record<number, string> = {
   0: 'NONE',
   1: 'PROTOCOL',
@@ -393,6 +399,14 @@ export class Circuit extends EventEmitter {
   }> = [];
   private sendmeProcessing = false;
 
+  // Circuit lifecycle tracking
+  /** When the circuit was created */
+  createdAt: number = Date.now();
+  /** When the circuit became "dirty" (first stream attached). undefined = clean */
+  dirtyAt: number | undefined;
+  /** Whether this circuit has been destroyed */
+  isDestroyed = false;
+
   constructor({ path, channel }: { path: Array<PeerInfo>; channel: ChannelConnection }) {
     super();
     this.channel = channel;
@@ -435,10 +449,34 @@ export class Circuit extends EventEmitter {
     return hop;
   }
 
-  async connect() {
+  /**
+   * Connect to all hops in sequence.
+   * @param options.timeoutMs - Overall timeout in milliseconds (default: 60000)
+   */
+  async connect(options?: { timeoutMs?: number }) {
+    const timeoutMs = options?.timeoutMs ?? DEFAULT_CIRCUIT_BUILD_TIMEOUT_MS;
+    const deadline = Date.now() + timeoutMs;
+
     for (const hop of this.hops) {
-      await this.performHandshakeForHop(hop);
+      const remainingMs = deadline - Date.now();
+      if (remainingMs <= 0) {
+        throw new Error(
+          `Circuit build timeout: exceeded ${timeoutMs}ms after ${this.hops.indexOf(hop)} hops`
+        );
+      }
+      await this.performHandshakeForHopWithTimeout(hop, remainingMs);
     }
+  }
+
+  /**
+   * Perform handshake for a hop with timeout.
+   */
+  private async performHandshakeForHopWithTimeout(hop: Hop, timeoutMs: number): Promise<void> {
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      setTimeout(() => reject(new Error(`Hop handshake timeout after ${timeoutMs}ms`)), timeoutMs);
+    });
+
+    await Promise.race([this.performHandshakeForHop(hop), timeoutPromise]);
   }
 
   async performHandshakeForHop(hop: Hop) {
@@ -804,6 +842,11 @@ export class Circuit extends EventEmitter {
   }
 
   createStream(destination: string): CircuitStream {
+    // Mark circuit as dirty on first stream
+    if (this.dirtyAt === undefined) {
+      this.dirtyAt = Date.now();
+    }
+
     const streamId = ++this.lastStreamId;
     const stream = new CircuitStream();
     stream.streamId = streamId;
@@ -815,6 +858,35 @@ export class Circuit extends EventEmitter {
     };
     this.streams.push(stream);
     return stream;
+  }
+
+  /**
+   * Check if this circuit is "clean" (no streams have been attached).
+   */
+  isClean(): boolean {
+    return this.dirtyAt === undefined;
+  }
+
+  /**
+   * Check if new streams can attach to this circuit.
+   * After MaxCircuitDirtiness (10 min), no new streams can attach.
+   */
+  canAttachNewStreams(): boolean {
+    if (this.isDestroyed) return false;
+    if (this.dirtyAt === undefined) return true; // Clean circuits can always accept streams
+
+    const dirtyDuration = Date.now() - this.dirtyAt;
+    return dirtyDuration < MAX_CIRCUIT_DIRTINESS_MS;
+  }
+
+  /**
+   * Get the time remaining before this circuit becomes unusable for new streams.
+   * Returns undefined if clean, 0 if already expired, or remaining milliseconds.
+   */
+  getRemainingDirtinessMs(): number | undefined {
+    if (this.dirtyAt === undefined) return undefined;
+    const remaining = MAX_CIRCUIT_DIRTINESS_MS - (Date.now() - this.dirtyAt);
+    return Math.max(0, remaining);
   }
 
   async performStreamHandshake(stream: CircuitStream): Promise<void> {
@@ -850,12 +922,21 @@ export class Circuit extends EventEmitter {
    *   Use this when the channel is shared with another circuit.
    */
   destroy(options?: { preserveChannel?: boolean }) {
+    if (this.isDestroyed) return;
+    this.isDestroyed = true;
+
     if (this.unsubscribeFromChannel) {
       this.unsubscribeFromChannel();
     }
     if (!options?.preserveChannel) {
       this.channel.destroy();
     }
+
+    // Destroy all streams
+    for (const stream of this.streams) {
+      stream.destroy(new Error('Circuit destroyed'));
+    }
+    this.streams = [];
   }
 
   /**
