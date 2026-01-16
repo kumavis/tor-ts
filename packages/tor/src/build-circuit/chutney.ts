@@ -1,7 +1,7 @@
-import { Circuit, type PeerInfo } from '../circuit.ts';
-import { TlsChannelConnection } from '../channel.ts';
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import { Circuit, type PeerInfo } from '../circuit.ts';
+import { TlsChannelConnection, createTlsChannelManager } from '../channel.ts';
 import {
   dangerouslyDownloadMicrodescFromDirectory,
   parseMicroDescConsensus,
@@ -11,6 +11,10 @@ import {
 import type { MicroDescNodeInfo, VerifiedMicroDescConsensus } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
 import { DirectoryClient, lookupPeerInfo } from '../directory-client.ts';
+import { type BuildCircuitFn } from '../hidden-service.ts';
+import { TorClient, type CircuitResult } from '../client.ts';
+import { fetchViaTorCircuit } from '../http-fetch.ts';
+import { ConsensusManager, type ConsensusRefreshOptions } from '../consensus-manager.ts';
 
 function mustFindMicroDescNodeInfo(
   nodes: MicroDescNodeInfo[],
@@ -354,4 +358,151 @@ export async function connectRandomChutneyCircuitSafe(directoryCircuit: Circuit)
   });
   await circuit.connect();
   return circuit;
+}
+
+// ============================================================================
+// Chutney Tor Client
+// ============================================================================
+
+export type ChutneyTorClientOptions = {
+  /** Callback for status updates */
+  onStatus?: (status: string) => void;
+};
+
+/**
+ * Chutney Tor client - TorClient configured for Chutney test network.
+ */
+export type ChutneyTorClient = TorClient<TlsChannelConnection>;
+
+/**
+ * Consensus manager for Chutney test networks.
+ *
+ * Chutney uses local directory authorities that don't match mainnet keys,
+ * so signature verification is skipped.
+ */
+class ChutneyConsensusManager extends ConsensusManager {
+  protected override async fetchConsensus(
+    options: ConsensusRefreshOptions
+  ): Promise<{ consensus: VerifiedMicroDescConsensus; rawContent: string }> {
+    const client = new DirectoryClient(this.circuit);
+    const rawContent = await client.downloadMicrodescConsensus(options.onProgress);
+
+    const unverified = parseMicroDescConsensus(rawContent);
+
+    // SKIP VERIFICATION: Chutney is a test network with local directory authorities
+    // that don't match the hardcoded mainnet authorities.
+    const consensus = dangerouslyTrustUnverifiedConsensus(
+      unverified,
+      'Chutney test network (local authorities, no mainnet keys)'
+    );
+
+    return { consensus, rawContent };
+  }
+}
+
+/**
+ * Create a Tor client for the Chutney test network.
+ *
+ * This performs bootstrap (consensus fetch, circuit building) and returns
+ * a long-lived client that can be used for multiple operations.
+ *
+ * @example
+ * ```typescript
+ * const client = await makeChutneyTorClient();
+ *
+ * // Connect to hidden services
+ * const hs = await client.connectToHiddenService('xyz.onion', 80);
+ *
+ * // Build circuits
+ * const circ = await client.buildCircuit();
+ *
+ * // Cleanup when done
+ * client.destroy();
+ * ```
+ */
+export async function makeChutneyTorClient(
+  options: ChutneyTorClientOptions = {}
+): Promise<ChutneyTorClient> {
+  const { onStatus } = options;
+
+  const log = (msg: string) => {
+    console.log(`[chutney-client] ${msg}`);
+    onStatus?.(msg);
+  };
+
+  log('Bootstrapping...');
+
+  // Create channel manager for TLS connection reuse
+  const channelManager = createTlsChannelManager();
+
+  // Get consensus
+  const { consensus } = await getChutneyMicrodescConsensus();
+  log(`Got consensus with ${consensus.relays.length} relays`);
+
+  // Build bootstrap circuit
+  const bootstrapPath = await getRandomChutneyCircuitPath();
+  const bootstrapFirst = bootstrapPath[0];
+  if (!bootstrapFirst) throw new Error('Empty bootstrap circuit path');
+
+  const bootstrapChannel = await channelManager.getOrCreate(bootstrapFirst);
+  const bootstrapCircuit = new Circuit({ path: bootstrapPath, channel: bootstrapChannel });
+  await bootstrapCircuit.connect();
+  log('Bootstrap circuit established');
+
+  const dirClient = new DirectoryClient(bootstrapCircuit);
+
+  // Build circuit to a specific target (for hidden services)
+  const buildCircuitToTarget: BuildCircuitFn = async (target, opts) => {
+    const avoidRsaIdDigests = opts?.avoid?.map((p) => p.rsaIdDigest);
+    const path = await getRandomChutneyCircuitPathToTargetSafe(
+      bootstrapCircuit,
+      target,
+      avoidRsaIdDigests ? { avoidRsaIdDigests } : undefined
+    );
+    const first = path[0];
+    if (!first) throw new Error('Empty circuit path');
+
+    const channel = await channelManager.getOrCreate(first);
+    const circuit = new Circuit({ path, channel });
+    await circuit.connect();
+    return circuit;
+  };
+
+  // Build a general circuit
+  const buildCircuit = async (_opts?: { targetPorts?: number[] }): Promise<CircuitResult> => {
+    const path = await getRandomChutneyCircuitPath();
+    const first = path[0];
+    if (!first) throw new Error('Empty circuit path');
+
+    const channel = await channelManager.getOrCreate(first);
+    const circuit = new Circuit({ path, channel });
+    await circuit.connect();
+
+    log(`Built circuit: ${path.map((p) => p.rsaIdDigest.toString('hex').slice(0, 8)).join(' → ')}`);
+
+    return {
+      circuit,
+      destroy: () => circuit.destroy({ preserveChannel: true }),
+    };
+  };
+
+  // Create Chutney-specific consensus manager (skips signature verification)
+  const consensusManager = new ChutneyConsensusManager(bootstrapCircuit, {
+    initialVerifiedConsensus: consensus,
+  });
+
+  log('Client initialized');
+
+  // Create and return the client
+  return new TorClient({
+    channelManager,
+    consensusManager,
+    dirClient,
+    bootstrapCircuit,
+    consensus,
+    buildCircuitToTarget,
+    buildCircuit,
+    fetchOverCircuit: fetchViaTorCircuit,
+    log,
+  });
 }

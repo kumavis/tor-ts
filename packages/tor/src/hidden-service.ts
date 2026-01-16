@@ -5,19 +5,7 @@ import type { LinkSpecifier } from './messaging.ts';
 import { RelayCell } from './relay-cell.ts';
 import { makeAes256CtrKey } from './aes.ts';
 import { parseEd25519Certificate } from './cert.ts';
-import {
-  Circuit,
-  type CircuitCipherPair,
-  type CircuitStream,
-  type PeerInfo,
-  type CopyableHash,
-} from './circuit.ts';
-import { TlsChannelConnection } from './channel.ts';
-import {
-  getChutneyMicrodescConsensus,
-  getRandomChutneyCircuitPath,
-  getRandomChutneyCircuitPathToTargetSafe,
-} from './build-circuit/chutney.ts';
+import { Circuit, type CircuitCipherPair, type PeerInfo, type CopyableHash } from './circuit.ts';
 import { pickRelayWithFlags } from './build-circuit/util.ts';
 import {
   DirectoryClient,
@@ -1335,73 +1323,4 @@ export async function connectToHiddenServiceCore(
   log('Connected to hidden service!');
 
   return { circuit: rendCircuit, descriptor };
-}
-
-export async function connectToHiddenServiceOverChutney(params: {
-  onionAddress: string;
-  port: number;
-  overallTimeoutMs?: number;
-}): Promise<{ circuit: Circuit; stream: CircuitStream }> {
-  const overallTimeoutMs = params.overallTimeoutMs ?? 120_000;
-
-  // Bootstrap: Get consensus using dangerous direct fetch (unavoidable for initial bootstrap)
-  console.log('hs: bootstrapping...');
-  const { consensus } = await getChutneyMicrodescConsensus();
-
-  if (!consensus.validAfter) {
-    throw new Error('Consensus missing valid-after; cannot compute HS time period');
-  }
-
-  // Build a random bootstrap circuit for directory lookups
-  const bootstrapPath = await getRandomChutneyCircuitPath();
-  const bootstrapFirst = bootstrapPath[0];
-  if (!bootstrapFirst) throw new Error('Empty bootstrap circuit path');
-
-  const bootstrapChannel = new TlsChannelConnection();
-  await bootstrapChannel.connectPeerInfo(bootstrapFirst);
-  const bootstrapCircuit = new Circuit({ path: bootstrapPath, channel: bootstrapChannel });
-  await bootstrapCircuit.connect();
-
-  const dirClient = new DirectoryClient(bootstrapCircuit);
-
-  // Chutney circuit builder: creates new TLS channel per circuit
-  const buildCircuit: BuildCircuitFn = async (target, options) => {
-    const avoidRsaIdDigests = options?.avoid?.map((p) => p.rsaIdDigest);
-    const path = await getRandomChutneyCircuitPathToTargetSafe(
-      bootstrapCircuit,
-      target,
-      avoidRsaIdDigests ? { avoidRsaIdDigests } : undefined
-    );
-    const first = path[0];
-    if (!first) throw new Error('Empty circuit path');
-
-    const channel = new TlsChannelConnection();
-    await channel.connectPeerInfo(first);
-    const circuit = new Circuit({ path, channel });
-    await circuit.connect();
-    return circuit;
-  };
-
-  try {
-    const result = await connectToHiddenServiceCore(
-      { consensus, bootstrapCircuit, dirClient, buildCircuit },
-      params.onionAddress,
-      {
-        overallTimeoutMs,
-        log: (msg) => console.log(`hs: ${msg}`),
-        randomBytes: (len) => crypto.randomBytes(len),
-      }
-    );
-
-    // Clean up bootstrap circuit
-    bootstrapCircuit.destroy();
-
-    // Open stream to the hidden service
-    console.log('hs: open stream');
-    const stream = await result.circuit.open(`${params.onionAddress}:${params.port}`);
-    return { circuit: result.circuit, stream };
-  } catch (err) {
-    bootstrapCircuit.destroy();
-    throw err;
-  }
 }

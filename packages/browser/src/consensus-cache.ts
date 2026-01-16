@@ -109,10 +109,14 @@ export interface ConsensusCacheStatus {
   cached: boolean;
   /** Size of cached consensus in bytes (if cached) */
   sizeBytes?: number;
+  /** Fresh-until date parsed from consensus (if cached) */
+  freshUntil?: Date;
   /** Valid-until date parsed from consensus (if cached) */
   validUntil?: Date;
-  /** Whether the cached consensus is still fresh (before valid-until) */
+  /** Whether the cached consensus is still fresh (before fresh-until) */
   isFresh?: boolean;
+  /** Whether the cached consensus is still valid (before valid-until) */
+  isValid?: boolean;
 }
 
 /**
@@ -125,20 +129,34 @@ export function getConsensusCacheStatus(): ConsensusCacheStatus {
     return { cached: false };
   }
 
+  const now = new Date();
+
+  // Parse fresh-until from consensus
+  const freshUntilMatch = text.match(/^fresh-until (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})$/m);
+  let freshUntil: Date | undefined;
+  let isFresh: boolean | undefined;
+
+  if (freshUntilMatch?.[1]) {
+    freshUntil = new Date(freshUntilMatch[1].replace(' ', 'T') + 'Z');
+    isFresh = freshUntil > now;
+  }
+
   // Parse valid-until from consensus
   const validUntilMatch = text.match(/^valid-until (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})$/m);
   let validUntil: Date | undefined;
-  let isFresh: boolean | undefined;
+  let isValid: boolean | undefined;
 
   if (validUntilMatch?.[1]) {
     validUntil = new Date(validUntilMatch[1].replace(' ', 'T') + 'Z');
-    isFresh = validUntil > new Date();
+    isValid = validUntil > now;
   }
 
   return {
     cached: true,
     sizeBytes: text.length,
+    freshUntil,
     validUntil,
     isFresh,
+    isValid,
   };
 }

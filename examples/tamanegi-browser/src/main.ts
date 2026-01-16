@@ -3,16 +3,8 @@
  * Uses Snowflake to browse the web through Tor entirely in the browser.
  */
 
-import {
-  connectBrowserCircuit,
-  fetchHtml,
-  getConsensusCacheStatus,
-  clearCachedConsensus,
-  connectToHiddenService,
-  isOnionAddress,
-  fetchViaTor,
-} from 'browser';
-import type { BrowserCircuit, DownloadProgress, HiddenServiceConnection } from 'browser';
+import { getConsensusCacheStatus, makeBrowserTorClient, isOnionAddress, fetchHtml } from 'browser';
+import type { DownloadProgress, BrowserTorClient } from 'browser';
 
 // Types
 type ViewMode = 'info' | 'browser';
@@ -83,8 +75,8 @@ const warningBanner = document.getElementById('warning-banner') as HTMLElement;
 const warningDismiss = document.getElementById('warning-dismiss') as HTMLButtonElement;
 
 // State
-let currentCircuit: BrowserCircuit | null = null;
-let currentHsConnection: HiddenServiceConnection | null = null;
+let client: BrowserTorClient | null = null;
+let clientPromise: Promise<BrowserTorClient> | null = null;
 let isConnecting = false;
 let currentPageUrl: URL | null = null;
 let linkMap: Map<number, string> = new Map();
@@ -424,17 +416,24 @@ function parseStatusMessage(status: string): void {
   }
 }
 
-// Circuit connection
-async function connectToTor(): Promise<BrowserCircuit> {
-  if (currentCircuit) {
-    return currentCircuit;
+// Lazy client creation - shared across clearnet and onion browsing
+async function getClient(): Promise<BrowserTorClient> {
+  // Return existing client
+  if (client) {
+    return client;
   }
 
+  // Return in-flight creation
+  if (clientPromise) {
+    return clientPromise;
+  }
+
+  // Create new client
   setStatus('connecting', 'Connecting...');
   log('Initializing Tor connection via Snowflake...', 'info');
   updateCircuitStatus('Initializing...');
 
-  const circuit = await connectBrowserCircuit({
+  clientPromise = makeBrowserTorClient({
     onStatus: (status) => {
       log(status, 'info');
       parseStatusMessage(status);
@@ -442,25 +441,25 @@ async function connectToTor(): Promise<BrowserCircuit> {
     onConsensusProgress: (progress) => {
       updateConsensusProgress(progress);
     },
-    // Signature verification uses pure-JS RSA for Tor's unprefixed PKCS#1 v1.5 signatures
+  }).then((result) => {
+    client = result.client;
+
+    // Update consensus panel to show cached state
+    showConsensusCached();
+    setStatus('connected', 'Connected');
+    log('Successfully connected to Tor network!', 'success');
+
+    // Ensure all nodes show as connected
+    setNodeState(snowflakeName, snowflakeStatus, nodeSnowflake, 'connected');
+    setNodeState(guardName, guardStatus, nodeGuard, 'connected');
+    setNodeState(middleName, middleStatus, nodeMiddle, 'connected');
+    setNodeState(exitName, exitStatus, nodeExit, 'connected');
+    updateCircuitStatus('Client ready');
+
+    return client;
   });
 
-  // Update consensus panel to show cached state
-  showConsensusCached();
-  currentCircuit = circuit;
-  setStatus('connected', 'Connected');
-  log('Successfully connected to Tor network!', 'success');
-
-  // Ensure all nodes show as connected (status messages should have already done this,
-  // but this ensures correct state if messages were missed)
-  // Don't overwrite names - they were set from status messages with actual nicknames
-  setNodeState(snowflakeName, snowflakeStatus, nodeSnowflake, 'connected');
-  setNodeState(guardName, guardStatus, nodeGuard, 'connected');
-  setNodeState(middleName, middleStatus, nodeMiddle, 'connected');
-  setNodeState(exitName, exitStatus, nodeExit, 'connected');
-  updateCircuitStatus('Circuit ready');
-
-  return circuit;
+  return clientPromise;
 }
 
 // Fetch and display page
@@ -472,14 +471,16 @@ async function browsePage(url: string): Promise<void> {
   try {
     // Add protocol if missing
     if (!url.startsWith('http://') && !url.startsWith('https://')) {
-      url = 'http://' + url; // Default to http for .onion, https for others
+      // Check if it looks like an onion address (before we have a full URL)
+      const looksLikeOnion = url.split('/')[0]?.endsWith('.onion');
+      // Default to HTTP for onion (Tor provides encryption), HTTPS for clearnet
+      url = (looksLikeOnion ? 'http://' : 'https://') + url;
     }
     parsedUrl = new URL(url);
 
-    // For .onion addresses, use http (most onion services use http since Tor provides encryption)
+    // For .onion addresses with explicit https, warn that many don't support it
     const isOnion = isOnionAddress(parsedUrl.hostname);
     if (isOnion && parsedUrl.protocol === 'https:') {
-      // Keep https if explicitly specified, but note that many .onion sites use http
       log('Note: Using HTTPS for .onion (some sites may only support HTTP)', 'info');
     }
   } catch {
@@ -512,14 +513,32 @@ async function browsePage(url: string): Promise<void> {
   );
 
   try {
-    let html: string;
+    // Get or create client
+    const torClient = await getClient();
 
+    // Update UI for onion sites (HS connection takes time)
     if (isOnion) {
-      // Hidden service path
-      html = await browseOnionPage(parsedUrl);
-    } else {
-      // Regular clearnet path
-      html = await browseClearnetPage(parsedUrl);
+      updateCircuitStatus('Connecting to hidden service...');
+      setNodeState(snowflakeName, snowflakeStatus, nodeSnowflake, 'connected', 'Connected');
+      setNodeState(guardName, guardStatus, nodeGuard, 'connecting', 'Connecting...');
+      setNodeState(middleName, middleStatus, nodeMiddle, 'waiting', 'Waiting...');
+      setNodeState(exitName, exitStatus, nodeExit, 'waiting', 'Rendezvous');
+    }
+
+    log('Sending request through Tor...', 'info');
+
+    // Unified fetch - handles both clearnet and onion URLs
+    // Uses longer timeout for onion sites (HS connection is slow)
+    const timeout = isOnion ? 120000 : 60000;
+    const html = await fetchHtml(torClient, parsedUrl.href, { timeout });
+
+    // Update UI after successful fetch
+    if (isOnion) {
+      setStatus('connected', 'Connected (Onion)');
+      setNodeState(guardName, guardStatus, nodeGuard, 'connected', 'Guard');
+      setNodeState(middleName, middleStatus, nodeMiddle, 'connected', 'Middle');
+      setNodeState(exitName, exitStatus, nodeExit, 'connected', 'Rendezvous');
+      updateCircuitStatus('Hidden service connected');
     }
 
     log(`Received ${html.length} bytes`, 'success');
@@ -540,108 +559,14 @@ async function browsePage(url: string): Promise<void> {
     log(`Error: ${message}`, 'error');
     setStatus('error', 'Error');
     setNodeState(destinationName, destinationStatus, nodeDestination, 'waiting', 'Failed');
-
-    // Reset circuits on error
-    if (currentCircuit) {
-      currentCircuit.destroy();
-      currentCircuit = null;
-    }
-    if (currentHsConnection) {
-      currentHsConnection.destroy();
-      currentHsConnection = null;
-    }
   } finally {
     setLoading(false);
   }
 }
 
-// Browse a regular clearnet page through Tor
-async function browseClearnetPage(parsedUrl: URL): Promise<string> {
-  // Connect if not already connected
-  const { circuit } = await connectToTor();
-
-  // Fetch the page with timeout
-  log('Sending request through Tor circuit...', 'info');
-
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error('Request timeout after 60s')), 60000);
-  });
-
-  return await Promise.race([fetchHtml(circuit, parsedUrl.href), timeoutPromise]);
-}
-
-// Browse a .onion hidden service
-async function browseOnionPage(parsedUrl: URL): Promise<string> {
-  // Determine port (default 80 for http, 443 for https)
-  const port = parsedUrl.port
-    ? parseInt(parsedUrl.port, 10)
-    : parsedUrl.protocol === 'https:'
-      ? 443
-      : 80;
-
-  // Check if we already have a connection to this onion address
-  // For now, we create a new connection each time (could be optimized later)
-  if (currentHsConnection) {
-    currentHsConnection.destroy();
-    currentHsConnection = null;
-  }
-
-  // Reset circuit display for hidden service connection
-  updateCircuitStatus('Connecting to hidden service...');
-  setNodeState(snowflakeName, snowflakeStatus, nodeSnowflake, 'connecting', 'Connecting...');
-  setNodeState(guardName, guardStatus, nodeGuard, 'waiting', 'Waiting...');
-  setNodeState(middleName, middleStatus, nodeMiddle, 'waiting', 'Waiting...');
-  setNodeState(exitName, exitStatus, nodeExit, 'waiting', 'Rendezvous');
-
-  // Connect to the hidden service
-  const hsConnection = await connectToHiddenService(parsedUrl.hostname, port, {
-    onStatus: (status) => {
-      log(status, 'info');
-      parseHsStatusMessage(status);
-    },
-    onConsensusProgress: (progress) => {
-      updateConsensusProgress(progress);
-    },
-    dangerouslySkipSignatureVerification: true,
-  });
-
-  currentHsConnection = hsConnection;
-  setStatus('connected', 'Connected (Onion)');
-
-  // Update circuit display for hidden service
-  setNodeState(snowflakeName, snowflakeStatus, nodeSnowflake, 'connected', 'Connected');
-  setNodeState(guardName, guardStatus, nodeGuard, 'connected', 'Guard');
-  setNodeState(middleName, middleStatus, nodeMiddle, 'connected', 'Middle');
-  setNodeState(exitName, exitStatus, nodeExit, 'connected', 'Rendezvous');
-  updateCircuitStatus('Hidden service connected');
-
-  // Fetch the page using the hidden service circuit
-  log('Fetching page from hidden service...', 'info');
-
-  const timeoutPromise = new Promise<never>((_, reject) => {
-    setTimeout(() => reject(new Error('Request timeout after 120s')), 120000);
-  });
-
-  // Use fetchViaTor with the rendezvous circuit
-  // The circuit is already connected to the hidden service via the rendezvous
-  const response = await Promise.race([
-    fetchViaTor(hsConnection.circuit, parsedUrl.href, {
-      headers: {
-        Accept: 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-      },
-    }),
-    timeoutPromise,
-  ]);
-
-  if (response.status >= 400) {
-    throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
-  }
-
-  return response.body;
-}
-
 // Parse hidden service status messages
-function parseHsStatusMessage(status: string): void {
+// TODO: this needs to be wired up again
+function _parseHsStatusMessage(status: string): void {
   if (status.includes('Connecting to Snowflake')) {
     setNodeState(snowflakeName, snowflakeStatus, nodeSnowflake, 'connecting', 'Connecting...');
     updateCircuitStatus('Connecting to Snowflake...');
@@ -888,50 +813,31 @@ warningDismiss.addEventListener('click', () => {
 consensusRefreshBtn.addEventListener('click', async () => {
   if (isConnecting) return;
 
-  // Clear the cached consensus
-  clearCachedConsensus();
   log('Refreshing consensus...', 'info');
-
-  // Destroy current circuit if any
-  if (currentCircuit) {
-    currentCircuit.destroy();
-    currentCircuit = null;
-  }
 
   // Reset circuit display
   setStatus('connecting', 'Refreshing...');
-  setNodeState(snowflakeName, snowflakeStatus, nodeSnowflake, 'waiting', 'Waiting...');
-  setNodeState(guardName, guardStatus, nodeGuard, 'waiting', 'Waiting...');
-  setNodeState(middleName, middleStatus, nodeMiddle, 'waiting', 'Waiting...');
-  setNodeState(exitName, exitStatus, nodeExit, 'waiting', 'Waiting...');
   updateCircuitStatus('Refreshing consensus...');
 
   try {
-    // Connect which will download fresh consensus (skipConsensusCache forces fresh download)
     setLoading(true);
-    const circuit = await connectBrowserCircuit({
-      onStatus: (status) => {
-        log(status, 'info');
-        parseStatusMessage(status);
-      },
-      onConsensusProgress: (progress) => {
-        updateConsensusProgress(progress);
-      },
-      // Signature verification uses pure-JS RSA for Tor's unprefixed PKCS#1 v1.5 signatures
-      skipConsensusCache: true, // Force fresh download
-    });
 
-    currentCircuit = circuit;
+    // Check if client already exists
+    const clientExisted = !!client;
+
+    // Get the client (will create if needed)
+    const torClient = await getClient();
+
+    // Only call refreshConsensus if client already existed
+    // (Creating a new client already fetches a fresh consensus)
+    if (clientExisted) {
+      await torClient.refreshConsensus();
+    }
+
     showConsensusCached();
     setStatus('connected', 'Connected');
     log('Consensus refreshed successfully!', 'success');
-
-    // Ensure all nodes show as connected
-    setNodeState(snowflakeName, snowflakeStatus, nodeSnowflake, 'connected');
-    setNodeState(guardName, guardStatus, nodeGuard, 'connected');
-    setNodeState(middleName, middleStatus, nodeMiddle, 'connected');
-    setNodeState(exitName, exitStatus, nodeExit, 'connected');
-    updateCircuitStatus('Circuit ready');
+    updateCircuitStatus('Client ready');
   } catch (error) {
     const message = error instanceof Error ? error.message : String(error);
     log(`Error refreshing consensus: ${message}`, 'error');
@@ -952,10 +858,7 @@ log('Powered by Snowflake pluggable transport.', 'info');
 
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {
-  if (currentCircuit) {
-    currentCircuit.destroy();
-  }
-  if (currentHsConnection) {
-    currentHsConnection.destroy();
+  if (client) {
+    client.destroy();
   }
 });

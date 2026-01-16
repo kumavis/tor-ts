@@ -28,19 +28,29 @@ export type DownloadProgress = {
 
 export type DownloadProgressCallback = (progress: DownloadProgress) => void;
 
+// Directory request retry constants
+/** Maximum retry attempts for directory requests */
+export const MAX_DIRECTORY_REQUEST_RETRIES = 16;
+/** Base delay between retries in milliseconds */
+const RETRY_BASE_DELAY_MS = 500;
+/** Maximum delay between retries in milliseconds */
+const RETRY_MAX_DELAY_MS = 10_000;
+
 export class DirectoryClient {
   private circuit: Circuit;
   private timeoutMs: number;
+  private maxRetries: number;
 
-  constructor(circuit: Circuit, options?: { timeoutMs?: number }) {
+  constructor(circuit: Circuit, options?: { timeoutMs?: number; maxRetries?: number }) {
     this.circuit = circuit;
     this.timeoutMs = options?.timeoutMs ?? 30_000;
+    this.maxRetries = options?.maxRetries ?? MAX_DIRECTORY_REQUEST_RETRIES;
   }
 
   /**
-   * Make an HTTP request through the directory stream.
+   * Make an HTTP request through the directory stream (single attempt).
    */
-  private async request(
+  private async requestOnce(
     method: string,
     path: string,
     onProgress?: DownloadProgressCallback
@@ -122,6 +132,40 @@ export class DirectoryClient {
 
     const raw = Buffer.concat(chunks).toString('utf8');
     return parseHttpResponse(raw);
+  }
+
+  /**
+   * Make an HTTP request with retry logic.
+   * Directory requests retry up to 16 times.
+   */
+  private async request(
+    method: string,
+    path: string,
+    onProgress?: DownloadProgressCallback
+  ): Promise<ParsedHttpResponse> {
+    let lastError: Error | undefined;
+
+    for (let attempt = 0; attempt < this.maxRetries; attempt++) {
+      try {
+        return await this.requestOnce(method, path, onProgress);
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+
+        // Don't retry on final attempt
+        if (attempt < this.maxRetries - 1) {
+          // Exponential backoff with jitter
+          const delay = Math.min(
+            RETRY_MAX_DELAY_MS,
+            RETRY_BASE_DELAY_MS * Math.pow(2, attempt) * (0.5 + Math.random() * 0.5)
+          );
+          await new Promise((resolve) => setTimeout(resolve, delay));
+        }
+      }
+    }
+
+    throw new Error(
+      `Directory request failed after ${this.maxRetries} attempts: ${lastError?.message}`
+    );
   }
 
   private timeoutRejection(message: string): Promise<never> {

@@ -315,6 +315,206 @@ function getHighestSharedNumber(listA: Array<number>, listB: Array<number>): num
   }, undefined);
 }
 
+// ============================================================================
+// Channel Manager for connection reuse (cross-platform)
+// ============================================================================
+
+/**
+ * Factory function type for creating channels.
+ * Allows different implementations (TLS, Snowflake, etc.)
+ */
+export type ChannelFactory<T extends ChannelConnection> = (peerInfo: PeerInfo) => Promise<T>;
+
+/**
+ * Function to check if a channel is still alive.
+ * Different channel types may have different ways to detect dead connections.
+ */
+export type ChannelHealthCheck<T extends ChannelConnection> = (channel: T) => boolean;
+
+/**
+ * Default health check for TlsChannelConnection.
+ */
+export function isTlsChannelAlive(channel: TlsChannelConnection): boolean {
+  if (!channel.socket) return false;
+  return !channel.socket.destroyed && channel.socket.readable;
+}
+
+/**
+ * Generic ChannelManager for connection reuse (cross-platform).
+ *
+ * Per tor-spec/channels.md: "Parties should usually reuse an existing channel
+ * rather than opening a new channel to the same relay."
+ *
+ * ## Safety of Channel Reuse
+ *
+ * Channel reuse is SAFE because:
+ * - Channels are keyed by relay IDENTITY (RSA ID digest), not IP/port
+ * - The relay proved its identity during the TLS handshake (CERTS cell)
+ * - Stream isolation (proposal 171) happens at the CIRCUIT level, not channel level
+ * - Multiple isolated circuits can and should share the same channel
+ *
+ * This matches Arti's `ChanMgr` which uses `by_all_ids(target)` to find channels.
+ *
+ * ## Architecture
+ *
+ * ```
+ * Channel (TLS to relay)
+ *   ├── Circuit A (isolated: SOCKS user=alice)
+ *   │     ├── Stream 1 (example.com:80)
+ *   │     └── Stream 2 (example.com:443)
+ *   ├── Circuit B (isolated: SOCKS user=bob)
+ *   │     └── Stream 3 (other.com:80)
+ *   └── Circuit C (directory circuit)
+ *         └── Stream 4 (consensus fetch)
+ * ```
+ *
+ * Works with any ChannelConnection subclass (TLS, Snowflake, etc.)
+ */
+export class ChannelManager<T extends ChannelConnection> {
+  /** Cache of active channels, keyed by RSA identity digest (hex) */
+  private channels = new Map<string, T>();
+  private readonly factory: ChannelFactory<T>;
+  private readonly isAlive: ChannelHealthCheck<T>;
+
+  /**
+   * Create a new channel manager.
+   *
+   * @param factory - Function to create new channels
+   * @param isAlive - Function to check if a channel is still usable (default: always true)
+   */
+  constructor(factory: ChannelFactory<T>, isAlive?: ChannelHealthCheck<T>) {
+    this.factory = factory;
+    this.isAlive = isAlive ?? (() => true);
+  }
+
+  /**
+   * Get an existing channel to a relay, or create a new one.
+   *
+   * @param peerInfo - The relay to connect to
+   * @returns An existing or new channel
+   */
+  async getOrCreate(peerInfo: PeerInfo): Promise<T> {
+    const key = peerInfo.rsaIdDigest.toString('hex');
+
+    // Check for existing channel
+    const existing = this.channels.get(key);
+    if (existing && this.isAlive(existing)) {
+      return existing;
+    }
+
+    // Remove dead channel if exists
+    if (existing) {
+      this.channels.delete(key);
+    }
+
+    // Create new channel
+    const channel = await this.factory(peerInfo);
+
+    // Cache the channel
+    this.channels.set(key, channel);
+
+    return channel;
+  }
+
+  /**
+   * Get an existing channel without creating a new one.
+   */
+  get(rsaIdDigest: Buffer): T | undefined {
+    const key = rsaIdDigest.toString('hex');
+    const channel = this.channels.get(key);
+    if (channel && this.isAlive(channel)) {
+      return channel;
+    }
+    return undefined;
+  }
+
+  /**
+   * Add an externally-created channel to the cache.
+   * Useful when a channel is created outside the manager (e.g., bootstrap).
+   */
+  add(rsaIdDigest: Buffer, channel: T): void {
+    const key = rsaIdDigest.toString('hex');
+    this.channels.set(key, channel);
+  }
+
+  /**
+   * Remove a specific channel from the cache.
+   * Call this when a channel becomes unusable.
+   */
+  remove(channel: T): void {
+    for (const [key, cached] of this.channels.entries()) {
+      if (cached === channel) {
+        this.channels.delete(key);
+        break;
+      }
+    }
+  }
+
+  /**
+   * Remove a channel by peer identity.
+   */
+  removeByPeer(rsaIdDigest: Buffer): void {
+    const key = rsaIdDigest.toString('hex');
+    this.channels.delete(key);
+  }
+
+  /**
+   * Destroy all cached channels.
+   */
+  destroyAll(): void {
+    for (const channel of this.channels.values()) {
+      try {
+        channel.destroy();
+      } catch {
+        // Ignore errors during cleanup
+      }
+    }
+    this.channels.clear();
+  }
+
+  /**
+   * Get the number of cached channels.
+   */
+  get size(): number {
+    return this.channels.size;
+  }
+
+  /**
+   * Check if a channel exists for a given peer.
+   */
+  has(rsaIdDigest: Buffer): boolean {
+    const key = rsaIdDigest.toString('hex');
+    const channel = this.channels.get(key);
+    return channel !== undefined && this.isAlive(channel);
+  }
+
+  /**
+   * Iterate over all cached channels.
+   */
+  *values(): IterableIterator<T> {
+    yield* this.channels.values();
+  }
+}
+
+/**
+ * Type alias for TLS channel manager (Node.js).
+ */
+export type TlsChannelManager = ChannelManager<TlsChannelConnection>;
+
+/**
+ * Create a channel manager for Node.js TLS connections.
+ *
+ * In Node.js mode, each relay can have its own TLS connection.
+ * The manager creates new connections on demand and reuses existing ones.
+ */
+export function createTlsChannelManager(): TlsChannelManager {
+  return new ChannelManager<TlsChannelConnection>(async (peerInfo: PeerInfo) => {
+    const channel = new TlsChannelConnection();
+    await channel.connectPeerInfo(peerInfo);
+    return channel;
+  }, isTlsChannelAlive);
+}
+
 export type NodejsPeerAddressInfo = {
   port: number;
   family: string;

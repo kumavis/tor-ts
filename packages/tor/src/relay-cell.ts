@@ -175,3 +175,55 @@ export const RelayEndReasonNames: Record<number, string> = {
   [RelayEndReasons.REASON_TORPROTOCOL]: 'REASON_TORPROTOCOL',
   [RelayEndReasons.REASON_NOTDIRECTORY]: 'REASON_NOTDIRECTORY',
 };
+
+/**
+ * Stream retry behavior based on RELAY_END reason.
+ * Per tor-spec path-spec/attaching-streams-to-circuits.md
+ *
+ * 'retry_circuit' = try a new circuit (transient relay issue)
+ * 'retry_exit' = try a different exit (exit policy or route issue)
+ * 'no_retry' = don't retry (permanent error or normal close)
+ */
+export type StreamRetryBehavior = 'retry_circuit' | 'retry_exit' | 'no_retry';
+
+/**
+ * Determine retry behavior for a RELAY_END reason.
+ * Based on tor-spec path-spec/handling-failure.md
+ */
+export function getStreamRetryBehavior(reason: number): StreamRetryBehavior {
+  switch (reason) {
+    case RelayEndReasons.REASON_RESOLVEFAILED:
+    case RelayEndReasons.REASON_EXITPOLICY:
+    case RelayEndReasons.REASON_NOROUTE:
+    case RelayEndReasons.REASON_HIBERNATING:
+      // Exit-specific issues - try a different exit
+      return 'retry_exit';
+
+    case RelayEndReasons.REASON_TIMEOUT:
+    case RelayEndReasons.REASON_RESOURCELIMIT:
+      // Transient issues - try a new circuit
+      return 'retry_circuit';
+
+    case RelayEndReasons.REASON_CONNECTREFUSED:
+    case RelayEndReasons.REASON_DESTROY:
+    case RelayEndReasons.REASON_DONE:
+    case RelayEndReasons.REASON_INTERNAL:
+    case RelayEndReasons.REASON_TORPROTOCOL:
+    case RelayEndReasons.REASON_NOTDIRECTORY:
+      // Permanent errors or normal close - don't retry
+      return 'no_retry';
+
+    case RelayEndReasons.REASON_MISC:
+    case RelayEndReasons.REASON_CONNRESET:
+    default:
+      // Ambiguous - could be transient, try circuit retry once
+      return 'retry_circuit';
+  }
+}
+
+/**
+ * Check if a RELAY_END reason indicates the stream should be retried.
+ */
+export function isRetryableEndReason(reason: number): boolean {
+  return getStreamRetryBehavior(reason) !== 'no_retry';
+}
