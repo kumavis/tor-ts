@@ -14,6 +14,9 @@ export * from './hashes.ts';
 // Re-export elliptic curve primitives (same implementation for Node.js and browser)
 export * from './curves.ts';
 
+// Re-export AES stream ciphers (same implementation for Node.js and browser)
+export * from './aes.ts';
+
 // Import sha1 for use in computeRsaKeyFingerprint
 import { sha1 } from './hashes.ts';
 
