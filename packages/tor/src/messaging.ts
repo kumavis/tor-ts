@@ -1,5 +1,5 @@
 import assert from 'node:assert';
-import crypto from 'node:crypto';
+import { randomBytes } from 'tor-crypto';
 import { circuitIdLengthForProtocolVersion } from './circuit.ts';
 import { BytesReader, bufferFromUint, sha256 } from './util.ts';
 
@@ -835,7 +835,7 @@ function _buildAuthenticateCell({
   const SCERT = Buffer.from(sha256(responderTlsLinkCert));
   // TODO: hmac with tls master secret
   const TLSSECRETS = Buffer.from([]);
-  const RAND = crypto.randomBytes(24);
+  const RAND = randomBytes(24);
   const unsignedSection = Buffer.concat([TYPE, CID, SID, SLOG, CLOG, SCERT, TLSSECRETS, RAND]);
   // TODO: sign
   const _unsignedSectionHash = Buffer.from(sha256(unsignedSection));

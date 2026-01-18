@@ -1,7 +1,7 @@
-import crypto from 'node:crypto';
+import { randomBytes } from 'tor-crypto';
 
 const Rand = function (length: number): Buffer {
-  return crypto.randomBytes(length);
+  return randomBytes(length);
 };
 
 const randomHexId = function (): string {
