@@ -1,9 +1,15 @@
-import crypto from 'node:crypto';
-import { x25519, ed25519, sha3_256, shake256 } from 'tor-crypto';
+import {
+  x25519,
+  ed25519,
+  sha3_256,
+  shake256,
+  makeAes256CtrKey,
+  randomBytes,
+  aes256CtrXor,
+} from 'tor-crypto';
 import { BytesReader, shuffleInPlace } from './util.ts';
 import type { LinkSpecifier } from './messaging.ts';
 import { RelayCell } from './relay-cell.ts';
-import { makeAes256CtrKey } from './aes.ts';
 import { parseEd25519Certificate } from './cert.ts';
 import { Circuit, type CircuitCipherPair, type PeerInfo, type CopyableHash } from './circuit.ts';
 import { pickRelayWithFlags } from './build-circuit/util.ts';
@@ -63,7 +69,7 @@ export interface HsConnectionOptions {
   log?: (message: string) => void;
   /** Progress callback for microdescriptor downloads (called when fetching HSDir Ed25519 keys) */
   onMicrodescProgress?: MicrodescProgressCallback;
-  /** Generate random bytes (default: crypto.getRandomValues for browser compat) */
+  /** Generate random bytes (default: uses tor-crypto randomBytes) */
   randomBytes?: (length: number) => Uint8Array;
 }
 
@@ -219,35 +225,6 @@ function dMac(macKey: Buffer, salt: Buffer, encrypted: Buffer): Buffer {
   const macKeyLen = u64be(BigInt(macKey.length));
   const saltLen = u64be(BigInt(salt.length));
   return sha3(macKeyLen, macKey, saltLen, salt, encrypted);
-}
-
-function aes256CtrXor(key: Buffer, iv: Buffer, data: Buffer): Buffer {
-  const cipher = crypto.createDecipheriv('aes-256-ctr', key, iv);
-  return Buffer.concat([cipher.update(data), cipher.final()]);
-}
-
-/**
- * Browser-compatible async AES-256-CTR XOR using Web Crypto.
- * This version works in both Node.js (18+) and browsers.
- */
-export async function aes256CtrXorAsync(key: Buffer, iv: Buffer, data: Buffer): Promise<Buffer> {
-  const cryptoKey = await crypto.subtle.importKey(
-    'raw',
-    Uint8Array.from(key),
-    { name: 'AES-CTR' },
-    false,
-    ['encrypt', 'decrypt']
-  );
-  const result = await crypto.subtle.encrypt(
-    {
-      name: 'AES-CTR',
-      counter: Uint8Array.from(iv),
-      length: 64,
-    },
-    cryptoKey,
-    Uint8Array.from(data)
-  );
-  return Buffer.from(result);
 }
 
 export function toBase64UrlNoPad(buf: Buffer): string {
@@ -566,38 +543,11 @@ function parseHsDescriptorOuter(text: string): HsOuter {
   return { revisionCounter, superencrypted };
 }
 
-function decryptHsLayer(params: {
-  ciphertext: Buffer;
-  secretData: Buffer;
-  subcred: Buffer;
-  revisionCounter: bigint;
-  stringConstant: string;
-}): Buffer {
-  const { ciphertext, secretData, subcred, revisionCounter, stringConstant } = params;
-  if (ciphertext.length < 16 + 32) throw new Error('Encrypted layer too short');
-  const salt = ciphertext.subarray(0, 16);
-  const macIn = ciphertext.subarray(ciphertext.length - 32);
-  const encrypted = ciphertext.subarray(16, ciphertext.length - 32);
-
-  const secretInput = Buffer.concat([secretData, subcred, u64be(revisionCounter)]);
-  const keys = kdfShake256(
-    Buffer.concat([secretInput, salt, Buffer.from(stringConstant, 'ascii')]),
-    S_KEY_LEN + S_IV_LEN + MAC_KEY_LEN
-  );
-  const secretKey = keys.subarray(0, S_KEY_LEN);
-  const secretIv = keys.subarray(S_KEY_LEN, S_KEY_LEN + S_IV_LEN);
-  const macKey = keys.subarray(S_KEY_LEN + S_IV_LEN);
-  const macExpected = dMac(macKey, salt, encrypted);
-  if (!macIn.equals(macExpected)) {
-    throw new Error('Descriptor layer MAC check failed');
-  }
-  return aes256CtrXor(secretKey, secretIv, encrypted);
-}
-
 /**
- * Async version of decryptHsLayer using Web Crypto (browser-compatible).
+ * Decrypt a hidden service descriptor layer using AES-256-CTR.
+ * Uses WebCrypto for browser compatibility.
  */
-async function decryptHsLayerAsync(params: {
+async function decryptHsLayer(params: {
   ciphertext: Buffer;
   secretData: Buffer;
   subcred: Buffer;
@@ -622,7 +572,7 @@ async function decryptHsLayerAsync(params: {
   if (!macIn.equals(macExpected)) {
     throw new Error('Descriptor layer MAC check failed');
   }
-  return await aes256CtrXorAsync(secretKey, secretIv, encrypted);
+  return await aes256CtrXor(secretKey, secretIv, encrypted);
 }
 
 function trimTrailingNuls(b: Buffer): Buffer {
@@ -812,7 +762,7 @@ export async function fetchHsDescriptorOverDirectoryStream(
     // Parse and decrypt the descriptor
     const outer = parseHsDescriptorOuter(outerText);
     const firstPlain = trimTrailingNuls(
-      await decryptHsLayerAsync({
+      await decryptHsLayer({
         ciphertext: outer.superencrypted,
         secretData: blindedPublicKey,
         subcred,
@@ -823,7 +773,7 @@ export async function fetchHsDescriptorOverDirectoryStream(
     const firstText = firstPlain.toString('utf8');
     const { innerEncrypted } = parseFirstLayerPlaintext(firstText);
     const secondPlain = trimTrailingNuls(
-      await decryptHsLayerAsync({
+      await decryptHsLayer({
         ciphertext: innerEncrypted,
         secretData: blindedPublicKey,
         subcred,
@@ -914,7 +864,7 @@ export async function dangerouslyLookupHiddenServiceDescriptor(params: {
 
   const outer = parseHsDescriptorOuter(outerText);
   const firstPlain = trimTrailingNuls(
-    decryptHsLayer({
+    await decryptHsLayer({
       ciphertext: outer.superencrypted,
       secretData: blindedPublicKey,
       subcred,
@@ -925,7 +875,7 @@ export async function dangerouslyLookupHiddenServiceDescriptor(params: {
   const firstText = firstPlain.toString('utf8');
   const { innerEncrypted } = parseFirstLayerPlaintext(firstText);
   const secondPlain = trimTrailingNuls(
-    decryptHsLayer({
+    await decryptHsLayer({
       ciphertext: innerEncrypted,
       secretData: blindedPublicKey,
       subcred,
@@ -1091,7 +1041,7 @@ export async function buildIntroduce1Payload(params: {
   });
   const iv0 = Buffer.alloc(16, 0);
   // Use async Web Crypto version for browser compatibility
-  const C = await aes256CtrXorAsync(ENC_KEY, iv0, paddedPlaintext);
+  const C = await aes256CtrXor(ENC_KEY, iv0, paddedPlaintext);
   const macInput = Buffer.concat([header, X, C]);
   const M = mac(MAC_KEY, macInput);
 
@@ -1171,11 +1121,7 @@ export async function connectToHiddenServiceCore(
     maxIntroAttempts = 6,
     log = () => {},
     onMicrodescProgress,
-    randomBytes = (len) => {
-      const arr = new Uint8Array(len);
-      crypto.getRandomValues(arr);
-      return arr;
-    },
+    randomBytes: randomBytesOpt = randomBytes,
   } = options;
 
   const { consensus, dirClient, microdescManager, buildCircuit } = ctx;
@@ -1313,7 +1259,7 @@ export async function connectToHiddenServiceCore(
   log('Building rendezvous circuit...');
   const rendCircuit = await buildCircuit(rendezvousPoint, { avoid: [] });
 
-  const rendezvousCookie = Buffer.from(randomBytes(20));
+  const rendezvousCookie = Buffer.from(randomBytesOpt(20));
   log('Establishing rendezvous point...');
   await rendCircuit.sendRelayMessage({
     streamId: 0,

@@ -1,6 +1,4 @@
-import { x25519, sha1 as sha1Noble } from 'tor-crypto';
-import { makeAes128CtrKey } from './aes.ts';
-import crypto from 'node:crypto';
+import { x25519, sha1, makeAes128CtrKey, randomBytes } from 'tor-crypto';
 
 /**
  * Interface for a hash that supports update, copy, and digest operations.
@@ -42,7 +40,7 @@ export class Sha1Hash implements CopyableHash {
       combined.set(arr, offset);
       offset += arr.length;
     }
-    return Buffer.from(sha1Noble(combined));
+    return Buffer.from(sha1(combined));
   }
 }
 
@@ -239,7 +237,7 @@ class Hop {
   createClientHandshake(): HopClientHandshake {
     // If we don't have the peer's ntor onion key, fall back to CREATE_FAST.
     if (this.peerInfo.onionKey.length !== 32) {
-      const x = crypto.randomBytes(HASH_LEN);
+      const x = randomBytes(HASH_LEN);
       this.createFastX = x;
       return { kind: 'fast', x };
     }
@@ -1160,7 +1158,7 @@ function createRandomCircuitId(protocolVersion: number, isInitiator: boolean): B
   }
   // circuitId length is variable based on protocol version
   const circuitIdLength = circuitIdLengthForProtocolVersion(protocolVersion);
-  const randomId = crypto.randomBytes(circuitIdLength);
+  const randomId = randomBytes(circuitIdLength);
   // In link protocol version 4 or higher, whichever node initiated the
   // connection MUST set its MSB to 1, and whichever node didn't initiate
   // the connection MUST set its MSB to 0.

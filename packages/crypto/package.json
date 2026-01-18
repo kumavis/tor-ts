@@ -10,8 +10,12 @@
   },
   "devDependencies": {
     "@types/node": "^22.0.0",
-    "ava": "^6.4.1",
-    "typescript": "^5.9.3"
+    "@vitest/browser": "^3.2.4",
+    "buffer": "^6.0.3",
+    "typescript": "^5.9.3",
+    "vite": "^6.3.5",
+    "vite-plugin-node-polyfills": "^0.23.0",
+    "vitest": "^3.2.4"
   },
   "exports": {
     ".": {
@@ -20,15 +24,9 @@
     }
   },
   "scripts": {
-    "test": "ava src/*.spec.ts",
+    "test": "vitest run --config vitest.node.config.ts && vitest run --config vitest.browser.config.ts",
+    "test:node": "vitest run --config vitest.node.config.ts",
+    "test:browser": "vitest run --config vitest.browser.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"
-  },
-  "ava": {
-    "extensions": {
-      "ts": "module"
-    },
-    "nodeArguments": [
-      "--experimental-transform-types"
-    ]
   }
 }
