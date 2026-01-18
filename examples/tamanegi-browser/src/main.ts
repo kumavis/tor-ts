@@ -4,7 +4,7 @@
  */
 
 import { getConsensusCacheStatus, makeBrowserTorClient, isOnionAddress, fetchHtml } from 'browser';
-import type { DownloadProgress, BrowserTorClient } from 'browser';
+import type { DownloadProgress, BrowserTorClient, MicrodescProgressCallback } from 'browser';
 
 // Types
 type ViewMode = 'info' | 'browser';
@@ -347,6 +347,91 @@ function updateConsensusProgress(progress: DownloadProgress): void {
   }
 }
 
+// Microdesc progress tracking state
+let microdescProgressState: {
+  startTime: number;
+  startFetched: number;
+  lastFetched: number;
+  lastTime: number;
+  speedItemsPerSec: number;
+} | null = null;
+
+// Update microdescriptor download progress UI (shown when navigating to .onion)
+function updateMicrodescProgress(progress: Parameters<MicrodescProgressCallback>[0]): void {
+  const { fetched, total, cached } = progress;
+
+  // Skip if nothing to show
+  if (total === 0 && cached === 0) return;
+
+  const now = Date.now();
+
+  // Initialize or reset tracking state
+  if (!microdescProgressState || fetched < microdescProgressState.lastFetched) {
+    microdescProgressState = {
+      startTime: now,
+      startFetched: fetched,
+      lastFetched: fetched,
+      lastTime: now,
+      speedItemsPerSec: 0,
+    };
+  }
+
+  // Calculate speed (exponential moving average for smoothing)
+  const timeDelta = now - microdescProgressState.lastTime;
+  if (timeDelta > 100) {
+    // Update at least every 100ms
+    const itemsDelta = fetched - microdescProgressState.lastFetched;
+    const instantSpeed = timeDelta > 0 ? (itemsDelta / timeDelta) * 1000 : 0;
+
+    // Smooth the speed with EMA (alpha = 0.3)
+    microdescProgressState.speedItemsPerSec =
+      microdescProgressState.speedItemsPerSec * 0.7 + instantSpeed * 0.3;
+
+    microdescProgressState.lastFetched = fetched;
+    microdescProgressState.lastTime = now;
+  }
+
+  // Show the progress in the consensus panel (reusing it for microdesc downloads)
+  consensusPanel.classList.remove('cached');
+  consensusPanel.classList.add('downloading');
+  consensusTitle.textContent = '📥 Downloading Relay Info';
+  consensusCached.hidden = true;
+  consensusDownloading.hidden = false;
+
+  const totalItems = total + cached;
+  const doneItems = fetched + cached;
+  const percent = totalItems > 0 ? Math.min((doneItems / totalItems) * 100, 100) : 100;
+
+  // Update progress bar
+  progressBar.style.width = `${percent}%`;
+
+  // Update stats
+  progressBytes.textContent = `${doneItems.toLocaleString()} / ${totalItems.toLocaleString()}`;
+  consensusStatusText.textContent = `${Math.round(percent)}%`;
+
+  // Speed display
+  const speed = microdescProgressState.speedItemsPerSec;
+  if (speed > 0) {
+    progressSpeed.textContent = `${Math.round(speed)} relays/s`;
+  } else if (cached > 0) {
+    progressSpeed.textContent = `${cached.toLocaleString()} cached`;
+  } else {
+    progressSpeed.textContent = 'Starting...';
+  }
+
+  // ETA calculation
+  const remaining = total - fetched;
+  if (remaining <= 0) {
+    progressEta.textContent = 'Done!';
+    microdescProgressState = null; // Reset for next download
+  } else if (speed > 0) {
+    const etaMs = (remaining / speed) * 1000;
+    progressEta.textContent = formatTime(etaMs);
+  } else {
+    progressEta.textContent = 'Calculating...';
+  }
+}
+
 // Update consensus panel to show cached state after download completes
 function showConsensusCached(): void {
   const status = getConsensusCacheStatus();
@@ -441,6 +526,7 @@ async function getClient(): Promise<BrowserTorClient> {
     onConsensusProgress: (progress) => {
       updateConsensusProgress(progress);
     },
+    onMicrodescProgress: updateMicrodescProgress,
   }).then((result) => {
     client = result.client;
 

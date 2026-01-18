@@ -11,7 +11,7 @@ import { lookupPeerInfo } from 'tor/directory-client';
 import { pickRelayWithFlags } from 'tor/build-circuit/util';
 import { ChannelManager } from 'tor/channel';
 import type { BuildCircuitFn } from 'tor/hidden-service';
-import { TorClient, type CircuitResult } from 'tor';
+import { TorClient, type CircuitResult, type MicrodescProgressCallback } from 'tor';
 import { SnowflakeBrowserChannel } from './snowflake-channel.ts';
 import { performBootstrap } from './bootstrap.ts';
 import { fetchViaTorCircuit } from './http-fetch.ts';
@@ -58,6 +58,8 @@ export type BrowserTorClientOptions = {
   onStatus?: (status: string) => void;
   /** Callback for consensus download progress */
   onConsensusProgress?: (progress: DownloadProgress) => void;
+  /** Callback for microdescriptor download progress (used during hidden service connections) */
+  onMicrodescProgress?: MicrodescProgressCallback;
   /**
    * **DANGEROUS**: Skip consensus signature verification.
    * Only use in test environments.
@@ -111,7 +113,7 @@ export type BrowserTorClientResult = {
 export async function makeBrowserTorClient(
   options: BrowserTorClientOptions = {}
 ): Promise<BrowserTorClientResult> {
-  const { onStatus } = options;
+  const { onStatus, onMicrodescProgress } = options;
 
   const log = (msg: string) => {
     console.log(`[tor-client] ${msg}`);
@@ -119,11 +121,19 @@ export async function makeBrowserTorClient(
   };
 
   // Bootstrap: connect to Snowflake, get consensus
-  const { channel, bootstrapCircuit, dirClient, consensusManager, consensus, entryPeerInfo } =
-    await performBootstrap({
-      ...options,
-      logPrefix: 'tor-client',
-    });
+  // Note: Microdescriptors are fetched lazily when connecting to onion domains
+  const {
+    channel,
+    bootstrapCircuit,
+    dirClient,
+    consensusManager,
+    microdescManager,
+    consensus,
+    entryPeerInfo,
+  } = await performBootstrap({
+    ...options,
+    logPrefix: 'tor-client',
+  });
 
   // Create channel manager that reuses the single Snowflake channel
   const channelManager = new ChannelManager<SnowflakeBrowserChannel>(
@@ -176,6 +186,7 @@ export async function makeBrowserTorClient(
   const client = new TorClient<SnowflakeBrowserChannel>({
     channelManager,
     consensusManager,
+    microdescManager,
     dirClient,
     bootstrapCircuit,
     consensus,
@@ -183,6 +194,7 @@ export async function makeBrowserTorClient(
     buildCircuit,
     fetchOverCircuit: fetchViaTorCircuit,
     log,
+    onMicrodescProgress,
     onDestroy: () => channel.destroy(),
   });
 
@@ -194,18 +206,29 @@ export async function makeBrowserTorClient(
 // ============================================================================
 
 /**
+ * Options for fetchHtml.
+ */
+export type FetchHtmlOptions = {
+  /** Request timeout in ms */
+  timeout?: number;
+};
+
+/**
  * Fetch HTML from a URL using a Tor client.
  *
  * @example
  * ```typescript
- * const { client } = await makeBrowserTorClient();
+ * // Client with microdesc progress reporting
+ * const { client } = await makeBrowserTorClient({
+ *   onMicrodescProgress: (p) => console.log(`${p.fetched}/${p.total}`)
+ * });
  * const html = await fetchHtml(client, 'https://example.com');
  * ```
  */
 export async function fetchHtml(
   client: BrowserTorClient,
   url: string,
-  options?: { timeout?: number }
+  options?: FetchHtmlOptions
 ): Promise<string> {
   const response = await client.fetch(url, {
     headers: {

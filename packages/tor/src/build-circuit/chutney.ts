@@ -15,6 +15,7 @@ import { type BuildCircuitFn } from '../hidden-service.ts';
 import { TorClient, type CircuitResult } from '../client.ts';
 import { fetchViaTorCircuit } from '../http-fetch.ts';
 import { ConsensusManager, type ConsensusRefreshOptions } from '../consensus-manager.ts';
+import { MicrodescManager, InMemoryMicrodescStorage } from '../microdesc-manager.ts';
 
 function mustFindMicroDescNodeInfo(
   nodes: MicroDescNodeInfo[],
@@ -451,6 +452,13 @@ export async function makeChutneyTorClient(
 
   const dirClient = new DirectoryClient(bootstrapCircuit);
 
+  // Create microdescriptor manager with in-memory storage
+  // Microdescriptors are fetched lazily when needed (e.g., for hidden service connections)
+  const microdescManager = new MicrodescManager({
+    storage: new InMemoryMicrodescStorage(),
+    dirClient,
+  });
+
   // Build circuit to a specific target (for hidden services)
   const buildCircuitToTarget: BuildCircuitFn = async (target, opts) => {
     const avoidRsaIdDigests = opts?.avoid?.map((p) => p.rsaIdDigest);
@@ -497,6 +505,7 @@ export async function makeChutneyTorClient(
   return new TorClient({
     channelManager,
     consensusManager,
+    microdescManager,
     dirClient,
     bootstrapCircuit,
     consensus,

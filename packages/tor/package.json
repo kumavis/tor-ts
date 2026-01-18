@@ -22,6 +22,8 @@
     "./messaging": "./src/messaging.ts",
     "./http-parse": "./src/http-parse.ts",
     "./directory-client": "./src/directory-client.ts",
+    "./microdesc-manager": "./src/microdesc-manager.ts",
+    "./exit-policy": "./src/exit-policy.ts",
     "./build-circuit/chutney": "./src/build-circuit/chutney.ts",
     "./build-circuit/directory": "./src/build-circuit/directory.ts",
     "./build-circuit/mainnet": "./src/build-circuit/mainnet.ts",

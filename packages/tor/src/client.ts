@@ -11,6 +11,7 @@ import type { IntroPoint, BuildCircuitFn } from './hidden-service.ts';
 import { connectToHiddenServiceCore } from './hidden-service.ts';
 import { DirectoryClient } from './directory-client.ts';
 import { ConsensusManager } from './consensus-manager.ts';
+import type { MicrodescManager, MicrodescProgressCallback } from './microdesc-manager.ts';
 import type { ChannelConnection } from './channel.ts';
 import { ChannelManager } from './channel.ts';
 import { randomBytes } from 'tor-crypto';
@@ -92,6 +93,8 @@ export type TorClientDeps<TChannel extends ChannelConnection> = {
   channelManager: ChannelManager<TChannel>;
   /** Consensus manager for caching and refresh */
   consensusManager: ConsensusManager;
+  /** Microdescriptor manager for relay info caching */
+  microdescManager: MicrodescManager;
   /** Directory client for relay lookups */
   dirClient: DirectoryClient;
   /** Bootstrap circuit for directory operations */
@@ -106,6 +109,8 @@ export type TorClientDeps<TChannel extends ChannelConnection> = {
   fetchOverCircuit: FetchOverCircuitFn;
   /** Logging function */
   log: (msg: string) => void;
+  /** Default progress callback for microdescriptor downloads (used in HS connections) */
+  onMicrodescProgress?: MicrodescProgressCallback;
   /** Cleanup function called on destroy */
   onDestroy?: () => void;
 };
@@ -123,6 +128,7 @@ export type TorClientDeps<TChannel extends ChannelConnection> = {
 export class TorClient<TChannel extends ChannelConnection = ChannelConnection> {
   readonly channelManager: ChannelManager<TChannel>;
   readonly consensusManager: ConsensusManager;
+  readonly microdescManager: MicrodescManager;
   readonly dirClient: DirectoryClient;
 
   private readonly bootstrapCircuit: Circuit;
@@ -130,6 +136,7 @@ export class TorClient<TChannel extends ChannelConnection = ChannelConnection> {
   private readonly buildCircuitFn: BuildGeneralCircuitFn;
   private readonly fetchOverCircuitFn: FetchOverCircuitFn;
   private readonly log: (msg: string) => void;
+  private readonly defaultOnMicrodescProgress: MicrodescProgressCallback | undefined;
   private readonly onDestroyCallback: (() => void) | undefined;
   private isDestroyed = false;
   private _consensus: VerifiedMicroDescConsensus;
@@ -141,6 +148,7 @@ export class TorClient<TChannel extends ChannelConnection = ChannelConnection> {
   constructor(deps: TorClientDeps<TChannel>) {
     this.channelManager = deps.channelManager;
     this.consensusManager = deps.consensusManager;
+    this.microdescManager = deps.microdescManager;
     this.dirClient = deps.dirClient;
     this.bootstrapCircuit = deps.bootstrapCircuit;
     this._consensus = deps.consensus;
@@ -148,28 +156,38 @@ export class TorClient<TChannel extends ChannelConnection = ChannelConnection> {
     this.buildCircuitFn = deps.buildCircuit;
     this.fetchOverCircuitFn = deps.fetchOverCircuit;
     this.log = deps.log;
+    this.defaultOnMicrodescProgress = deps.onMicrodescProgress;
     this.onDestroyCallback = deps.onDestroy;
   }
 
   async connectToHiddenService(
     onionAddress: string,
     port: number,
-    options: { overallTimeoutMs?: number } = {}
+    options: {
+      overallTimeoutMs?: number;
+      /** Progress callback for microdescriptor downloads */
+      onMicrodescProgress?: MicrodescProgressCallback;
+    } = {}
   ): Promise<HsConnectionResult> {
     this.checkDestroyed();
-    const { overallTimeoutMs = 300_000 } = options;
+    const { overallTimeoutMs = 300_000, onMicrodescProgress } = options;
+
+    // Use provided callback or fall back to default
+    const progressCallback = onMicrodescProgress ?? this.defaultOnMicrodescProgress;
 
     const result = await connectToHiddenServiceCore(
       {
         consensus: this._consensus,
         bootstrapCircuit: this.bootstrapCircuit,
         dirClient: this.dirClient,
+        microdescManager: this.microdescManager,
         buildCircuit: this.buildCircuitToTargetFn,
       },
       onionAddress,
       {
         overallTimeoutMs,
         log: this.log,
+        ...(progressCallback && { onMicrodescProgress: progressCallback }),
         randomBytes,
       }
     );

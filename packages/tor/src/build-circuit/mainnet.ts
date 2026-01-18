@@ -1,12 +1,8 @@
 import { Circuit } from '../circuit.ts';
 import type { PeerInfo } from '../circuit.ts';
 import { TlsChannelConnection } from '../channel.ts';
-import {
-  DirectoryClient,
-  lookupPeerInfo,
-  fetchExitPolicies,
-  fetchAndVerifyConsensus,
-} from '../directory-client.ts';
+import { lookupPeerInfo, fetchExitPolicies, fetchAndVerifyConsensus } from '../directory-client.ts';
+import { MicrodescManager, InMemoryMicrodescStorage } from '../microdesc-manager.ts';
 import type { MicroDescNodeInfo, VerifiedMicroDescConsensus } from './directory.ts';
 import {
   pickRelayWithFlags,
@@ -110,10 +106,16 @@ export async function getRandomCircuitPathSafe(
   // Fetch and verify consensus using the standard flow
   const { consensus, dirClient: client } = await fetchAndVerifyConsensus(directoryCircuit);
 
+  // Create microdescriptor manager for exit policy lookups
+  const microdescManager = new MicrodescManager({
+    storage: new InMemoryMicrodescStorage(),
+    dirClient: client,
+  });
+
   // Select relays based on options
   const circuitPlan = useBandwidthWeighting
     ? await selectRelaysWithBandwidthWeighting(
-        client,
+        microdescManager,
         consensus,
         targetPorts,
         fetchExitPoliciesBeforeSelection
@@ -134,7 +136,7 @@ export async function getRandomCircuitPathSafe(
  * Select relays using bandwidth-weighted selection with exit policy checking.
  */
 async function selectRelaysWithBandwidthWeighting(
-  client: DirectoryClient,
+  microdescManager: MicrodescManager,
   consensus: VerifiedMicroDescConsensus,
   targetPorts: number[],
   fetchPolicies: boolean
@@ -147,7 +149,7 @@ async function selectRelaysWithBandwidthWeighting(
 
   // Fetch exit policies if requested
   if (fetchPolicies && exitCandidates.length > 0) {
-    await fetchExitPolicies(client, exitCandidates);
+    await fetchExitPolicies(microdescManager, exitCandidates);
   }
 
   // Pick exit with bandwidth weighting and policy filtering
