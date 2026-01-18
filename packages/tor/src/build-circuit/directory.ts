@@ -269,6 +269,17 @@ export type MicroDescNodeInfo = {
    * Set after downloading and parsing the microdescriptor.
    */
   exitPolicy?: ExitPolicy;
+  /**
+   * Ed25519 identity key from microdescriptor.
+   * Set after downloading and parsing the microdescriptor.
+   * Required for HSDir hash ring computation.
+   */
+  ed25519Identity?: Buffer;
+  /**
+   * ntor onion key from microdescriptor.
+   * Set after downloading and parsing the microdescriptor.
+   */
+  ntorOnionKey?: Buffer;
 };
 
 /**

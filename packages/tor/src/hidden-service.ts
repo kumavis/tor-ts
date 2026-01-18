@@ -7,12 +7,13 @@ import { makeAes256CtrKey } from './aes.ts';
 import { parseEd25519Certificate } from './cert.ts';
 import { Circuit, type CircuitCipherPair, type PeerInfo, type CopyableHash } from './circuit.ts';
 import { pickRelayWithFlags } from './build-circuit/util.ts';
+import { DirectoryClient, lookupPeerInfo } from './directory-client.ts';
 import {
-  DirectoryClient,
-  lookupPeerInfo,
-  lookupPeerInfoWithEd25519IdentityKey,
-} from './directory-client.ts';
-import type { VerifiedMicroDescConsensus } from './build-circuit/directory.ts';
+  type VerifiedMicroDescConsensus,
+  type MicroDescNodeInfo,
+  microDescNodeInfoToPeerInfo,
+} from './build-circuit/directory.ts';
+import type { MicrodescManager, MicrodescProgressCallback } from './microdesc-manager.ts';
 
 const HASH_LEN = 32; // SHA3-256
 const MAC_KEY_LEN = 32;
@@ -60,6 +61,8 @@ export interface HsConnectionOptions {
   maxIntroAttempts?: number;
   /** Logging function for status updates */
   log?: (message: string) => void;
+  /** Progress callback for microdescriptor downloads (called when fetching HSDir Ed25519 keys) */
+  onMicrodescProgress?: MicrodescProgressCallback;
   /** Generate random bytes (default: crypto.getRandomValues for browser compat) */
   randomBytes?: (length: number) => Uint8Array;
 }
@@ -85,6 +88,8 @@ export interface HsConnectionContext {
   bootstrapCircuit: Circuit;
   /** Directory client for relay info lookups */
   dirClient: DirectoryClient;
+  /** Microdescriptor manager for Ed25519 key lookups */
+  microdescManager: MicrodescManager;
   /** Function to build circuits to a target relay */
   buildCircuit: BuildCircuitFn;
 }
@@ -300,6 +305,55 @@ export type HsdirCandidate = {
   peerInfo: PeerInfo;
   ed25519IdentityKey: Buffer;
 };
+
+/**
+ * Build HSDir candidates with Ed25519 identity keys using cached microdescriptors.
+ *
+ * This uses the MicrodescManager to efficiently look up Ed25519 keys
+ * from cached microdescriptors. The manager handles caching and deduplication.
+ *
+ * @param manager - MicrodescManager with cached microdescriptors
+ * @param hsdirNodes - Array of HSDir nodes from the consensus
+ * @param onProgress - Optional progress callback
+ * @returns Array of HSDir candidates with PeerInfo and Ed25519 identity keys
+ */
+export async function fetchHsdirCandidates(
+  manager: MicrodescManager,
+  hsdirNodes: MicroDescNodeInfo[],
+  onProgress?: MicrodescProgressCallback
+): Promise<HsdirCandidate[]> {
+  // Filter to nodes with mKey (microdescriptor digest)
+  const nodesWithMKey = hsdirNodes.filter((n) => n.mKey);
+  if (nodesWithMKey.length === 0) {
+    return [];
+  }
+
+  // Convert mKey buffers to base64 (without padding, as used in directory requests)
+  const digestsBase64 = nodesWithMKey.map((n) => n.mKey!.toString('base64').replace(/=+$/, ''));
+
+  // Build a map from digest to node for quick lookup
+  const digestToNode = new Map<string, MicroDescNodeInfo>();
+  for (let i = 0; i < nodesWithMKey.length; i++) {
+    digestToNode.set(digestsBase64[i]!, nodesWithMKey[i]!);
+  }
+
+  // Fetch microdescriptors via the manager (uses cache + deduplication)
+  const microdescriptors = await manager.get(digestsBase64, onProgress);
+
+  const candidates: HsdirCandidate[] = [];
+  for (const [digest, microdesc] of microdescriptors) {
+    const node = digestToNode.get(digest);
+    if (node && microdesc.ntorOnionKey && microdesc.ed25519Identity) {
+      const peerInfo = microDescNodeInfoToPeerInfo(node, microdesc.ntorOnionKey);
+      candidates.push({
+        peerInfo,
+        ed25519IdentityKey: microdesc.ed25519Identity,
+      });
+    }
+  }
+
+  return candidates;
+}
 
 export function selectHsdirsForFetch(params: {
   hsdirs: HsdirCandidate[];
@@ -697,7 +751,8 @@ export async function fetchHsDescriptorOverDirectoryStream(
   _hsdirPeer: PeerInfo,
   blindedPublicKey: Buffer,
   subcred: Buffer,
-  timeoutMs: number
+  timeoutMs: number,
+  log: (msg: string) => void = () => {}
 ): Promise<HiddenServiceDescriptor | undefined> {
   const z = toBase64UrlNoPad(blindedPublicKey);
 
@@ -735,11 +790,23 @@ export async function fetchHsDescriptorOverDirectoryStream(
     ]);
 
     const resp = Buffer.concat(chunks).toString('utf8');
-    if (!resp.startsWith('HTTP/')) return undefined;
-    if (!resp.includes(' 200 ')) return undefined;
+    if (!resp.startsWith('HTTP/')) {
+      log(`HSDir response invalid (not HTTP): ${resp.slice(0, 100)}`);
+      return undefined;
+    }
+
+    // Extract status code for logging
+    const statusLine = resp.split('\r\n')[0] || '';
+    if (!resp.includes(' 200 ')) {
+      log(`HSDir returned non-200: ${statusLine}`);
+      return undefined;
+    }
 
     const split = resp.split('\r\n\r\n');
-    if (split.length < 2) return undefined;
+    if (split.length < 2) {
+      log(`HSDir response missing body`);
+      return undefined;
+    }
     const outerText = split.slice(1).join('\r\n\r\n');
 
     // Parse and decrypt the descriptor
@@ -765,7 +832,8 @@ export async function fetchHsDescriptorOverDirectoryStream(
       })
     );
     return parseSecondLayerPlaintext(secondPlain.toString('utf8'));
-  } catch {
+  } catch (err) {
+    log(`HSDir fetch error: ${err instanceof Error ? err.message : String(err)}`);
     return undefined;
   }
 }
@@ -1102,6 +1170,7 @@ export async function connectToHiddenServiceCore(
     perHandshakeTimeoutMs = Math.min(overallTimeoutMs, 120_000),
     maxIntroAttempts = 6,
     log = () => {},
+    onMicrodescProgress,
     randomBytes = (len) => {
       const arr = new Uint8Array(len);
       crypto.getRandomValues(arr);
@@ -1109,7 +1178,7 @@ export async function connectToHiddenServiceCore(
     },
   } = options;
 
-  const { consensus, bootstrapCircuit, dirClient, buildCircuit } = ctx;
+  const { consensus, dirClient, microdescManager, buildCircuit } = ctx;
 
   if (!consensus.validAfter) {
     throw new Error('Consensus missing valid-after');
@@ -1132,26 +1201,14 @@ export async function connectToHiddenServiceCore(
     throw new Error('No HSDir candidates found in consensus');
   }
 
-  // Build HSDir candidates with Ed25519 identity keys
-  log('Looking up HSDir identity keys...');
-  const shuffledHsdirNodes = shuffleInPlace([...hsdirNodes]);
-
-  const hsdirCandidates: HsdirCandidate[] = [];
-  const batchSize = Math.min(10, shuffledHsdirNodes.length);
-  const hsdirResults = await Promise.all(
-    shuffledHsdirNodes.slice(0, batchSize).map(async (n) => {
-      try {
-        const { peerInfo, ed25519IdentityKey } = await lookupPeerInfoWithEd25519IdentityKey(
-          dirClient,
-          n
-        );
-        return { peerInfo, ed25519IdentityKey } satisfies HsdirCandidate;
-      } catch {
-        return undefined;
-      }
-    })
+  // Build HSDir candidates with Ed25519 identity keys via cached microdescriptors
+  log(`Looking up Ed25519 keys for ${hsdirNodes.length} HSDir nodes...`);
+  const hsdirCandidates = await fetchHsdirCandidates(
+    microdescManager,
+    hsdirNodes,
+    onMicrodescProgress
   );
-  hsdirCandidates.push(...hsdirResults.filter((x): x is HsdirCandidate => Boolean(x)));
+  log(`Got ${hsdirCandidates.length} HSDir candidates with Ed25519 keys`);
 
   if (hsdirCandidates.length === 0) {
     throw new Error('Failed to build any HSDir candidates');
@@ -1197,20 +1254,31 @@ export async function connectToHiddenServiceCore(
       for (const hsdirPeer of hsdirPeersThisRound) {
         if (Date.now() > descriptorDeadline) break;
 
+        let hsdirCircuit: Circuit | undefined;
         try {
+          // Build a circuit TO the HSDir - the descriptor is stored there
+          log(`Building circuit to HSDir ${hsdirPeer.rsaIdDigest.toString('hex').slice(0, 8)}...`);
+          hsdirCircuit = await buildCircuit(hsdirPeer, { avoid: [] });
           const got = await fetchHsDescriptorOverDirectoryStream(
-            bootstrapCircuit,
+            hsdirCircuit,
             hsdirPeer,
             blindedPublicKey,
             subcred,
-            perHandshakeTimeoutMs
+            perHandshakeTimeoutMs,
+            log
           );
           if (got) {
             descriptor = got;
+            hsdirCircuit.destroy({ preserveChannel: true });
             break;
           }
         } catch {
           // Continue to next HSDir
+        } finally {
+          // Clean up circuit if we didn't find descriptor
+          if (!descriptor) {
+            hsdirCircuit?.destroy({ preserveChannel: true });
+          }
         }
       }
     }
