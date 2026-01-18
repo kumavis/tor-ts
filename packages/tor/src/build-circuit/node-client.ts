@@ -19,6 +19,7 @@ import {
 import { pickRelayWithFlags } from './util.ts';
 import { TorClient, type CircuitResult } from '../client.ts';
 import { ConsensusManager } from '../consensus-manager.ts';
+import { MicrodescManager, InMemoryMicrodescStorage } from '../microdesc-manager.ts';
 import type { BuildCircuitFn } from '../hidden-service.ts';
 import { fetchViaTorCircuit } from '../http-fetch.ts';
 import { getRandomFallbackDirectory, fallbackToPeerInfo } from '../fallback-dirs.ts';
@@ -94,6 +95,13 @@ export async function makeNodejsTorClient(
 
   // Create directory client
   const dirClient = new DirectoryClient(bootstrapCircuit);
+
+  // Create microdescriptor manager with in-memory storage
+  // Microdescriptors are fetched lazily when needed (e.g., for hidden service connections)
+  const microdescManager = new MicrodescManager({
+    storage: new InMemoryMicrodescStorage(),
+    dirClient,
+  });
 
   // Create consensus manager and fetch initial consensus
   const consensusManager = new ConsensusManager(bootstrapCircuit);
@@ -174,6 +182,7 @@ export async function makeNodejsTorClient(
   return new TorClient({
     channelManager,
     consensusManager,
+    microdescManager,
     dirClient,
     bootstrapCircuit,
     consensus,

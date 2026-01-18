@@ -14,9 +14,10 @@ import type { PeerInfo } from 'tor/circuit';
 import { DirectoryClient } from 'tor/directory-client';
 import type { DownloadProgress } from 'tor/directory-client';
 import type { VerifiedMicroDescConsensus } from 'tor/build-circuit/directory';
-import { ConsensusManager } from 'tor';
+import { ConsensusManager, MicrodescManager } from 'tor';
 import { SnowflakeBrowserChannel } from './snowflake-channel.ts';
 import { getCachedConsensusText, cacheConsensusText } from './consensus-cache.ts';
+import { LocalStorageMicrodescStorage } from './microdesc-cache.ts';
 
 /**
  * Common options for browser bootstrap operations.
@@ -65,6 +66,8 @@ export type BootstrapResult = {
   dirClient: DirectoryClient;
   /** Consensus manager for accessing and refreshing consensus */
   consensusManager: ConsensusManager;
+  /** Microdescriptor manager for relay info caching */
+  microdescManager: MicrodescManager;
   /** Parsed and verified consensus */
   consensus: VerifiedMicroDescConsensus;
   /** PeerInfo for the entry relay (for building additional circuits) */
@@ -157,11 +160,19 @@ export async function performBootstrap(
   // Create directory client for relay lookups
   const dirClient = new DirectoryClient(bootstrapCircuit, { timeoutMs: 600_000 });
 
+  // Create microdescriptor manager with localStorage-backed storage
+  // Microdescriptors are fetched lazily when needed (e.g., for hidden service connections)
+  const microdescManager = new MicrodescManager({
+    storage: new LocalStorageMicrodescStorage(),
+    dirClient,
+  });
+
   return {
     channel,
     bootstrapCircuit,
     dirClient,
     consensusManager,
+    microdescManager,
     consensus,
     entryPeerInfo,
   };

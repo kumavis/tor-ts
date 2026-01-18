@@ -59,6 +59,7 @@ export {
   type ParsedMicrodescriptor,
   type DownloadProgress,
   type DownloadProgressCallback,
+  // Note: MicrodescProgressCallback is exported from microdesc-manager.ts
 } from './directory-client.ts';
 
 // Consensus signature verification (from consensus-signature)
@@ -86,6 +87,17 @@ export {
   type ConsensusRefreshOptions,
   type ConsensusUpdateListener,
 } from './consensus-manager.ts';
+
+// Microdescriptor manager
+export {
+  MicrodescManager,
+  InMemoryMicrodescStorage,
+  type MicrodescStorage,
+  type MicrodescManagerOptions,
+  type MicrodescProgressCallback,
+  type CachedMicrodesc,
+  type UpdateFromConsensusOptions,
+} from './microdesc-manager.ts';
 
 // Exit policy parsing and matching
 export {

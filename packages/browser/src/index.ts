@@ -32,6 +32,9 @@ export {
 } from './consensus-cache.ts';
 export type { ConsensusCacheStatus } from './consensus-cache.ts';
 
+// Microdescriptor caching utilities for localStorage
+export { LocalStorageMicrodescStorage } from './microdesc-cache.ts';
+
 // Hidden service (.onion) support
 export { isOnionAddress } from 'tor/hidden-service';
 
@@ -43,15 +46,20 @@ export {
   type BrowserTorClient,
   type BrowserTorClientResult,
   type BrowserTorClientOptions,
+  type FetchHtmlOptions,
 } from './client.ts';
 
 // Re-export shared client types from tor package
 export {
   TorClient,
+  MicrodescManager,
+  InMemoryMicrodescStorage,
   type HsConnectionResult,
   type CircuitResult,
   type FetchOptions,
   type FetchResponse,
+  type MicrodescProgressCallback,
+  type MicrodescStorage,
 } from 'tor';
 
 // Re-export types for convenience

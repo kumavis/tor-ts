@@ -12,6 +12,7 @@
  *   const descriptor = await client.downloadRelayServerDescriptor(rsaIdDigest);
  */
 
+import { sha256 } from 'tor-crypto';
 import type { Circuit, PeerInfo } from './circuit.ts';
 import { parseHttpResponse, type ParsedHttpResponse } from './http-parse.ts';
 
@@ -279,8 +280,10 @@ export class DirectoryClient {
       return '';
     }
 
-    // Convert base64 digests to the format expected by the directory server
-    // The digests need to be joined with hyphens
+    // Join digests with '-' separator (standard base64, NOT base64url)
+    // Per Tor spec: "-s are used instead of +s to separate items"
+    // The '-' is the SEPARATOR between digests, not a replacement for '+' inside digests.
+    // Standard base64 (with + and /) is used for the digest content itself.
     const digestList = digestsBase64.join('-');
     const path = `/tor/micro/d/${digestList}`;
 
@@ -293,6 +296,7 @@ export class DirectoryClient {
         `Failed to download microdescriptors: ${response.statusCode} ${response.statusText}`
       );
     }
+
     return response.body;
   }
 }
@@ -396,6 +400,14 @@ export function parseMicrodescriptor(content: string): ParsedMicrodescriptor {
  *
  * Microdescriptors are separated by "onion-key" lines (or "ntor-onion-key" if no RSA key).
  * Returns a map from microdescriptor digest to parsed descriptor.
+ *
+ * IMPORTANT: We compute the SHA256 hash of each microdescriptor and match it to the
+ * expected digests. This ensures we never map wrong content to wrong digest, even if
+ * some descriptors are missing from the response (which would shift indices).
+ *
+ * Per tor's microdesc_parse.c and arti's microdesc.rs:
+ * - Digest is SHA256 of the raw microdescriptor text
+ * - Text starts at "onion-key" and ends at the start of the next microdesc
  */
 export function parseMicrodescriptorBatch(
   content: string,
@@ -407,35 +419,46 @@ export function parseMicrodescriptorBatch(
     return result;
   }
 
-  // Split on @last annotation or on "onion-key" / "ntor-onion-key" at start of line
-  // Microdescriptors are separated by the start of a new one
-  const descriptorTexts: string[] = [];
-  let currentDescriptor: string[] = [];
+  // Build a set of expected digests for quick lookup
+  const expectedDigests = new Set(digestsBase64);
 
-  for (const line of content.split('\n')) {
-    // A new microdescriptor starts with "onion-key" or "ntor-onion-key"
-    if (
-      (line === 'onion-key' || line.startsWith('ntor-onion-key ')) &&
-      currentDescriptor.length > 0
-    ) {
-      descriptorTexts.push(currentDescriptor.join('\n'));
-      currentDescriptor = [];
+  // Find all microdescriptor boundaries in the raw content
+  // Each microdescriptor starts with "onion-key" at the start of a line
+  const boundaries: number[] = [];
+
+  // Regex to find "onion-key" at the start of a line (or start of content)
+  // Note: "onion-key" is always present per spec, even if the TAP key itself is omitted
+  const startPattern = /(?:^|\n)(onion-key\r?\n)/g;
+  let match;
+  while ((match = startPattern.exec(content)) !== null) {
+    // Position of "onion-key" (after the newline if present)
+    boundaries.push(match.index === 0 ? 0 : match.index + 1);
+  }
+
+  // Sort boundaries
+  boundaries.sort((a, b) => a - b);
+
+  // Extract each microdescriptor text and compute its digest
+  // Per tor's microdesc_extract_body: bodylen = start_of_next_microdesc - cp
+  // The hash includes everything from "onion-key" to the start of the next microdesc
+  for (let i = 0; i < boundaries.length; i++) {
+    const start = boundaries[i]!;
+    const end = i + 1 < boundaries.length ? boundaries[i + 1]! : content.length;
+
+    // Extract the raw text - DO NOT trim, hash includes exact bytes
+    const text = content.slice(start, end);
+
+    if (!text) continue;
+
+    // Compute SHA256 hash of the microdescriptor content (exact bytes)
+    const hash = sha256(Buffer.from(text));
+    const hashB64 = hash.toString('base64').replace(/=+$/, '');
+
+    // Only include if this digest was requested
+    if (expectedDigests.has(hashB64)) {
+      const parsed = parseMicrodescriptor(text);
+      result.set(hashB64, parsed);
     }
-    currentDescriptor.push(line);
-  }
-
-  // Don't forget the last descriptor
-  if (currentDescriptor.length > 0) {
-    descriptorTexts.push(currentDescriptor.join('\n'));
-  }
-
-  // Parse each descriptor and match to digests
-  // Note: The order of descriptors in the response matches the order of digests requested
-  for (let i = 0; i < descriptorTexts.length && i < digestsBase64.length; i++) {
-    const text = descriptorTexts[i]!;
-    const digest = digestsBase64[i]!;
-    const parsed = parseMicrodescriptor(text);
-    result.set(digest, parsed);
   }
 
   return result;
@@ -612,19 +635,24 @@ export async function lookupPeerInfoWithEd25519IdentityKey(
   return { peerInfo, ed25519IdentityKey };
 }
 
+import type { MicrodescManager, MicrodescProgressCallback } from './microdesc-manager.ts';
+
 /**
- * Fetch exit policies for a list of relay nodes by downloading their microdescriptors.
+ * Fetch exit policies for a list of relay nodes using the MicrodescManager.
  *
  * This mutates the input nodeInfos by setting their exitPolicy field.
  * Only fetches policies for nodes that have an mKey (microdescriptor digest).
+ * Uses the MicrodescManager's cache to avoid redundant downloads.
  *
- * @param client - DirectoryClient to use for downloads
+ * @param manager - MicrodescManager to use for downloads (handles caching)
  * @param nodeInfos - Array of relay nodes to fetch policies for
+ * @param onProgress - Optional progress callback
  * @returns The number of policies successfully fetched
  */
 export async function fetchExitPolicies(
-  client: DirectoryClient,
-  nodeInfos: MicroDescNodeInfo[]
+  manager: MicrodescManager,
+  nodeInfos: MicroDescNodeInfo[],
+  onProgress?: MicrodescProgressCallback
 ): Promise<number> {
   // Filter to nodes with mKey and build digest list
   const nodesWithMKey = nodeInfos.filter((n) => n.mKey);
@@ -641,27 +669,18 @@ export async function fetchExitPolicies(
     digestToNode.set(digestsBase64[i]!, nodesWithMKey[i]!);
   }
 
-  // Download microdescriptors in batches (directory servers may limit request size)
-  const BATCH_SIZE = 92; // ~92 base64 digests fit in reasonable URL length
+  // Fetch microdescriptors via the manager (uses cache + deduplication)
+  const microdescriptors = await manager.get(digestsBase64, onProgress);
+
+  // Update node infos with exit policies and other data
   let fetchedCount = 0;
-
-  for (let i = 0; i < digestsBase64.length; i += BATCH_SIZE) {
-    const batchDigests = digestsBase64.slice(i, i + BATCH_SIZE);
-    try {
-      const content = await client.downloadMicrodescriptors(batchDigests);
-      const parsed = parseMicrodescriptorBatch(content, batchDigests);
-
-      // Update node infos with exit policies
-      for (const [digest, microdesc] of parsed) {
-        const node = digestToNode.get(digest);
-        if (node && microdesc.exitPolicy) {
-          node.exitPolicy = microdesc.exitPolicy;
-          fetchedCount++;
-        }
+  for (const [digest, microdesc] of microdescriptors) {
+    const node = digestToNode.get(digest);
+    if (node) {
+      if (microdesc.exitPolicy) {
+        node.exitPolicy = microdesc.exitPolicy;
+        fetchedCount++;
       }
-    } catch {
-      // Continue with other batches if one fails
-      continue;
     }
   }
 
