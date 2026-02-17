@@ -31,44 +31,46 @@ import type { LinkSpecifier } from './messaging.ts';
 // 43 -- XON             [forward or backward]
 // 44 -- XOFF            [forward or backward]
 
-export enum RelayCell {
-  BEGIN = 1,
-  DATA = 2,
-  END = 3,
-  CONNECTED = 4,
-  SENDME = 5,
-  EXTEND = 6,
-  EXTENDED = 7,
-  TRUNCATE = 8,
-  TRUNCATED = 9,
-  DROP = 10,
-  RESOLVE = 11,
-  RESOLVED = 12,
-  BEGIN_DIR = 13,
-  EXTEND2 = 14,
-  EXTENDED2 = 15,
+export const RelayCell = {
+  BEGIN: 1,
+  DATA: 2,
+  END: 3,
+  CONNECTED: 4,
+  SENDME: 5,
+  EXTEND: 6,
+  EXTENDED: 7,
+  TRUNCATE: 8,
+  TRUNCATED: 9,
+  DROP: 10,
+  RESOLVE: 11,
+  RESOLVED: 12,
+  BEGIN_DIR: 13,
+  EXTEND2: 14,
+  EXTENDED2: 15,
 
   // Hidden service relay commands (rend-spec-v3.txt)
-  ESTABLISH_INTRO = 32,
-  ESTABLISH_RENDEZVOUS = 33,
-  INTRODUCE1 = 34,
-  INTRODUCE2 = 35,
-  RENDEZVOUS1 = 36,
-  RENDEZVOUS2 = 37,
-  INTRO_ESTABLISHED = 38,
-  RENDEZVOUS_ESTABLISHED = 39,
-  INTRODUCE_ACK = 40,
+  ESTABLISH_INTRO: 32,
+  ESTABLISH_RENDEZVOUS: 33,
+  INTRODUCE1: 34,
+  INTRODUCE2: 35,
+  RENDEZVOUS1: 36,
+  RENDEZVOUS2: 37,
+  INTRO_ESTABLISHED: 38,
+  RENDEZVOUS_ESTABLISHED: 39,
+  INTRODUCE_ACK: 40,
 
   // Circuit padding (padding-spec.txt section 3)
-  PADDING_NEGOTIATE = 41,
-  PADDING_NEGOTIATED = 42,
+  PADDING_NEGOTIATE: 41,
+  PADDING_NEGOTIATED: 42,
 
   // Stream-level flow control (prop324)
-  XON = 43,
-  XOFF = 44,
-}
+  XON: 43,
+  XOFF: 44,
+} as const;
+// eslint-disable-next-line no-redeclare
+export type RelayCell = (typeof RelayCell)[keyof typeof RelayCell];
 
-const _relayCellNames = {
+const relayCellNames: Record<number, string> = {
   [RelayCell.BEGIN]: 'BEGIN',
   [RelayCell.DATA]: 'DATA',
   [RelayCell.END]: 'END',
@@ -94,7 +96,18 @@ const _relayCellNames = {
   [RelayCell.INTRO_ESTABLISHED]: 'INTRO_ESTABLISHED',
   [RelayCell.RENDEZVOUS_ESTABLISHED]: 'RENDEZVOUS_ESTABLISHED',
   [RelayCell.INTRODUCE_ACK]: 'INTRODUCE_ACK',
+  [RelayCell.PADDING_NEGOTIATE]: 'PADDING_NEGOTIATE',
+  [RelayCell.PADDING_NEGOTIATED]: 'PADDING_NEGOTIATED',
+  [RelayCell.XON]: 'XON',
+  [RelayCell.XOFF]: 'XOFF',
 };
+
+/**
+ * Get the name of a relay cell command by its numeric code.
+ */
+export function getRelayCellName(code: number): string {
+  return relayCellNames[code] ?? `UNKNOWN(${code})`;
+}
 
 export function serializeExtend2({
   linkSpecifiers,
@@ -150,22 +163,24 @@ export function serializeExtend2({
 // 14 -- REASON_NOTDIRECTORY   (Client sent RELAY_BEGIN_DIR to a
 //                             non-directory relay.)
 
-export enum RelayEndReasons {
-  REASON_MISC = 1,
-  REASON_RESOLVEFAILED = 2,
-  REASON_CONNECTREFUSED = 3,
-  REASON_EXITPOLICY = 4,
-  REASON_DESTROY = 5,
-  REASON_DONE = 6,
-  REASON_TIMEOUT = 7,
-  REASON_NOROUTE = 8,
-  REASON_HIBERNATING = 9,
-  REASON_INTERNAL = 10,
-  REASON_RESOURCELIMIT = 11,
-  REASON_CONNRESET = 12,
-  REASON_TORPROTOCOL = 13,
-  REASON_NOTDIRECTORY = 14,
-}
+export const RelayEndReasons = {
+  REASON_MISC: 1,
+  REASON_RESOLVEFAILED: 2,
+  REASON_CONNECTREFUSED: 3,
+  REASON_EXITPOLICY: 4,
+  REASON_DESTROY: 5,
+  REASON_DONE: 6,
+  REASON_TIMEOUT: 7,
+  REASON_NOROUTE: 8,
+  REASON_HIBERNATING: 9,
+  REASON_INTERNAL: 10,
+  REASON_RESOURCELIMIT: 11,
+  REASON_CONNRESET: 12,
+  REASON_TORPROTOCOL: 13,
+  REASON_NOTDIRECTORY: 14,
+} as const;
+// eslint-disable-next-line no-redeclare
+export type RelayEndReasons = (typeof RelayEndReasons)[keyof typeof RelayEndReasons];
 
 export const RelayEndReasonNames: Record<number, string> = {
   [RelayEndReasons.REASON_MISC]: 'REASON_MISC',

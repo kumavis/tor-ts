@@ -77,7 +77,13 @@ import {
   KDF_RFC5869,
 } from './ntor.ts';
 import type { NtorServerHandshake } from './ntor.ts';
-import { RelayCell, RelayEndReasons, RelayEndReasonNames, serializeExtend2 } from './relay-cell.ts';
+import {
+  RelayCell,
+  RelayEndReasons,
+  RelayEndReasonNames,
+  serializeExtend2,
+  getRelayCellName,
+} from './relay-cell.ts';
 import { BytesReader, deferred } from './util.ts';
 import EventEmitter from 'node:events';
 import { ReadableStream, WritableStream } from 'stream/web';
@@ -147,6 +153,8 @@ class Tor1Cipher implements Cipher {
 export type PeerInfo = {
   onionKey: Buffer;
   rsaIdDigest: Buffer;
+  /** Ed25519 identity key (32 bytes). Optional for legacy relays. */
+  ed25519Id?: Buffer;
   linkSpecifiers: Array<LinkSpecifier>;
 };
 
@@ -831,7 +839,7 @@ export class Circuit extends EventEmitter {
         if (!this.loggedIgnoredRelayCommands.has(relayCommand)) {
           this.loggedIgnoredRelayCommands.add(relayCommand);
           console.log(
-            `ignoring RELAY_${RelayCell[relayCommand] ?? relayCommand} (${relayCommand}) ` +
+            `ignoring RELAY_${getRelayCellName(relayCommand)} (${relayCommand}) ` +
               `for streamId=${streamId} on ${targetHop.toString()}`
           );
         }
@@ -858,7 +866,7 @@ export class Circuit extends EventEmitter {
         if (!this.loggedIgnoredRelayCommands.has(relayCommand)) {
           this.loggedIgnoredRelayCommands.add(relayCommand);
           console.log(
-            `ignoring RELAY_${RelayCell[relayCommand] ?? relayCommand} (${relayCommand}) ` +
+            `ignoring RELAY_${getRelayCellName(relayCommand)} (${relayCommand}) ` +
               `for streamId=${streamId} (circuit padding not implemented)`
           );
         }
