@@ -15,6 +15,7 @@ import { DirectoryClient } from 'tor/directory-client';
 import type { DownloadProgress } from 'tor/directory-client';
 import type { VerifiedMicroDescConsensus } from 'tor/build-circuit/directory';
 import { ConsensusManager, MicrodescManager } from 'tor';
+import type { MicrodescStorage } from 'tor';
 import { SnowflakeBrowserChannel } from './snowflake-channel.ts';
 import { getCachedConsensusText, cacheConsensusText } from './consensus-cache.ts';
 import { LocalStorageMicrodescStorage } from './microdesc-cache.ts';
@@ -52,6 +53,12 @@ export type BrowserBootstrapOptions = {
   skipConsensusCache?: boolean;
   /** Log prefix for status messages */
   logPrefix?: string;
+  /** Pre-loaded consensus text (e.g. from IndexedDB). Overrides sessionStorage lookup. */
+  cachedConsensusText?: string;
+  /** Custom microdesc storage. Defaults to LocalStorageMicrodescStorage. */
+  microdescStorage?: MicrodescStorage;
+  /** Custom callback when consensus is updated. Defaults to cacheConsensusText (sessionStorage). */
+  onConsensusUpdate?: (rawContent: string) => void;
 };
 
 /**
@@ -126,7 +133,9 @@ export async function performBootstrap(
   await bootstrapCircuit.connect();
 
   // Step 3: Get consensus via ConsensusManager
-  const cachedRaw = skipConsensusCache ? undefined : getCachedConsensusText();
+  const cachedRaw = skipConsensusCache
+    ? undefined
+    : (options.cachedConsensusText ?? getCachedConsensusText());
 
   if (cachedRaw) {
     log('Found cached consensus');
@@ -145,7 +154,7 @@ export async function performBootstrap(
 
   // Subscribe to cache new consensus on updates
   consensusManager.subscribe((_consensus, rawContent) => {
-    cacheConsensusText(rawContent);
+    (options.onConsensusUpdate ?? cacheConsensusText)(rawContent);
   });
 
   // Get consensus (uses initial if available, otherwise fetches)
@@ -160,10 +169,9 @@ export async function performBootstrap(
   // Create directory client for relay lookups
   const dirClient = new DirectoryClient(bootstrapCircuit, { timeoutMs: 600_000 });
 
-  // Create microdescriptor manager with localStorage-backed storage
-  // Microdescriptors are fetched lazily when needed (e.g., for hidden service connections)
+  // Create microdescriptor manager with optional custom storage (e.g. IndexedDB-backed for SW)
   const microdescManager = new MicrodescManager({
-    storage: new LocalStorageMicrodescStorage(),
+    storage: options.microdescStorage ?? new LocalStorageMicrodescStorage(),
     dirClient,
   });
 
