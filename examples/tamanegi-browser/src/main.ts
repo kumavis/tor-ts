@@ -913,9 +913,13 @@ log('Powered by Snowflake pluggable transport.', 'info');
 
 // Service worker registration and Tor client proxy setup
 async function initServiceWorker(): Promise<void> {
-  const client = await registerTorServiceWorker(new URL('./sw.ts', import.meta.url), {
-    scope: '/',
-  });
+  // Dev: SW is served at /src/sw.ts. Production/GitHub Pages: SW at {base}sw.js so scope can match base.
+  const base = import.meta.env.BASE_URL;
+  const scope = base.endsWith('/') ? base : base + '/';
+  const swUrl = import.meta.env.DEV
+    ? new URL('./sw.ts', import.meta.url).href
+    : `${base}sw.js`;
+  const client = await registerTorServiceWorker(swUrl, { scope });
 
   if (!client) {
     log('Service worker not available', 'error');
