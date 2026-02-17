@@ -8,7 +8,7 @@ declare const self: ServiceWorkerGlobalScope;
 
 import { makeBrowserTorClient } from 'browser';
 import type { BrowserTorClient, CachedMicrodesc, MicrodescStorage } from 'browser';
-import { type MainToSW, type SWToMain, TOR_PROXY_PATH_PREFIX } from './sw-messages.ts';
+import { type MainToSW, type SWToMain, TOR_PROXY_PATH_SEGMENT } from './sw-messages.ts';
 import { consensusIDB, microdescIDB } from './idb-cache.ts';
 
 // ---------------------------------------------------------------------------
@@ -18,11 +18,21 @@ import { consensusIDB, microdescIDB } from './idb-cache.ts';
 let client: BrowserTorClient | null = null;
 
 /**
- * Extract the target URL from a request path like /tor/https%3A%2F%2Fexample.com%2Fstyle.css
+ * Full proxy path prefix derived from the SW scope so it works under any
+ * deployment base path (e.g. "/" locally, "/tor-ts/" on GitHub Pages).
+ */
+function getProxyPathPrefix(): string {
+  const scopePath = new URL(self.registration.scope).pathname;
+  return `${scopePath}${TOR_PROXY_PATH_SEGMENT}`;
+}
+
+/**
+ * Extract the target URL from a request path like /tor-ts/tor/https%3A%2F%2Fexample.com%2Fstyle.css
  */
 function getTargetUrlFromProxyPath(pathname: string): string | null {
-  if (!pathname.startsWith(TOR_PROXY_PATH_PREFIX)) return null;
-  const encoded = pathname.slice(TOR_PROXY_PATH_PREFIX.length);
+  const prefix = getProxyPathPrefix();
+  if (!pathname.startsWith(prefix)) return null;
+  const encoded = pathname.slice(prefix.length);
   if (!encoded) return null;
   try {
     return decodeURIComponent(encoded);
@@ -270,7 +280,7 @@ async function handleProxyFetch(request: Request): Promise<Response> {
 self.addEventListener('fetch', (e: FetchEvent) => {
   const url = new URL(e.request.url);
   if (url.origin !== self.location.origin) return;
-  if (!url.pathname.startsWith(TOR_PROXY_PATH_PREFIX)) return;
+  if (!url.pathname.startsWith(getProxyPathPrefix())) return;
   e.respondWith(handleProxyFetch(e.request));
 });
 
