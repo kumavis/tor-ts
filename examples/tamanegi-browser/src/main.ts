@@ -778,18 +778,179 @@ function attachLinkHandler(): void {
   );
 }
 
+/**
+ * Resolve a potentially-relative URL against the page's base, then return a
+ * `/tor/<encoded>` proxy URL the service worker can intercept.
+ * Returns `null` for URLs that should be left alone (data:, blob:, javascript:, fragments).
+ */
+function rewriteUrl(urlStr: string, baseUrl: URL): string | null {
+  const trimmed = urlStr.trim();
+  if (
+    !trimmed ||
+    trimmed.startsWith('data:') ||
+    trimmed.startsWith('blob:') ||
+    trimmed.startsWith('javascript:') ||
+    trimmed.startsWith('#')
+  ) {
+    return null;
+  }
+  try {
+    const absolute = new URL(trimmed, baseUrl).href;
+    return `/tor/${encodeURIComponent(absolute)}`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Rewrite asset URLs in HTML so that images, stylesheets, fonts, media, etc.
+ * are fetched through the service worker's `/tor/` proxy endpoint.
+ *
+ * Handles: src, srcset, href (on <link>), data (on <object>), poster (on <video>),
+ * and CSS url() in inline style attributes and <style> blocks.
+ */
+function rewriteAssetUrls(html: string, baseUrl: URL): string {
+  // --- 1. Rewrite attributes on non-<a> tags ---
+  // Match src="...", href="..." (only inside <link> tags), data="...", poster="..."
+  // We process the HTML tag-by-tag to avoid rewriting <a href> (handled separately).
+  html = html.replace(
+    /<(?!a\s)(\w+)(\s[^>]*?)?\s*\/?>/gi,
+    (tag, tagName: string, origAttrs: string | undefined) => {
+      if (!origAttrs) return tag;
+      const lowerTag = tagName.toLowerCase();
+      let attrs = origAttrs;
+
+      // Rewrite src attribute (img, source, video, audio, embed, input, script, iframe)
+      attrs = attrs.replace(
+        /(\bsrc\s*=\s*)(?:"([^"]*)"|'([^']*)')/gi,
+        (_m: string, prefix: string, dq: string | undefined, sq: string | undefined) => {
+          const val = dq ?? sq ?? '';
+          const rewritten = rewriteUrl(val, baseUrl);
+          return rewritten ? `${prefix}"${rewritten}"` : _m;
+        }
+      );
+
+      // Rewrite srcset attribute (img, source)
+      if (lowerTag === 'img' || lowerTag === 'source') {
+        attrs = attrs.replace(
+          /(\bsrcset\s*=\s*)(?:"([^"]*)"|'([^']*)')/gi,
+          (_m: string, prefix: string, dq: string | undefined, sq: string | undefined) => {
+            const val = dq ?? sq ?? '';
+            const rewritten = val
+              .split(',')
+              .map((entry) => {
+                const parts = entry.trim().split(/\s+/);
+                if (parts.length === 0) return entry;
+                const url = parts[0];
+                const descriptor = parts.slice(1).join(' ');
+                const proxied = rewriteUrl(url, baseUrl);
+                if (!proxied) return entry;
+                return descriptor ? `${proxied} ${descriptor}` : proxied;
+              })
+              .join(', ');
+            return `${prefix}"${rewritten}"`;
+          }
+        );
+      }
+
+      // Rewrite href on <link> only (stylesheets, favicons, preload)
+      if (lowerTag === 'link') {
+        attrs = attrs.replace(
+          /(\bhref\s*=\s*)(?:"([^"]*)"|'([^']*)')/gi,
+          (_m: string, prefix: string, dq: string | undefined, sq: string | undefined) => {
+            const val = dq ?? sq ?? '';
+            const rewritten = rewriteUrl(val, baseUrl);
+            return rewritten ? `${prefix}"${rewritten}"` : _m;
+          }
+        );
+      }
+
+      // Rewrite data attribute on <object>
+      if (lowerTag === 'object') {
+        attrs = attrs.replace(
+          /(\bdata\s*=\s*)(?:"([^"]*)"|'([^']*)')/gi,
+          (_m: string, prefix: string, dq: string | undefined, sq: string | undefined) => {
+            const val = dq ?? sq ?? '';
+            const rewritten = rewriteUrl(val, baseUrl);
+            return rewritten ? `${prefix}"${rewritten}"` : _m;
+          }
+        );
+      }
+
+      // Rewrite poster attribute on <video>
+      if (lowerTag === 'video') {
+        attrs = attrs.replace(
+          /(\bposter\s*=\s*)(?:"([^"]*)"|'([^']*)')/gi,
+          (_m: string, prefix: string, dq: string | undefined, sq: string | undefined) => {
+            const val = dq ?? sq ?? '';
+            const rewritten = rewriteUrl(val, baseUrl);
+            return rewritten ? `${prefix}"${rewritten}"` : _m;
+          }
+        );
+      }
+
+      // Rewrite CSS url() inside inline style="..." attributes
+      attrs = attrs.replace(
+        /(\bstyle\s*=\s*)(?:"([^"]*)"|'([^']*)')/gi,
+        (_m: string, prefix: string, dq: string | undefined, sq: string | undefined) => {
+          const val = dq ?? sq ?? '';
+          const rewritten = rewriteCssUrls(val, baseUrl);
+          // Use whichever quote the original used
+          const quote = dq !== undefined ? '"' : "'";
+          return `${prefix}${quote}${rewritten}${quote}`;
+        }
+      );
+
+      if (attrs === origAttrs) return tag;
+      return tag.replace(origAttrs, attrs);
+    }
+  );
+
+  // --- 2. Rewrite CSS url() inside <style> blocks ---
+  html = html.replace(
+    /(<style\b[^>]*>)([\s\S]*?)(<\/style>)/gi,
+    (_m: string, open: string, css: string, close: string) => {
+      return open + rewriteCssUrls(css, baseUrl) + close;
+    }
+  );
+
+  return html;
+}
+
+/**
+ * Rewrite `url(...)` references in a CSS string to proxy URLs.
+ */
+function rewriteCssUrls(css: string, baseUrl: URL): string {
+  return css.replace(
+    /url\(\s*(?:"([^"]*)"|'([^']*)'|([^)]*?))\s*\)/gi,
+    (
+      match: string,
+      dq: string | undefined,
+      sq: string | undefined,
+      unquoted: string | undefined
+    ) => {
+      const val = (dq ?? sq ?? unquoted ?? '').trim();
+      const rewritten = rewriteUrl(val, baseUrl);
+      return rewritten ? `url("${rewritten}")` : match;
+    }
+  );
+}
+
 function sanitizeHtml(html: string, baseUrl: URL): { html: string; links: Map<number, string> } {
-  // Content Security Policy to block ALL external resources.
-  // This prevents the iframe from making any network requests that would bypass Tor.
+  // Content Security Policy: allow the service worker proxy origin for assets.
   // - default-src 'none': Block everything by default
-  // - style-src 'unsafe-inline': Allow inline styles so pages render
-  // - img-src 'none': Block all images (they would leak requests outside Tor)
-  // - font-src 'none': Block all fonts
-  // - connect-src 'none': Block fetch/XHR (redundant without scripts, but explicit)
+  // - img-src 'self' data:: Images via /tor/ proxy + inline data URIs
+  // - style-src 'unsafe-inline' 'self': Inline styles + stylesheets via proxy
+  // - font-src 'self': Fonts via proxy
+  // - media-src 'self': Audio/video via proxy
+  // - object-src 'self': Embeds via proxy
+  // - connect-src 'none': Block fetch/XHR (no scripts anyway)
   // - frame-src 'none': Block nested iframes
-  // - media-src 'none': Block audio/video
-  // - object-src 'none': Block plugins/embeds
-  const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">`;
+  const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src 'self' data:; style-src 'unsafe-inline' 'self'; font-src 'self'; media-src 'self'; object-src 'self';">`;
+
+  // Rewrite asset URLs (img src, link href, srcset, etc.) to go through the
+  // service worker's /tor/ proxy so resources load over Tor instead of leaking.
+  html = rewriteAssetUrls(html, baseUrl);
 
   // Rewrite all links to hash-based navigation and build a link map.
   // This allows us to intercept clicks from the parent and fetch via Tor.
