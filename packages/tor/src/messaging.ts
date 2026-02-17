@@ -32,26 +32,28 @@ export const RELAY_PAYLOAD_LEN = PAYLOAD_LEN - 11;
 // 131 -- AUTHENTICATE (Client authentication)(See Sec 4.5)
 // 132 -- AUTHORIZE (Client authorization)    (Not yet used)
 
-enum MessageCellType {
-  PADDING = 0,
-  CREATE = 1,
-  CREATED = 2,
-  RELAY = 3,
-  DESTROY = 4,
-  CREATE_FAST = 5,
-  CREATED_FAST = 6,
-  NETINFO = 8,
-  RELAY_EARLY = 9,
-  CREATE2 = 10,
-  CREATED2 = 11,
-  PADDING_NEGOTIATE = 12,
-  VERSIONS = 7,
-  VPADDING = 128,
-  CERTS = 129,
-  AUTH_CHALLENGE = 130,
-  AUTHENTICATE = 131,
-  AUTHORIZE = 132,
-}
+const MessageCellType = {
+  PADDING: 0,
+  CREATE: 1,
+  CREATED: 2,
+  RELAY: 3,
+  DESTROY: 4,
+  CREATE_FAST: 5,
+  CREATED_FAST: 6,
+  NETINFO: 8,
+  RELAY_EARLY: 9,
+  CREATE2: 10,
+  CREATED2: 11,
+  PADDING_NEGOTIATE: 12,
+  VERSIONS: 7,
+  VPADDING: 128,
+  CERTS: 129,
+  AUTH_CHALLENGE: 130,
+  AUTHENTICATE: 131,
+  AUTHORIZE: 132,
+} as const;
+// eslint-disable-next-line no-redeclare
+type MessageCellType = (typeof MessageCellType)[keyof typeof MessageCellType];
 
 const messageCellNames: Record<number, string> = {
   [MessageCellType.PADDING]: 'PADDING',
@@ -77,18 +79,20 @@ const messageCellNames: Record<number, string> = {
 // On a version 3 or
 // higher connection, variable-length cells are indicated by a command
 // byte equal to 7 ("VERSIONS"), or greater than or equal to 128.
-const variableLengthCells = Object.values(MessageCellType)
-  .filter((value): value is number => typeof value === 'number')
-  .filter((code) => code === MessageCellType.VERSIONS || code >= 128);
+const variableLengthCells: number[] = Object.values(MessageCellType).filter(
+  (code) => code === MessageCellType.VERSIONS || code >= 128
+);
 
-export enum AddressTypes {
+export const AddressTypes = {
   // [04] IPv4.
   // [06] IPv6.
-  IPv4 = 4,
-  IPv6 = 6,
-}
+  IPv4: 4,
+  IPv6: 6,
+} as const;
+// eslint-disable-next-line no-redeclare
+export type AddressTypes = (typeof AddressTypes)[keyof typeof AddressTypes];
 
-export enum LinkSpecifierTypes {
+export const LinkSpecifierTypes = {
   // [00] TLS-over-TCP, IPv4 address
   // A four-byte IPv4 address plus two-byte ORPort
   // [01] TLS-over-TCP, IPv6 address
@@ -98,11 +102,13 @@ export enum LinkSpecifierTypes {
   // [03] Ed25519 identity
   // A 32-byte Ed25519 identity fingerprint. At most one may
   // be listed.
-  TlsOverTcpIPv4 = 0,
-  TlsOverTcpIPv6 = 1,
-  LegacyId = 2,
-  Ed25519Id = 3,
-}
+  TlsOverTcpIPv4: 0,
+  TlsOverTcpIPv6: 1,
+  LegacyId: 2,
+  Ed25519Id: 3,
+} as const;
+// eslint-disable-next-line no-redeclare
+export type LinkSpecifierTypes = (typeof LinkSpecifierTypes)[keyof typeof LinkSpecifierTypes];
 
 // Recognized HTYPEs (handshake types) are:
 
@@ -118,7 +124,7 @@ export const HandshakeTypes = {
 export type MessageCell = {
   data: Buffer;
   circId: Buffer;
-  command: MessageCellType;
+  command: number;
   length: number;
   payloadBytes: Buffer;
   message: any;
@@ -188,7 +194,7 @@ export type CellRelayUnparsed = {
 };
 
 export type LinkSpecifier = {
-  type: LinkSpecifierTypes;
+  type: number;
   data: Buffer;
 };
 
@@ -728,7 +734,7 @@ function addressTypeToLinkSpecifierType(addressType: AddressTypes): LinkSpecifie
   }
 }
 
-function linkSpecifierTypeToAddressType(linkSpecifierType: LinkSpecifierTypes): {
+function linkSpecifierTypeToAddressType(linkSpecifierType: number): {
   type: AddressTypes;
   addressByteLength: number;
 } {
