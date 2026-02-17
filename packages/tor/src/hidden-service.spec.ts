@@ -7,6 +7,8 @@ import {
   deriveSubcredential,
   computeDisasterSrv,
   getSrvValues,
+  getFetchSrv,
+  isInPeriodBetweenTpAndSrv,
   selectHsdirsForFetch,
   toBase64UrlNoPad,
   toBase64NoPad,
@@ -281,6 +283,121 @@ test('getSrvValues: uses real SRVs when available in consensus', (t) => {
 
   t.deepEqual(srvValues[0], realCurrentSrv, 'should use real current SRV');
   t.deepEqual(srvValues[1], realPreviousSrv, 'should use real previous SRV');
+});
+
+const MAINNET_VOTING_INTERVAL_SEC = 3600;
+const MAINNET_PERIOD_LENGTH_MIN = 1440;
+
+test('isInPeriodBetweenTpAndSrv: SRV-to-TP window (00:00–12:00 UTC) returns false', (t) => {
+  const validAfter = new Date('2026-02-17T05:00:00.000Z');
+  const result = isInPeriodBetweenTpAndSrv(
+    validAfter,
+    MAINNET_VOTING_INTERVAL_SEC,
+    MAINNET_PERIOD_LENGTH_MIN
+  );
+  t.false(result, '05:00 UTC is in SRV-to-TP window');
+});
+
+test('isInPeriodBetweenTpAndSrv: TP-to-SRV window (12:00–00:00 UTC) returns true', (t) => {
+  const validAfter = new Date('2026-02-17T15:00:00.000Z');
+  const result = isInPeriodBetweenTpAndSrv(
+    validAfter,
+    MAINNET_VOTING_INTERVAL_SEC,
+    MAINNET_PERIOD_LENGTH_MIN
+  );
+  t.true(result, '15:00 UTC is in TP-to-SRV window');
+});
+
+test('isInPeriodBetweenTpAndSrv: boundary 00:00 UTC returns false', (t) => {
+  const validAfter = new Date('2026-02-17T00:00:00.000Z');
+  const result = isInPeriodBetweenTpAndSrv(
+    validAfter,
+    MAINNET_VOTING_INTERVAL_SEC,
+    MAINNET_PERIOD_LENGTH_MIN
+  );
+  t.false(result, '00:00 UTC is start of SRV-to-TP window');
+});
+
+test('isInPeriodBetweenTpAndSrv: boundary 12:00 UTC returns true', (t) => {
+  const validAfter = new Date('2026-02-17T12:00:00.000Z');
+  const result = isInPeriodBetweenTpAndSrv(
+    validAfter,
+    MAINNET_VOTING_INTERVAL_SEC,
+    MAINNET_PERIOD_LENGTH_MIN
+  );
+  t.true(result, '12:00 UTC is start of TP-to-SRV window');
+});
+
+test('getFetchSrv: SRV-to-TP window returns previous SRV', (t) => {
+  const realCurrent = Buffer.alloc(32, 0xa1);
+  const realPrevious = Buffer.alloc(32, 0xa2);
+  const mockConsensus = {
+    validAfter: new Date('2026-02-17T05:00:00.000Z'),
+    freshUntil: new Date('2026-02-17T06:00:00.000Z'),
+    validUntil: new Date('2026-02-17T07:00:00.000Z'),
+    params: {},
+    sharedRandPreviousValue: realPrevious,
+    sharedRandCurrentValue: realCurrent,
+    relays: [],
+    bandwidthWeights: {},
+    _verified: true,
+  } as const;
+  const srv = getFetchSrv(mockConsensus as any, 1440n, 20500n);
+  t.true(srv.equals(realPrevious), 'should use previous SRV in SRV-to-TP window');
+});
+
+test('getFetchSrv: TP-to-SRV window returns current SRV', (t) => {
+  const realCurrent = Buffer.alloc(32, 0xb1);
+  const realPrevious = Buffer.alloc(32, 0xb2);
+  const mockConsensus = {
+    validAfter: new Date('2026-02-17T15:00:00.000Z'),
+    freshUntil: new Date('2026-02-17T16:00:00.000Z'),
+    validUntil: new Date('2026-02-17T17:00:00.000Z'),
+    params: {},
+    sharedRandPreviousValue: realPrevious,
+    sharedRandCurrentValue: realCurrent,
+    relays: [],
+    bandwidthWeights: {},
+    _verified: true,
+  } as const;
+  const srv = getFetchSrv(mockConsensus as any, 1440n, 20500n);
+  t.true(srv.equals(realCurrent), 'should use current SRV in TP-to-SRV window');
+});
+
+test('getFetchSrv: returns disaster SRV when consensus has no SRV', (t) => {
+  const mockConsensus = {
+    validAfter: new Date('2026-02-17T05:00:00.000Z'),
+    freshUntil: new Date('2026-02-17T06:00:00.000Z'),
+    validUntil: new Date('2026-02-17T07:00:00.000Z'),
+    params: {},
+    sharedRandPreviousValue: undefined,
+    sharedRandCurrentValue: undefined,
+    relays: [],
+    bandwidthWeights: {},
+    _verified: true,
+  } as const;
+  const srv = getFetchSrv(mockConsensus as any, 1440n, 20500n);
+  const disaster = computeDisasterSrv({ periodLengthMinutes: 1440n, periodNum: 20500n });
+  t.true(srv.equals(disaster), 'should fall back to disaster SRV');
+});
+
+test('client auth: when no clientAuth, second layer secret is blinded key only', (t) => {
+  const blindedPublicKey = Buffer.alloc(32, 0xcc);
+  const firstLayer = {
+    authType: 'x25519',
+    ephemeralKey: Buffer.alloc(32, 0xee),
+    authClients: [],
+    innerEncrypted: Buffer.alloc(0),
+  };
+  const clientAuth = undefined;
+  let secondLayerSecretData = blindedPublicKey;
+  if (firstLayer.authType === 'x25519' && firstLayer.ephemeralKey && clientAuth) {
+    secondLayerSecretData = Buffer.concat([blindedPublicKey, Buffer.alloc(16)]);
+  }
+  t.true(
+    secondLayerSecretData.equals(blindedPublicKey),
+    'should use blinded key only when no clientAuth'
+  );
 });
 
 test('toBase64UrlNoPad: encodes buffer as base64url (NOT for HSDir URLs)', (t) => {

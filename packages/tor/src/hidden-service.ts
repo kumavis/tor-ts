@@ -9,7 +9,7 @@ import {
   ed25519VerifySync,
 } from 'tor-crypto';
 import { BytesReader, shuffleInPlace } from './util.ts';
-import { type LinkSpecifier, LinkSpecifierTypes } from './messaging.ts';
+import { type LinkSpecifier, LinkSpecifierTypes, RELAY_PAYLOAD_LEN } from './messaging.ts';
 import { RelayCell } from './relay-cell.ts';
 import { parseEd25519Certificate, CertTypes } from './cert.ts';
 import { Circuit, type CircuitCipherPair, type PeerInfo, type CopyableHash } from './circuit.ts';
@@ -28,14 +28,17 @@ const S_KEY_LEN = 32; // AES-256 key
 const S_IV_LEN = 16; // AES block/iv length
 
 /**
- * Target length for INTRODUCE1 payloads per the spec.
- * Per rend-spec, the encrypted body must be padded to 490 bytes for proposal 340 compatibility.
- * This is the "recommended" size from the specification to ensure forward compatibility.
- *
- * From torspec rend-spec/introduction-protocol.md:
- * "This encrypted data SHOULD be exactly 490 octets long for v3."
+ * Target length for the INTRODUCE1 encrypted section (CLIENT_PK + ciphertext + MAC) per the spec.
+ * The spec recommends 490 octets for v3; the relay cell payload limit is RELAY_PAYLOAD_LEN (498),
+ * so we cap the encrypted section at (498 - header length) so the full INTRODUCE1 fits in one cell.
  */
-const INTRO1_TARGET_LEN = 490;
+const INTRO1_ENCRYPTED_SECTION_RECOMMENDED = 490;
+const INTRO1_HEADER_LEN = 20 + 1 + 2 + 32 + 1; // legacy_key_id + auth_key_type + auth_key_len + AUTH_KEY + N_EXT
+const INTRO1_ENCRYPTED_SECTION_MAX = RELAY_PAYLOAD_LEN - INTRO1_HEADER_LEN; // 498 - 56 = 442
+const INTRO1_TARGET_LEN = Math.min(
+  INTRO1_ENCRYPTED_SECTION_RECOMMENDED,
+  INTRO1_ENCRYPTED_SECTION_MAX
+);
 
 // ============================================================================
 // Protocol Version Parsing Utilities
@@ -478,6 +481,68 @@ export function getSrvValues(
     consensus.sharedRandCurrentValue ?? disasterSrv,
     consensus.sharedRandPreviousValue ?? disasterSrv,
   ];
+}
+
+/** Number of rounds in a full SR protocol run (C Tor: SHARED_RANDOM_N_ROUNDS * SHARED_RANDOM_N_PHASES). */
+const SR_PROTOCOL_TOTAL_ROUNDS = 24;
+
+/**
+ * Returns true if valid_after falls in the time segment between a new time period and the next SRV
+ * (on mainnet: 12:00–00:00 UTC). When true, clients use current SRV for fetching; when false (00:00–12:00),
+ * they use previous SRV. Mirrors C Tor's hs_in_period_between_tp_and_srv().
+ */
+export function isInPeriodBetweenTpAndSrv(
+  validAfter: Date,
+  votingIntervalSeconds: number,
+  periodLengthMinutes: number
+): boolean {
+  const validAfterSec = Math.floor(validAfter.getTime() / 1000);
+  // Start of current SR protocol run (24 rounds)
+  const currRoundSlot =
+    Math.floor(validAfterSec / votingIntervalSeconds) % SR_PROTOCOL_TOTAL_ROUNDS;
+  const timeElapsedSinceRunStart = currRoundSlot * votingIntervalSeconds;
+  const srvStartTimeSec = validAfterSec - timeElapsedSinceRunStart;
+  // Start of next time period (from srv_start; C Tor: hs_get_start_time_of_next_time_period)
+  const rotationOffsetSec = 12 * votingIntervalSeconds;
+  const rotationOffsetMin = rotationOffsetSec / 60;
+  const minutesSinceEpoch = Math.floor(srvStartTimeSec / 60);
+  const periodNum = Math.floor((minutesSinceEpoch - rotationOffsetMin) / periodLengthMinutes);
+  const nextPeriodStartMin = (periodNum + 1) * periodLengthMinutes;
+  const tpStartTimeSec = nextPeriodStartMin * 60 + rotationOffsetSec;
+  // C Tor: return 1 if NOT in [srv_start, tp_start)
+  if (validAfterSec >= srvStartTimeSec && validAfterSec < tpStartTimeSec) {
+    return false;
+  }
+  return true;
+}
+
+/**
+ * Returns the single SRV clients should use for HSDir fetch in the current time window.
+ * In SRV-to-TP window (00:00–12:00 UTC) uses previous SRV; in TP-to-SRV (12:00–00:00) uses current SRV.
+ * Matches C Tor's node_set_hsdir_index() fetch_srv choice.
+ */
+export function getFetchSrv(
+  consensus: VerifiedMicroDescConsensus,
+  periodLengthMinutes: bigint,
+  periodNum: bigint
+): Buffer {
+  const disasterSrv = computeDisasterSrv({ periodLengthMinutes, periodNum });
+  if (!consensus.validAfter) {
+    return disasterSrv;
+  }
+  const votingIntervalSec = consensus.freshUntil
+    ? Math.floor((consensus.freshUntil.getTime() - consensus.validAfter.getTime()) / 1000)
+    : 3600;
+  const periodLenMin = Number(periodLengthMinutes);
+  const useCurrent = isInPeriodBetweenTpAndSrv(
+    consensus.validAfter,
+    votingIntervalSec,
+    periodLenMin
+  );
+  if (useCurrent) {
+    return consensus.sharedRandCurrentValue ?? disasterSrv;
+  }
+  return consensus.sharedRandPreviousValue ?? disasterSrv;
 }
 
 function sha3(...parts: Buffer[]): Buffer {
@@ -1417,10 +1482,7 @@ export async function fetchHsDescriptorOverDirectoryStream(
     const stream = await circuit.openDirectoryStream();
 
     const requestText =
-      `GET /tor/hs/3/${z} HTTP/1.0\r\n` +
-      `Host: hsdir\r\n` +
-      `Connection: close\r\n` +
-      `\r\n`;
+      `GET /tor/hs/3/${z} HTTP/1.0\r\n` + `Host: hsdir\r\n` + `Connection: close\r\n` + `\r\n`;
 
     const chunks: Buffer[] = [];
     stream.on('data', (d: Buffer) => chunks.push(Buffer.from(d)));
@@ -1485,31 +1547,37 @@ export async function fetchHsDescriptorOverDirectoryStream(
     const firstText = firstPlain.toString('utf8');
     const firstLayer = parseFirstLayerPlaintext(firstText);
 
-    // Check if client authorization is needed and decrypt the descriptor cookie
+    // All v3 descriptors include auth fields; only use cookie when client provided credentials and we get a match.
+    // Otherwise try with blinded key only; decryptHsLayer MAC check will fail if auth was actually required.
     let secondLayerSecretData = blindedPublicKey;
-    if (firstLayer.authType === 'x25519' && firstLayer.ephemeralKey) {
-      if (!clientAuth) {
-        throw new Error('Service requires client authorization but no credentials provided');
-      }
+    if (firstLayer.authType === 'x25519' && firstLayer.ephemeralKey && clientAuth) {
       const descriptorCookie = await decryptDescriptorCookie(firstLayer, subcred, clientAuth);
-      if (!descriptorCookie) {
-        throw new Error('Client authorization failed: no matching auth-client entry found');
+      if (descriptorCookie) {
+        log('Client authorization successful');
+        secondLayerSecretData = Buffer.concat([blindedPublicKey, descriptorCookie]);
       }
-      log('Client authorization successful');
-      // Per spec: SECRET_DATA = blinded-public-key | descriptor_cookie
-      secondLayerSecretData = Buffer.concat([blindedPublicKey, descriptorCookie]);
     }
 
-    const secondPlain = trimTrailingNuls(
-      await decryptHsLayer({
-        ciphertext: firstLayer.innerEncrypted,
-        secretData: secondLayerSecretData,
-        subcred,
-        revisionCounter: outer.revisionCounter,
-        stringConstant: 'hsdir-encrypted-data',
-      })
-    );
-    return parseSecondLayerPlaintext(secondPlain.toString('utf8'));
+    try {
+      const secondPlain = trimTrailingNuls(
+        await decryptHsLayer({
+          ciphertext: firstLayer.innerEncrypted,
+          secretData: secondLayerSecretData,
+          subcred,
+          revisionCounter: outer.revisionCounter,
+          stringConstant: 'hsdir-encrypted-data',
+        })
+      );
+      return parseSecondLayerPlaintext(secondPlain.toString('utf8'));
+    } catch (innerErr) {
+      const msg = innerErr instanceof Error ? innerErr.message : String(innerErr);
+      if (msg.includes('MAC check failed') && !clientAuth && firstLayer.authType === 'x25519') {
+        throw new Error(
+          'Descriptor decryption failed — service likely requires client authorization'
+        );
+      }
+      throw innerErr;
+    }
   } catch (err) {
     log(`HSDir fetch error: ${err instanceof Error ? err.message : String(err)}`);
     return undefined;
@@ -1609,31 +1677,40 @@ export async function dangerouslyLookupHiddenServiceDescriptor(params: {
   const firstText = firstPlain.toString('utf8');
   const firstLayer = parseFirstLayerPlaintext(firstText);
 
-  // Check if client authorization is needed and decrypt the descriptor cookie
+  // All v3 descriptors include auth fields; only use cookie when client provided credentials and we get a match.
   let secondLayerSecretData = blindedPublicKey;
-  if (firstLayer.authType === 'x25519' && firstLayer.ephemeralKey) {
-    if (!params.clientAuth) {
-      throw new Error('Service requires client authorization but no credentials provided');
-    }
+  if (firstLayer.authType === 'x25519' && firstLayer.ephemeralKey && params.clientAuth) {
     const descriptorCookie = await decryptDescriptorCookie(firstLayer, subcred, params.clientAuth);
-    if (!descriptorCookie) {
-      throw new Error('Client authorization failed: no matching auth-client entry found');
+    if (descriptorCookie) {
+      secondLayerSecretData = Buffer.concat([blindedPublicKey, descriptorCookie]);
     }
-    // Per spec: SECRET_DATA = blinded-public-key | descriptor_cookie
-    secondLayerSecretData = Buffer.concat([blindedPublicKey, descriptorCookie]);
   }
 
-  const secondPlain = trimTrailingNuls(
-    await decryptHsLayer({
-      ciphertext: firstLayer.innerEncrypted,
-      secretData: secondLayerSecretData,
-      subcred,
-      revisionCounter: outer.revisionCounter,
-      stringConstant: 'hsdir-encrypted-data',
-    })
-  );
-  const descriptor = parseSecondLayerPlaintext(secondPlain.toString('utf8'));
-  return { blindedPublicKey, subcred, descriptor };
+  try {
+    const secondPlain = trimTrailingNuls(
+      await decryptHsLayer({
+        ciphertext: firstLayer.innerEncrypted,
+        secretData: secondLayerSecretData,
+        subcred,
+        revisionCounter: outer.revisionCounter,
+        stringConstant: 'hsdir-encrypted-data',
+      })
+    );
+    const descriptor = parseSecondLayerPlaintext(secondPlain.toString('utf8'));
+    return { blindedPublicKey, subcred, descriptor };
+  } catch (innerErr) {
+    const msg = innerErr instanceof Error ? innerErr.message : String(innerErr);
+    if (
+      msg.includes('MAC check failed') &&
+      !params.clientAuth &&
+      firstLayer.authType === 'x25519'
+    ) {
+      throw new Error(
+        'Descriptor decryption failed — service likely requires client authorization'
+      );
+    }
+    throw innerErr;
+  }
 }
 
 export type HsNtorClientState = {
@@ -2095,16 +2172,22 @@ export async function connectToHiddenServiceCore(
       // Debug: log the blinded key for this period
       log(`DEBUG: Trying period ${periodNum}, blinded key: ${toBase64UrlNoPad(blindedPublicKey)}`);
 
+      const fetchSrv = getFetchSrv(consensus, periodLengthMinutes, periodNum);
       const srvValues = getSrvValues(consensus, periodLengthMinutes, periodNum);
       const disasterSrv = computeDisasterSrv({ periodLengthMinutes, periodNum });
+      // Try correct SRV for time window first, then fallback to the other
+      const srvOrder = fetchSrv.equals(srvValues[0]!)
+        ? [srvValues[0]!, srvValues[1]!]
+        : [srvValues[1]!, srvValues[0]!];
 
-      for (let srvIdx = 0; srvIdx < srvValues.length; srvIdx++) {
-        const srv = srvValues[srvIdx]!;
+      for (let srvIdx = 0; srvIdx < srvOrder.length; srvIdx++) {
+        const srv = srvOrder[srvIdx]!;
         if (descriptor) break;
 
-        // Log SRV info
         const isDisasterSrv = srv.equals(disasterSrv);
-        const srvLabel = srvIdx === 0 ? 'current' : 'previous';
+        const srvLabel = srv.equals(consensus.sharedRandCurrentValue ?? Buffer.alloc(0))
+          ? 'current'
+          : 'previous';
         if (isDisasterSrv) {
           log(
             `DEBUG: Using DISASTER SRV for ${srvLabel} (consensus missing shared-rand-${srvLabel}-value)`
