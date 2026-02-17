@@ -54,13 +54,14 @@ export type BuildGeneralCircuitFn = (options?: {
 }) => Promise<CircuitResult>;
 
 /**
- * Response from a fetch operation.
+ * Response from a fetch operation. Body is always raw bytes.
+ * Use TextDecoder to decode text responses.
  */
 export type FetchResponse = {
   status: number;
   statusText: string;
   headers: Map<string, string>;
-  body: string;
+  body: Uint8Array;
 };
 
 /**
@@ -221,6 +222,7 @@ export class TorClient<TChannel extends ChannelConnection = ChannelConnection> {
    * - .onion URLs: Establishes a hidden service connection
    *
    * Circuits are created and destroyed automatically per request.
+   * Response body is always Uint8Array. Use TextDecoder to decode text responses.
    */
   async fetch(url: string, options?: FetchOptions): Promise<FetchResponse> {
     this.checkDestroyed();

@@ -6,7 +6,11 @@
 import type { MainToSW, MicrodescProgressPayload, SWToMain } from './sw-messages.ts';
 import type { DownloadProgress } from 'browser';
 
-export type FetchResult = { status: number; statusText: string; html: string };
+export type FetchResult = {
+  status: number;
+  statusText: string;
+  body: Uint8Array;
+};
 
 export class TorServiceWorkerClient {
   private controller: ServiceWorker | null;
@@ -58,7 +62,7 @@ export class TorServiceWorkerClient {
           pending.resolve({
             status: msg.status,
             statusText: msg.statusText,
-            html: msg.html,
+            body: msg.body,
           });
         }
         break;

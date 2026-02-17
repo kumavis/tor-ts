@@ -55,6 +55,7 @@ export type NodeTorClientOptions = {
  *
  * // Fetch a clearnet page
  * const response = await client.fetch('https://example.com');
+ * const html = new TextDecoder().decode(response.body);
  *
  * // Connect to hidden services
  * const { circuit } = await client.connectToHiddenService('xyz.onion', 80);
