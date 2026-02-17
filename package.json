@@ -25,7 +25,6 @@
     "format:check": "prettier --check .",
     "lint": "eslint . --ext .ts,.js,.cjs",
     "lint:fix": "yarn lint --fix",
-    "import:check": "yarn workspace tor import:check",
     "test:dev": "yarn workspace tor test:dev",
     "test:live": "yarn workspaces foreach -A run test:live"
   },
