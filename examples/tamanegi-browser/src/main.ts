@@ -780,7 +780,7 @@ function attachLinkHandler(): void {
 
 /**
  * Resolve a potentially-relative URL against the page's base, then return a
- * `/tor/<encoded>` proxy URL the service worker can intercept.
+ * `{base}tor/<encoded>` proxy URL the service worker can intercept.
  * Returns `null` for URLs that should be left alone (data:, blob:, javascript:, fragments).
  */
 function rewriteUrl(urlStr: string, baseUrl: URL): string | null {
@@ -796,7 +796,8 @@ function rewriteUrl(urlStr: string, baseUrl: URL): string | null {
   }
   try {
     const absolute = new URL(trimmed, baseUrl).href;
-    return `/tor/${encodeURIComponent(absolute)}`;
+    const base = import.meta.env.BASE_URL;
+    return `${base}tor/${encodeURIComponent(absolute)}`;
   } catch {
     return null;
   }

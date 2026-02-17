@@ -5,8 +5,8 @@
 
 import type { DownloadProgress } from 'browser';
 
-/** Path prefix for Tor proxy: requests to /tor/<encoded-url> are fulfilled over the circuit. */
-export const TOR_PROXY_PATH_PREFIX = '/tor/';
+/** Path segment for Tor proxy – combined with the deployment base path to form the full prefix. */
+export const TOR_PROXY_PATH_SEGMENT = 'tor/';
 
 // ---------------------------------------------------------------------------
 // Main page -> Service worker
