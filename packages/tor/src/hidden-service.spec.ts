@@ -381,6 +381,24 @@ test('getFetchSrv: returns disaster SRV when consensus has no SRV', (t) => {
   t.true(srv.equals(disaster), 'should fall back to disaster SRV');
 });
 
+test('getFetchSrv: zero voting interval (validAfter === freshUntil) throws', (t) => {
+  const d = new Date('2026-02-17T05:00:00.000Z');
+  const mockConsensus = {
+    validAfter: d,
+    freshUntil: d,
+    validUntil: new Date('2026-02-17T07:00:00.000Z'),
+    params: {},
+    sharedRandPreviousValue: undefined,
+    sharedRandCurrentValue: undefined,
+    relays: [],
+    bandwidthWeights: {},
+    _verified: true,
+  } as const;
+  t.throws(() => getFetchSrv(mockConsensus as any, 1440n, 20500n), {
+    message: /voting interval is 0/,
+  });
+});
+
 test('client auth: when no clientAuth, second layer secret is blinded key only', (t) => {
   const blindedPublicKey = Buffer.alloc(32, 0xcc);
   const firstLayer = {

@@ -533,6 +533,11 @@ export function getFetchSrv(
   const votingIntervalSec = consensus.freshUntil
     ? Math.floor((consensus.freshUntil.getTime() - consensus.validAfter.getTime()) / 1000)
     : 3600;
+  if (votingIntervalSec < 1) {
+    throw new Error(
+      `Invalid consensus: voting interval is ${votingIntervalSec} (validAfter and freshUntil must differ)`
+    );
+  }
   const periodLenMin = Number(periodLengthMinutes);
   const useCurrent = isInPeriodBetweenTpAndSrv(
     consensus.validAfter,
