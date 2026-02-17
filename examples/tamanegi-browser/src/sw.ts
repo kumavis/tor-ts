@@ -6,7 +6,7 @@
 
 declare const self: ServiceWorkerGlobalScope;
 
-import { makeBrowserTorClient, fetchHtml } from 'browser';
+import { makeBrowserTorClient } from 'browser';
 import type { BrowserTorClient, CachedMicrodesc, MicrodescStorage } from 'browser';
 import type { MainToSW, SWToMain } from './sw-messages.ts';
 import { consensusIDB, microdescIDB } from './idb-cache.ts';
@@ -167,13 +167,13 @@ async function handleFetch(requestId: string, url: string, timeout?: number): Pr
     return;
   }
   try {
-    const html = await fetchHtml(client, url, { timeout });
+    const response = await client.fetch(url, { timeout });
     await broadcast({
       type: 'fetchResult',
       requestId,
-      status: 200,
-      statusText: 'OK',
-      html,
+      status: response.status,
+      statusText: response.statusText,
+      body: response.body,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

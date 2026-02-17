@@ -226,6 +226,7 @@ export type FetchHtmlOptions = {
 
 /**
  * Fetch HTML from a URL using a Tor client.
+ * Decodes response body as UTF-8 text.
  *
  * @example
  * ```typescript
@@ -252,5 +253,5 @@ export async function fetchHtml(
     throw new Error(`HTTP error ${response.status}: ${response.statusText}`);
   }
 
-  return response.body;
+  return new TextDecoder().decode(response.body);
 }

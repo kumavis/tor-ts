@@ -11,8 +11,8 @@ import type { Circuit, CircuitStream } from './circuit.ts';
 import {
   parseHttpHeaders,
   parseHttpStatusLine,
-  decodeChunked,
-  isChunkedComplete,
+  decodeChunkedToBuffer,
+  isChunkedCompleteBuffer,
 } from './http-parse.ts';
 import type { FetchResponse, FetchOptions } from './client.ts';
 
@@ -41,14 +41,16 @@ export interface NodeFetchOptions extends FetchOptions {
  *
  * Supports HTTP and HTTPS (TLS is performed inside the Tor stream for HTTPS).
  * Automatically follows redirects (3xx responses) up to maxRedirects times.
+ * Response body is always Uint8Array.
  */
 export async function fetchViaTorCircuit(
   circuit: Circuit,
   url: string,
-  options: NodeFetchOptions = {}
+  options?: FetchOptions
 ): Promise<FetchResponse> {
-  const { followRedirects = true, maxRedirects = 10 } = options;
-  return fetchInternal(circuit, url, options, followRedirects ? maxRedirects : 0);
+  const opts = options as NodeFetchOptions;
+  const { followRedirects = true, maxRedirects = 10 } = opts;
+  return fetchInternal(circuit, url, options ?? {}, followRedirects ? maxRedirects : 0);
 }
 
 /**
@@ -57,7 +59,7 @@ export async function fetchViaTorCircuit(
 async function fetchInternal(
   circuit: Circuit,
   url: string,
-  options: NodeFetchOptions,
+  options: FetchOptions,
   redirectsRemaining: number
 ): Promise<FetchResponse> {
   const parsedUrl = new URL(url);
@@ -194,6 +196,7 @@ function wrapRawStream(stream: CircuitStream): Transport {
 
 /**
  * Read a complete HTTP response from a transport.
+ * Always returns body as Uint8Array.
  */
 async function readHttpResponse(transport: Transport, timeoutMs: number): Promise<FetchResponse> {
   return new Promise((resolve, reject) => {
@@ -241,7 +244,8 @@ async function readHttpResponse(transport: Transport, timeoutMs: number): Promis
 
       // Check if body is complete
       if (isChunked) {
-        if (!isChunkedComplete(bodyBuffer.toString('utf-8'))) {
+        const chunkedComplete = isChunkedCompleteBuffer(bodyBuffer);
+        if (!chunkedComplete) {
           return false;
         }
       } else if (contentLength !== null) {
@@ -267,13 +271,13 @@ async function readHttpResponse(transport: Transport, timeoutMs: number): Promis
 
       const headers = parseHttpHeaders(headerSection);
 
-      let body: string;
+      let body: Uint8Array;
       if (isChunked) {
-        body = decodeChunked(bodyBuffer.toString('utf-8'));
+        body = decodeChunkedToBuffer(bodyBuffer);
       } else if (contentLength !== null) {
-        body = bodyBuffer.subarray(0, contentLength).toString('utf-8');
+        body = bodyBuffer.subarray(0, contentLength);
       } else {
-        body = bodyBuffer.toString('utf-8');
+        body = bodyBuffer.subarray(0);
       }
 
       return {

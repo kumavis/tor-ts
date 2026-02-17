@@ -112,8 +112,9 @@ describe('Snowflake Live: Fetch via Tor', () => {
     expect(response).toBeDefined();
     expect(response.status).toBe(200);
     // Response should be JSON with "origin" field containing an IP
-    expect(response.body).toContain('origin');
-    console.log('[test] Response:', response.body);
+    const body = new TextDecoder().decode(response.body);
+    expect(body).toContain('origin');
+    console.log('[test] Response:', body);
   }, 180_000);
 });
 

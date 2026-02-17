@@ -128,3 +128,39 @@ export function isChunkedComplete(bodyStr: string): boolean {
   // Check for final chunk: either starts with "0\r\n" or contains "\r\n0\r\n"
   return bodyStr.startsWith('0\r\n') || bodyStr.includes('\r\n0\r\n');
 }
+
+const CRLF = Buffer.from('\r\n', 'ascii');
+const ZERO_CRLF_CRLF = Buffer.from('0\r\n\r\n', 'ascii'); // 0x30 0x0d 0x0a 0x0d 0x0a
+
+/**
+ * Decode HTTP chunked transfer encoding on raw bytes.
+ * Use this for binary data; for text use decodeChunked instead.
+ */
+export function decodeChunkedToBuffer(buffer: Buffer): Buffer {
+  const parts: Buffer[] = [];
+  let offset = 0;
+
+  while (offset < buffer.length) {
+    const lineEnd = buffer.indexOf(CRLF, offset);
+    if (lineEnd === -1) break;
+
+    const sizeLine = buffer.subarray(offset, lineEnd).toString('ascii');
+    const size = parseInt(sizeLine.trim(), 16);
+    if (isNaN(size) || size === 0) break;
+
+    offset = lineEnd + 2;
+    if (offset + size > buffer.length) break;
+    parts.push(buffer.subarray(offset, offset + size));
+    offset += size + 2; // Skip chunk data and trailing \r\n
+  }
+
+  return Buffer.concat(parts);
+}
+
+/**
+ * Detect end of chunked body: encoding ends with "0\r\n\r\n".
+ */
+export function isChunkedCompleteBuffer(buffer: Buffer): boolean {
+  if (buffer.length < 5) return false;
+  return buffer.subarray(-5).equals(ZERO_CRLF_CRLF);
+}

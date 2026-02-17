@@ -605,7 +605,7 @@ async function browsePage(url: string): Promise<void> {
     // Unified fetch via service worker (clearnet and onion)
     const timeout = isOnion ? 120000 : 60000;
     const result = await swClient!.fetch(parsedUrl.href, { timeout });
-    const html = result.html;
+    const html = new TextDecoder().decode(result.body);
 
     // Update UI after successful fetch
     if (isOnion) {
@@ -916,9 +916,7 @@ async function initServiceWorker(): Promise<void> {
   // Dev: SW is served at /src/sw.ts. Production/GitHub Pages: SW at {base}sw.js so scope can match base.
   const base = import.meta.env.BASE_URL;
   const scope = base.endsWith('/') ? base : base + '/';
-  const swUrl = import.meta.env.DEV
-    ? new URL('./sw.ts', import.meta.url).href
-    : `${base}sw.js`;
+  const swUrl = import.meta.env.DEV ? new URL('./sw.ts', import.meta.url).href : `${base}sw.js`;
   const client = await registerTorServiceWorker(swUrl, { scope });
 
   if (!client) {

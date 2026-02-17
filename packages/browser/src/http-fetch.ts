@@ -10,19 +10,19 @@
  * FEATURES:
  * - Automatic redirect following (3xx responses) with configurable max redirects
  * - Supports both HTTP and HTTPS (TLS inside Tor stream for HTTPS)
+ * - Response body is always raw bytes (Uint8Array)
  *
  * LIMITATIONS:
- * - Responses are decoded as UTF-8 text. Binary responses (images, etc.) will be corrupted.
- *   This is intentional for the HTML-fetching use case. For binary data, use a Buffer-based API.
  * - Only supports HTTP/1.1 with Connection: close semantics.
  */
 
 import type { Circuit, CircuitStream } from 'tor/circuit';
+import type { FetchOptions } from 'tor';
 import {
   parseHttpHeaders,
   parseHttpStatusLine,
-  decodeChunked,
-  isChunkedComplete,
+  decodeChunkedToBuffer,
+  isChunkedCompleteBuffer,
 } from 'tor/http-parse';
 import { makeTLSClient, setCryptoImplementation } from '@reclaimprotocol/tls';
 import { webcryptoCrypto } from '@reclaimprotocol/tls/webcrypto';
@@ -30,12 +30,15 @@ import { webcryptoCrypto } from '@reclaimprotocol/tls/webcrypto';
 // Use the webcrypto implementation for TLS
 setCryptoImplementation(webcryptoCrypto);
 
-export interface TorFetchResponse {
+/**
+ * Response from fetchViaTorCircuit. Body is always raw bytes.
+ */
+export type TorFetchResponse = {
   status: number;
   statusText: string;
   headers: Map<string, string>;
-  body: string;
-}
+  body: Uint8Array;
+};
 
 /**
  * Interface for a readable/writable transport (either raw stream or TLS-wrapped).
@@ -281,15 +284,17 @@ export interface FetchViaTorOptions {
  * Fetch a URL over a Tor circuit.
  * Supports HTTP and HTTPS (TLS is performed inside the Tor stream for HTTPS).
  * Automatically follows redirects (3xx responses) up to maxRedirects times.
+ * Response body is always Uint8Array.
  */
 export async function fetchViaTorCircuit(
   circuit: Circuit,
   url: string,
-  options: FetchViaTorOptions = {}
+  options?: FetchOptions
 ): Promise<TorFetchResponse> {
-  const { followRedirects = true, maxRedirects = 10 } = options;
+  const opts = options as FetchViaTorOptions;
+  const { followRedirects = true, maxRedirects = 10 } = opts;
 
-  return fetchViaTorInternal(circuit, url, options, followRedirects ? maxRedirects : 0);
+  return fetchViaTorInternal(circuit, url, opts, followRedirects ? maxRedirects : 0);
 }
 
 /**
@@ -388,6 +393,7 @@ async function fetchViaTorInternal(
 /**
  * Read and parse HTTP response from a transport (raw or TLS-wrapped stream).
  * Uses shared parsing utilities from tor/http-parse.
+ * Always returns body as Uint8Array.
  */
 async function readHttpResponse(transport: Transport, timeout: number): Promise<TorFetchResponse> {
   return new Promise<TorFetchResponse>((resolve, reject) => {
@@ -408,6 +414,13 @@ async function readHttpResponse(transport: Transport, timeout: number): Promise<
     const cleanup = () => {
       clearTimeout(timeoutId);
       transport.removeAllListeners();
+    };
+
+    const resolveBody = (bodyData: Buffer): Uint8Array => {
+      if (contentLength >= 0) {
+        return bodyData.subarray(0, contentLength);
+      }
+      return decodeChunkedToBuffer(bodyData);
     };
 
     transport.on('data', (chunk: Buffer) => {
@@ -454,18 +467,17 @@ async function readHttpResponse(transport: Transport, timeout: number): Promise<
             status,
             statusText,
             headers,
-            body: bodyData.subarray(0, contentLength).toString('utf-8'),
+            body: resolveBody(bodyData),
           });
         } else if (isChunked) {
-          // Check for final chunk using shared utility
-          const bodyStr = bodyData.toString('utf-8');
-          if (isChunkedComplete(bodyStr)) {
+          const chunkedComplete = isChunkedCompleteBuffer(bodyData);
+          if (chunkedComplete) {
             cleanup();
             resolve({
               status,
               statusText,
               headers,
-              body: decodeChunked(bodyData),
+              body: resolveBody(bodyData),
             });
           }
         }
@@ -480,7 +492,7 @@ async function readHttpResponse(transport: Transport, timeout: number): Promise<
           status,
           statusText,
           headers,
-          body: isChunked ? decodeChunked(bodyData) : bodyData.toString('utf-8'),
+          body: resolveBody(bodyData),
         });
       } else {
         reject(new Error('Connection closed before headers complete'));

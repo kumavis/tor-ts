@@ -40,7 +40,7 @@ export type SWToMain =
       requestId: string;
       status: number;
       statusText: string;
-      html: string;
+      body: Uint8Array;
     }
   | { type: 'fetchError'; requestId: string; error: string }
   | { type: 'error'; error: string }
