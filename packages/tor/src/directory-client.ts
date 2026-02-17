@@ -214,10 +214,12 @@ export class DirectoryClient {
    * Download a hidden service descriptor by blinded public key.
    * Equivalent to: GET /tor/hs/3/{blinded-key}
    *
-   * @param blindedPublicKeyBase64Url - Base64url-encoded blinded public key (no padding)
+   * @param blindedPublicKeyBase64 - Standard base64-encoded blinded public key (no padding).
+   *   Must use standard base64 (`+` and `/`), NOT base64url (`-` and `_`).
+   *   Tor HSDirs reject base64url characters.
    */
-  async downloadHsDescriptor(blindedPublicKeyBase64Url: string): Promise<string | null> {
-    const path = `/tor/hs/3/${encodeURIComponent(blindedPublicKeyBase64Url)}`;
+  async downloadHsDescriptor(blindedPublicKeyBase64: string): Promise<string | null> {
+    const path = `/tor/hs/3/${blindedPublicKeyBase64}`;
     const response = await this.request('GET', path);
     if (response.statusCode === 404) {
       return null;
