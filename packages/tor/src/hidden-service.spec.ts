@@ -9,6 +9,7 @@ import {
   getSrvValues,
   selectHsdirsForFetch,
   toBase64UrlNoPad,
+  toBase64NoPad,
   hsBuildHsIndex,
   hsBuildHsdirIndex,
   type HsdirCandidate,
@@ -282,7 +283,7 @@ test('getSrvValues: uses real SRVs when available in consensus', (t) => {
   t.deepEqual(srvValues[1], realPreviousSrv, 'should use real previous SRV');
 });
 
-test('toBase64UrlNoPad: encodes blinded key for HSDir lookup', (t) => {
+test('toBase64UrlNoPad: encodes buffer as base64url (NOT for HSDir URLs)', (t) => {
   // Arti test vector blinded key
   const blindedKey = Buffer.from(
     '3A50BF210E8F9EE955AE0014F7A6917FB65EBF098A86305ABB508D1A7291B6D5',
@@ -300,8 +301,34 @@ test('toBase64UrlNoPad: encodes blinded key for HSDir lookup', (t) => {
   // Verify it can be decoded back
   const decoded = Buffer.from(encoded.replaceAll('-', '+').replaceAll('_', '/'), 'base64');
   t.deepEqual(decoded, blindedKey, 'should decode back to original');
+});
 
-  console.log('Blinded key base64url:', encoded);
+test('toBase64NoPad: encodes blinded key for HSDir descriptor fetch URL', (t) => {
+  // Arti test vector blinded key
+  const blindedKey = Buffer.from(
+    '3A50BF210E8F9EE955AE0014F7A6917FB65EBF098A86305ABB508D1A7291B6D5',
+    'hex'
+  );
+
+  const encoded = toBase64NoPad(blindedKey);
+
+  // Must be standard base64 (with + and /) without padding.
+  // Tor HSDirs use C Tor's base64_decode() which rejects base64url chars.
+  t.false(encoded.includes('-'), 'must not contain - (base64url char)');
+  t.false(encoded.includes('_'), 'must not contain _ (base64url char)');
+  t.false(encoded.includes('='), 'must not contain padding');
+  t.true(encoded.length > 0, 'should not be empty');
+
+  // Verify it can be decoded back via standard base64
+  const decoded = Buffer.from(encoded, 'base64');
+  t.deepEqual(decoded, blindedKey, 'should decode back to original');
+
+  // Verify standard base64 and base64url produce different output for keys containing +//
+  const keyWithSpecialChars = Buffer.from('fffe3f', 'hex'); // produces + and / in base64
+  const std = toBase64NoPad(keyWithSpecialChars);
+  const url = toBase64UrlNoPad(keyWithSpecialChars);
+  t.not(std, url, 'standard base64 and base64url should differ for bytes that map to +/');
+  t.true(std.includes('/') || std.includes('+'), 'standard base64 should preserve + or /');
 });
 
 test('selectHsdirsForFetch: produces deterministic results', (t) => {

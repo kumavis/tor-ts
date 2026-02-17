@@ -554,6 +554,20 @@ export function toBase64UrlNoPad(buf: Buffer): string {
   return buf.toString('base64').replaceAll('+', '-').replaceAll('/', '_').replaceAll('=', '');
 }
 
+/**
+ * Standard base64 encoding without padding.
+ *
+ * The Tor directory protocol uses standard base64 (with `+` and `/`)
+ * WITHOUT padding for blinded public keys in HSDir descriptor fetch URLs.
+ * This matches the C Tor client's `digest256_to_base64()` / `base64_encode_nopad()`.
+ *
+ * IMPORTANT: Do NOT use base64url here. The HSDir's `base64_decode()` rejects
+ * `-` and `_` characters, returning 404.
+ */
+export function toBase64NoPad(buf: Buffer): string {
+  return buf.toString('base64').replaceAll('=', '');
+}
+
 export function computeDisasterSrv(params: {
   periodLengthMinutes: bigint;
   periodNum: bigint;
@@ -1395,13 +1409,15 @@ export async function fetchHsDescriptorOverDirectoryStream(
   log: (msg: string) => void = () => {},
   clientAuth?: HsClientAuthCredentials
 ): Promise<HiddenServiceDescriptor | undefined> {
-  const z = toBase64UrlNoPad(blindedPublicKey);
+  // Use standard base64 (no padding) — NOT base64url.
+  // Tor HSDirs use C Tor's base64_decode() which rejects '-' and '_'.
+  const z = toBase64NoPad(blindedPublicKey);
 
   try {
     const stream = await circuit.openDirectoryStream();
 
     const requestText =
-      `GET /tor/hs/3/${encodeURIComponent(z)} HTTP/1.0\r\n` +
+      `GET /tor/hs/3/${z} HTTP/1.0\r\n` +
       `Host: hsdir\r\n` +
       `Connection: close\r\n` +
       `\r\n`;
@@ -1550,11 +1566,11 @@ export async function dangerouslyLookupHiddenServiceDescriptor(params: {
         periodLengthMinutes,
       });
       subcred = deriveSubcredential({ publicIdentityKey, blindedPublicKey });
-      const z = toBase64UrlNoPad(blindedPublicKey);
+      const z = toBase64NoPad(blindedPublicKey);
 
       for (const hsdir of params.hsdirCandidates) {
         if (!Number.isFinite(hsdir.dirPort) || hsdir.dirPort <= 0) continue;
-        const url = `http://${hsdir.ip}:${hsdir.dirPort}/tor/hs/3/${encodeURIComponent(z)}`;
+        const url = `http://${hsdir.ip}:${hsdir.dirPort}/tor/hs/3/${z}`;
         let res: Response;
         try {
           res = await fetch(url);
