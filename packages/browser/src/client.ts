@@ -11,7 +11,12 @@ import { lookupPeerInfo } from 'tor/directory-client';
 import { pickRelayWithFlags } from 'tor/build-circuit/util';
 import { ChannelManager } from 'tor/channel';
 import type { BuildCircuitFn } from 'tor/hidden-service';
-import { TorClient, type CircuitResult, type MicrodescProgressCallback } from 'tor';
+import {
+  TorClient,
+  type CircuitResult,
+  type MicrodescProgressCallback,
+  type MicrodescStorage,
+} from 'tor';
 import { SnowflakeBrowserChannel } from './snowflake-channel.ts';
 import { performBootstrap } from './bootstrap.ts';
 import { fetchViaTorCircuit } from './http-fetch.ts';
@@ -67,6 +72,12 @@ export type BrowserTorClientOptions = {
   dangerouslySkipSignatureVerification?: boolean;
   /** Skip using cached consensus from sessionStorage */
   skipConsensusCache?: boolean;
+  /** Pre-loaded consensus text (e.g. from IndexedDB). Passed to bootstrap. */
+  cachedConsensusText?: string;
+  /** Custom microdesc storage. Passed to bootstrap. */
+  microdescStorage?: MicrodescStorage;
+  /** Callback when consensus is updated. Passed to bootstrap. */
+  onConsensusUpdate?: (rawContent: string) => void;
 };
 
 /**

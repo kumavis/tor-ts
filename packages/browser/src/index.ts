@@ -35,6 +35,9 @@ export type { ConsensusCacheStatus } from './consensus-cache.ts';
 // Microdescriptor caching utilities for localStorage
 export { LocalStorageMicrodescStorage } from './microdesc-cache.ts';
 
+// Bootstrap options (for service worker / custom storage)
+export type { BrowserBootstrapOptions } from './bootstrap.ts';
+
 // Hidden service (.onion) support
 export { isOnionAddress } from 'tor/hidden-service';
 
@@ -56,6 +59,7 @@ export {
   InMemoryMicrodescStorage,
   type HsConnectionResult,
   type CircuitResult,
+  type CachedMicrodesc,
   type FetchOptions,
   type FetchResponse,
   type MicrodescProgressCallback,

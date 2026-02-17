@@ -1,10 +1,13 @@
 /**
  * TamanegiBrowser - Main Application
  * Uses Snowflake to browse the web through Tor entirely in the browser.
+ * Tor client runs in a service worker; this page communicates via postMessage.
  */
 
-import { getConsensusCacheStatus, makeBrowserTorClient, isOnionAddress, fetchHtml } from 'browser';
-import type { DownloadProgress, BrowserTorClient, MicrodescProgressCallback } from 'browser';
+import { getConsensusCacheStatus, isOnionAddress } from 'browser';
+import type { DownloadProgress, MicrodescProgressCallback } from 'browser';
+import type { TorServiceWorkerClient } from './tor-sw-client.ts';
+import { registerTorServiceWorker } from './service-worker-client.ts';
 
 // Types
 type ViewMode = 'info' | 'browser';
@@ -75,8 +78,9 @@ const warningBanner = document.getElementById('warning-banner') as HTMLElement;
 const warningDismiss = document.getElementById('warning-dismiss') as HTMLButtonElement;
 
 // State
-let client: BrowserTorClient | null = null;
-let clientPromise: Promise<BrowserTorClient> | null = null;
+let swClient: TorServiceWorkerClient | null = null;
+let connectedPromise: Promise<void> | null = null;
+let connectedResolve: (() => void) | null = null;
 let isConnecting = false;
 let currentPageUrl: URL | null = null;
 let linkMap: Map<number, string> = new Map();
@@ -217,6 +221,16 @@ function setNodeState(
 
 function updateCircuitStatus(text: string): void {
   circuitStatus.textContent = text;
+}
+
+/** Reset circuit visualization when the SW reports disconnection. */
+function resetCircuitVisualization(): void {
+  setNodeState(snowflakeName, snowflakeStatus, nodeSnowflake, 'waiting', 'Waiting...');
+  setNodeState(guardName, guardStatus, nodeGuard, 'waiting', 'Waiting...');
+  setNodeState(middleName, middleStatus, nodeMiddle, 'waiting', 'Waiting...');
+  setNodeState(exitName, exitStatus, nodeExit, 'waiting', 'Waiting...');
+  setNodeState(destinationName, destinationStatus, nodeDestination, 'waiting', 'Not set');
+  updateCircuitStatus('Not connected');
 }
 
 // Update circuit display labels for hidden service vs clearnet mode
@@ -501,51 +515,26 @@ function parseStatusMessage(status: string): void {
   }
 }
 
-// Lazy client creation - shared across clearnet and onion browsing
-async function getClient(): Promise<BrowserTorClient> {
-  // Return existing client
-  if (client) {
-    return client;
+// Wait for the service worker Tor client to be connected (connects if needed)
+async function getClient(): Promise<void> {
+  if (connectedPromise) {
+    return connectedPromise;
   }
 
-  // Return in-flight creation
-  if (clientPromise) {
-    return clientPromise;
+  if (!swClient) {
+    throw new Error('Service worker not ready');
   }
 
-  // Create new client
   setStatus('connecting', 'Connecting...');
   log('Initializing Tor connection via Snowflake...', 'info');
   updateCircuitStatus('Initializing...');
 
-  clientPromise = makeBrowserTorClient({
-    onStatus: (status) => {
-      log(status, 'info');
-      parseStatusMessage(status);
-    },
-    onConsensusProgress: (progress) => {
-      updateConsensusProgress(progress);
-    },
-    onMicrodescProgress: updateMicrodescProgress,
-  }).then((result) => {
-    client = result.client;
-
-    // Update consensus panel to show cached state
-    showConsensusCached();
-    setStatus('connected', 'Connected');
-    log('Successfully connected to Tor network!', 'success');
-
-    // Ensure all nodes show as connected
-    setNodeState(snowflakeName, snowflakeStatus, nodeSnowflake, 'connected');
-    setNodeState(guardName, guardStatus, nodeGuard, 'connected');
-    setNodeState(middleName, middleStatus, nodeMiddle, 'connected');
-    setNodeState(exitName, exitStatus, nodeExit, 'connected');
-    updateCircuitStatus('Client ready');
-
-    return client;
+  connectedPromise = new Promise<void>((resolve) => {
+    connectedResolve = resolve;
   });
 
-  return clientPromise;
+  swClient.connect();
+  return connectedPromise;
 }
 
 // Fetch and display page
@@ -599,8 +588,8 @@ async function browsePage(url: string): Promise<void> {
   );
 
   try {
-    // Get or create client
-    const torClient = await getClient();
+    // Ensure SW Tor client is connected
+    await getClient();
 
     // Update UI for onion sites (HS connection takes time)
     if (isOnion) {
@@ -613,10 +602,10 @@ async function browsePage(url: string): Promise<void> {
 
     log('Sending request through Tor...', 'info');
 
-    // Unified fetch - handles both clearnet and onion URLs
-    // Uses longer timeout for onion sites (HS connection is slow)
+    // Unified fetch via service worker (clearnet and onion)
     const timeout = isOnion ? 120000 : 60000;
-    const html = await fetchHtml(torClient, parsedUrl.href, { timeout });
+    const result = await swClient!.fetch(parsedUrl.href, { timeout });
+    const html = result.html;
 
     // Update UI after successful fetch
     if (isOnion) {
@@ -895,43 +884,23 @@ warningDismiss.addEventListener('click', () => {
   warningBanner.hidden = true;
 });
 
-// Consensus refresh button - downloads fresh consensus immediately
-consensusRefreshBtn.addEventListener('click', async () => {
-  if (isConnecting) return;
+// Consensus refresh button - asks service worker to refresh consensus
+consensusRefreshBtn.addEventListener('click', () => {
+  if (isConnecting || !swClient) return;
 
   log('Refreshing consensus...', 'info');
-
-  // Reset circuit display
   setStatus('connecting', 'Refreshing...');
   updateCircuitStatus('Refreshing consensus...');
+  setLoading(true);
 
-  try {
-    setLoading(true);
+  swClient.refreshConsensus();
 
-    // Check if client already exists
-    const clientExisted = !!client;
-
-    // Get the client (will create if needed)
-    const torClient = await getClient();
-
-    // Only call refreshConsensus if client already existed
-    // (Creating a new client already fetches a fresh consensus)
-    if (clientExisted) {
-      await torClient.refreshConsensus();
-    }
-
-    showConsensusCached();
-    setStatus('connected', 'Connected');
-    log('Consensus refreshed successfully!', 'success');
-    updateCircuitStatus('Client ready');
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    log(`Error refreshing consensus: ${message}`, 'error');
-    setStatus('error', 'Error');
-    setConsensusState('none');
-  } finally {
+  // Stop loading after a delay (SW does not send a dedicated "refreshed" message)
+  setTimeout(() => {
     setLoading(false);
-  }
+    setStatus('connected', 'Connected');
+    updateCircuitStatus('Client ready');
+  }, 8000);
 });
 
 // Initialize consensus panel state (check if we have a cached consensus)
@@ -942,9 +911,55 @@ log('TamanegiBrowser ready. Enter a URL to browse anonymously.', 'info');
 log('Supports both clearnet and .onion addresses.', 'info');
 log('Powered by Snowflake pluggable transport.', 'info');
 
+// Service worker registration and Tor client proxy setup
+async function initServiceWorker(): Promise<void> {
+  const client = await registerTorServiceWorker(new URL('./sw.ts', import.meta.url), {
+    scope: '/',
+  });
+
+  if (!client) {
+    log('Service worker not available', 'error');
+    return;
+  }
+
+  swClient = client;
+
+  swClient.onStatus = (message) => {
+    log(message, 'info');
+    parseStatusMessage(message);
+  };
+  swClient.onConsensusProgress = updateConsensusProgress;
+  swClient.onMicrodescProgress = updateMicrodescProgress;
+  swClient.onConnected = () => {
+    if (connectedResolve) {
+      connectedResolve();
+      connectedResolve = null;
+    }
+    showConsensusCached();
+    setStatus('connected', 'Connected');
+    log('Successfully connected to Tor network!', 'success');
+    setNodeState(snowflakeName, snowflakeStatus, nodeSnowflake, 'connected');
+    setNodeState(guardName, guardStatus, nodeGuard, 'connected');
+    setNodeState(middleName, middleStatus, nodeMiddle, 'connected');
+    setNodeState(exitName, exitStatus, nodeExit, 'connected');
+    updateCircuitStatus('Client ready');
+  };
+  swClient.onDisconnected = (reason) => {
+    connectedPromise = null;
+    connectedResolve = null;
+    resetCircuitVisualization();
+    setStatus('disconnected', 'Disconnected');
+    log(`Circuit closed: ${reason}`, 'info');
+  };
+  swClient.onError = (error) => {
+    log(`Error: ${error}`, 'error');
+    setStatus('error', 'Error');
+  };
+}
+
+void initServiceWorker();
+
 // Cleanup on page unload
 window.addEventListener('beforeunload', () => {
-  if (client) {
-    client.destroy();
-  }
+  swClient?.destroy();
 });

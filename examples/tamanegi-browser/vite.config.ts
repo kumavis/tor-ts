@@ -8,6 +8,18 @@ export default defineConfig({
   // Use base path from env for GitHub Pages deployment
   base: process.env.VITE_BASE_PATH || '/',
   plugins: [
+    {
+      name: 'service-worker-allowed-scope',
+      configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          const path = req.url?.split('?')[0] ?? '';
+          if (path.endsWith('sw.ts') || /\/sw-[^/]+\.(ts|js)$/.test(path)) {
+            res.setHeader('Service-Worker-Allowed', '/');
+          }
+          next();
+        });
+      },
+    },
     nodePolyfills({
       include: ['buffer', 'crypto', 'events', 'stream', 'util', 'process', 'assert'],
       globals: {
