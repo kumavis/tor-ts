@@ -8,7 +8,7 @@ declare const self: ServiceWorkerGlobalScope;
 
 import { makeBrowserTorClient } from 'browser';
 import type { BrowserTorClient, CachedMicrodesc, MicrodescStorage } from 'browser';
-import type { MainToSW, SWToMain } from './sw-messages.ts';
+import { type MainToSW, type SWToMain, TOR_PROXY_PATH_PREFIX } from './sw-messages.ts';
 import { consensusIDB, microdescIDB } from './idb-cache.ts';
 
 // ---------------------------------------------------------------------------
@@ -16,6 +16,31 @@ import { consensusIDB, microdescIDB } from './idb-cache.ts';
 // ---------------------------------------------------------------------------
 
 let client: BrowserTorClient | null = null;
+
+/**
+ * Extract the target URL from a request path like /tor/https%3A%2F%2Fexample.com%2Fstyle.css
+ */
+function getTargetUrlFromProxyPath(pathname: string): string | null {
+  if (!pathname.startsWith(TOR_PROXY_PATH_PREFIX)) return null;
+  const encoded = pathname.slice(TOR_PROXY_PATH_PREFIX.length);
+  if (!encoded) return null;
+  try {
+    return decodeURIComponent(encoded);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Convert a Map of headers to a Headers instance for Response.
+ */
+function mapToHeaders(map: Map<string, string>): Headers {
+  const h = new Headers();
+  for (const [k, v] of map) {
+    h.set(k, v);
+  }
+  return h;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -202,6 +227,56 @@ function handleGetState(): void {
   const state: 'idle' | 'connecting' | 'connected' | 'disconnected' = client ? 'connected' : 'idle';
   void broadcast({ type: 'state', state });
 }
+
+// ---------------------------------------------------------------------------
+// Fetch: intercept /tor/<encoded-url> and fulfill over Tor
+// ---------------------------------------------------------------------------
+
+const TOR_PROXY_TIMEOUT_MS = 30_000;
+
+async function handleProxyFetch(request: Request): Promise<Response> {
+  const url = new URL(request.url);
+  const targetUrl = getTargetUrlFromProxyPath(url.pathname);
+
+  if (!targetUrl) {
+    return new Response('Invalid Tor proxy path', { status: 400 });
+  }
+  if (!client) {
+    return new Response('Tor not connected', { status: 503 });
+  }
+
+  try {
+    const headers: Record<string, string> = {};
+    const accept = request.headers.get('Accept');
+    if (accept) headers['Accept'] = accept;
+
+    const result = await client.fetch(targetUrl, {
+      method: request.method || 'GET',
+      headers: Object.keys(headers).length > 0 ? headers : undefined,
+      timeout: TOR_PROXY_TIMEOUT_MS,
+    });
+
+    return new Response(result.body as BodyInit, {
+      status: result.status,
+      statusText: result.statusText,
+      headers: mapToHeaders(result.headers),
+    });
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return new Response(message, { status: 502, statusText: 'Bad Gateway' });
+  }
+}
+
+self.addEventListener('fetch', (e: FetchEvent) => {
+  const url = new URL(e.request.url);
+  if (url.origin !== self.location.origin) return;
+  if (!url.pathname.startsWith(TOR_PROXY_PATH_PREFIX)) return;
+  e.respondWith(handleProxyFetch(e.request));
+});
+
+// ---------------------------------------------------------------------------
+// Message (from main page)
+// ---------------------------------------------------------------------------
 
 self.addEventListener('message', (e: ExtendableMessageEvent) => {
   const msg = e.data as MainToSW;
