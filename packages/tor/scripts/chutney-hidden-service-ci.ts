@@ -30,28 +30,42 @@ async function waitForFile(path: string, timeoutMs: number): Promise<string> {
   throw new Error(`Timed out waiting for file: ${path}`);
 }
 
+const REQUIRED_ENV = [
+  'TOR_TS_HS_HOSTNAME_PATH',
+  'TOR_TS_HS_TARGET_PORT',
+  'TOR_TS_HS_VIRTPORT',
+] as const;
+
+function assertEnv(): {
+  hostnamePath: string;
+  targetPort: number;
+  hsVirtPort: number;
+} {
+  const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
+  if (missing.length) {
+    throw new Error(
+      `Missing required env: ${missing.join(', ')}. CI sets these; for local runs set TOR_TS_HS_HOSTNAME_PATH (e.g. $CHUTNEY_DATA_DIR/nodes/Node-h1/hidden_service/hostname), TOR_TS_HS_TARGET_PORT (e.g. 4747), TOR_TS_HS_VIRTPORT (e.g. 5858).`
+    );
+  }
+  const hostnamePath = process.env.TOR_TS_HS_HOSTNAME_PATH!;
+  const targetPort = Number.parseInt(process.env.TOR_TS_HS_TARGET_PORT!, 10);
+  const hsVirtPort = Number.parseInt(process.env.TOR_TS_HS_VIRTPORT!, 10);
+  if (!Number.isFinite(targetPort) || targetPort <= 0) {
+    throw new Error(`Invalid TOR_TS_HS_TARGET_PORT: ${process.env.TOR_TS_HS_TARGET_PORT}`);
+  }
+  if (!Number.isFinite(hsVirtPort) || hsVirtPort <= 0) {
+    throw new Error(`Invalid TOR_TS_HS_VIRTPORT: ${process.env.TOR_TS_HS_VIRTPORT}`);
+  }
+  return { hostnamePath, targetPort, hsVirtPort };
+}
+
 async function main() {
   const expectedBody = 'hello-from-tor-ts-chutney-hidden-service-ci';
 
   const overallTimeoutMs = 8 * 60_000;
   const perStepTimeoutMs = 90_000;
 
-  // Local HTTP server that the chutney onion-service node will forward to.
-  const targetPort = Number.parseInt(process.env.TOR_TS_HS_TARGET_PORT ?? '4747', 10);
-  if (!Number.isFinite(targetPort) || targetPort <= 0) {
-    throw new Error(`Invalid TOR_TS_HS_TARGET_PORT: ${process.env.TOR_TS_HS_TARGET_PORT ?? ''}`);
-  }
-
-  // The hidden service's virtual port (what clients connect to).
-  // Chutney's built-in HS uses 5858 by default.
-  const hsVirtPort = Number.parseInt(process.env.TOR_TS_HS_VIRTPORT ?? '5858', 10);
-  if (!Number.isFinite(hsVirtPort) || hsVirtPort <= 0) {
-    throw new Error(`Invalid TOR_TS_HS_VIRTPORT: ${process.env.TOR_TS_HS_VIRTPORT ?? ''}`);
-  }
-
-  const hostnamePath =
-    process.env.TOR_TS_HS_HOSTNAME_PATH ??
-    `${process.env.CHUTNEY_DATA_DIR ?? ''}/hs_service/hostname`;
+  const { hostnamePath, targetPort, hsVirtPort } = assertEnv();
 
   const openSockets = new Set<net.Socket>();
   const server = http.createServer((_req, res) => {
