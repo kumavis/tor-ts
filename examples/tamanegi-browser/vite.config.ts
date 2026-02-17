@@ -54,6 +54,18 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     sourcemap: true,
+    rollupOptions: {
+      input: {
+        main: path.resolve(__dirname, 'index.html'),
+        sw: path.resolve(__dirname, 'src/sw.ts'),
+      },
+      output: {
+        entryFileNames: (chunkInfo) =>
+          chunkInfo.name === 'sw' ? 'sw.js' : 'assets/[name]-[hash].js',
+        chunkFileNames: 'assets/[name]-[hash].js',
+        assetFileNames: 'assets/[name]-[hash][extname]',
+      },
+    },
   },
   optimizeDeps: {
     include: ['@reclaimprotocol/tls', 'buffer', 'events', 'web-streams-polyfill'],
