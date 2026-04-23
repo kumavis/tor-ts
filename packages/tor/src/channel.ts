@@ -379,15 +379,30 @@ export class TlsChannelConnection extends ChannelConnection {
     };
     const socket = tls.connect(server.port, server.ip, tlsOptions);
     this.socket = socket;
-    const socketReadyP = new Promise<void>((resolve) => {
-      socket.once('secureConnect', resolve);
+    const socketReadyP = new Promise<void>((resolve, reject) => {
+      const onSecure = (): void => {
+        socket.removeListener('error', onError);
+        resolve();
+      };
+      const onError = (err: Error): void => {
+        socket.removeListener('secureConnect', onSecure);
+        reject(err);
+      };
+      socket.once('secureConnect', onSecure);
+      socket.once('error', onError);
+    });
+    // Always keep a post-handshake 'error' listener attached: Node's
+    // EventEmitter throws on 'error' emissions with no listener, and we don't
+    // want a transport-level failure after secureConnect to crash the process.
+    socket.on('error', (err) => {
+      // The handshake-phase listener above handles errors before secureConnect;
+      // here we surface runtime errors as a circuit-level event rather than
+      // letting the process die.
+      this.incommingCommands.emit('transport-error', err);
     });
     socket.on('data', (data) => {
       this.onData(data);
     });
-    // socket.on('end',() => { console.log('end') });
-    // socket.on('close',() => { console.log('close') });
-    // socket.on('error', (err) => { console.log('error', err) });
     await socketReadyP;
     // perform handshake
     this.peerConnectionDetails = {
