@@ -11,7 +11,7 @@
 
 import test from 'ava';
 import fetch from 'node-fetch';
-import { withRetryingCircuit } from 'tor/build-circuit/mainnet';
+import { withTorOperation } from 'tor/build-circuit/mainnet';
 import { getTorAgentForUrl } from 'tor/node';
 
 test('fetch through Tor circuit', async (t) => {
@@ -21,12 +21,13 @@ test('fetch through Tor circuit', async (t) => {
   const target = 'http://example.com';
   console.log('Connecting to Tor network...');
 
-  // withRetryingCircuit builds a fresh 3-hop circuit for each attempt and
+  // withTorOperation builds a fresh 3-hop circuit for each attempt and
   // retries automatically on transient Tor-network failures (relay DESTROYs
   // with reasons like CHANNEL_CLOSED/TIMEOUT, transport-level ECONNRESET,
-  // etc.). Non-retryable errors (caller bugs, auth failures, malformed data)
-  // propagate on the first attempt.
-  const { status, body } = await withRetryingCircuit(
+  // etc.). Each attempt runs the whole body from scratch, so only use it
+  // for side-effect-free work — for batch workloads call
+  // buildCircuitWithRetry + retryTransient per-request instead.
+  const { status, body } = await withTorOperation(
     async (circuit) => {
       console.log('Circuit established!');
       const agent = getTorAgentForUrl(circuit, target);
