@@ -170,7 +170,7 @@ export class SmuxSession extends EventEmitter {
       const err = new Error(
         `smux: keepalive timeout (no frame for ${this.now() - this.lastFrameReceivedAt}ms)`
       );
-      this.emit('error', err);
+      this.safeEmitError(err);
       this.close(err);
     }
   }
@@ -191,8 +191,20 @@ export class SmuxSession extends EventEmitter {
     } catch (err) {
       if (this.closed) return;
       const e = err instanceof Error ? err : new Error(String(err));
-      this.emit('error', e);
-      this.close(e);
+      // EOF means the carrier closed gracefully (e.g. our own kcp.close()
+      // during shutdown). That's not an error condition — just a close —
+      // and emitting 'error' here when nothing listens crashes the process
+      // because EventEmitter mandates a listener for 'error' events.
+      const isOrderlyClose = e.message === 'EOF';
+      if (!isOrderlyClose) this.safeEmitError(e);
+      this.close(isOrderlyClose ? undefined : e);
+    }
+  }
+
+  /** emit('error') with no listener is fatal to the Node process — guard it. */
+  private safeEmitError(err: Error): void {
+    if (this.listenerCount('error') > 0) {
+      this.emit('error', err);
     }
   }
 

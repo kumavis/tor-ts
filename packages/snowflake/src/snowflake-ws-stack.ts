@@ -47,9 +47,14 @@ export class SnowflakeWsStack {
     // strand the session forever.
     this.kcp.startAutoFlush();
 
-    // Surface errors.
-    this.downlink.on('error', (err) => this.smux.emit('error', err));
-    this.kcp.onError((err) => this.smux.emit('error', err));
+    // Surface errors. Guard against EventEmitter's "unhandled error" semantics
+    // — an emit('error') with no listener crashes the process, and consumers
+    // of the stack don't always wire an 'error' listener on smux.
+    const surface = (err: Error): void => {
+      if (this.smux.listenerCount('error') > 0) this.smux.emit('error', err);
+    };
+    this.downlink.on('error', (err: Error) => surface(err));
+    this.kcp.onError((err) => surface(err));
   }
 
   async openStream(): Promise<SmuxStream> {
