@@ -245,3 +245,150 @@ export async function connectRandomCircuitWithSafeBootstrap(
 // Re-export for convenience
 export { DEFAULT_TARGET_PORTS };
 export type { CircuitBuildOptions as BuildCircuitOptions };
+
+// ---------------------------------------------------------------------------
+// Retry helper
+//
+// Building a circuit and doing anything over it on the live Tor network is
+// inherently flaky: relays hibernate, exit policies change, the guard's
+// upstream OR-to-OR link can die mid-EXTEND, the chosen exit can fail to
+// connect to the target, or any hop can be overloaded. None of those are
+// bugs in client code — they're the cost of being a client of a volunteer
+// relay network — so application callers need to retry.
+// ---------------------------------------------------------------------------
+
+/**
+ * DESTROY reasons that indicate a transient network/relay failure rather than
+ * a protocol mistake on our side. A fresh circuit through a different path
+ * may well succeed.
+ *
+ * Per tor-spec.txt §5.4:
+ *   4 HIBERNATING, 5 RESOURCELIMIT, 6 CONNECTFAILED, 7 OR_IDENTITY,
+ *   8 CHANNEL_CLOSED, 10 TIMEOUT, 11 DESTROYED
+ *
+ * Non-retryable:
+ *   0 NONE, 1 PROTOCOL, 2 INTERNAL, 3 REQUESTED, 9 FINISHED, 12 NOSUCHSERVICE
+ */
+const RETRYABLE_DESTROY_REASONS = new Set([4, 5, 6, 7, 8, 10, 11]);
+const RETRYABLE_DESTROY_NAMES = new Set([
+  'HIBERNATING',
+  'RESOURCELIMIT',
+  'CONNECTFAILED',
+  'OR_IDENTITY',
+  'CHANNEL_CLOSED',
+  'TIMEOUT',
+  'DESTROYED',
+]);
+
+/**
+ * Whether this error is worth retrying with a fresh circuit. Matches both the
+ * structured "circuit destroyed: REASON (N)" messages produced by Circuit
+ * and common transport-level hang-ups (ECONNRESET, ETIMEDOUT, socket hang up).
+ */
+export function isRetryableTorError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message;
+
+  // Structured circuit-destroy messages from Circuit.receiveMessage.
+  const m = msg.match(/circuit destroyed: (\w+) \((\d+)\)/);
+  if (m) {
+    const name = m[1]!;
+    const code = Number.parseInt(m[2]!, 10);
+    return RETRYABLE_DESTROY_NAMES.has(name) || RETRYABLE_DESTROY_REASONS.has(code);
+  }
+
+  // Transport-level transients — guard/middle/exit TCP flakiness, stalled
+  // reads surfacing as socket timeouts, etc.
+  if (/ECONNRESET|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|socket hang up|timed out|timeout/i.test(msg)) {
+    return true;
+  }
+  return false;
+}
+
+export type WithCircuitRetryOptions = CircuitBuildOptions & {
+  /** Maximum number of bootstrap+run attempts. Defaults to 3. */
+  maxAttempts?: number;
+  /**
+   * Called before each retry with the failure that triggered it. Useful for
+   * surfacing transient-failure telemetry without coupling to a logger.
+   */
+  onRetry?: (attempt: number, err: Error) => void;
+  /**
+   * Override for the retry predicate. Defaults to {@link isRetryableTorError}.
+   */
+  shouldRetry?: (err: unknown) => boolean;
+};
+
+/**
+ * Build a fresh random 3-hop circuit, run `fn` over it, and destroy the
+ * circuit when `fn` returns. If `fn` or the bootstrap throws a retryable Tor
+ * error, discard the (possibly half-dead) circuit and try again with a new
+ * one up to `maxAttempts` times.
+ *
+ * Non-retryable errors propagate immediately so caller bugs don't get masked
+ * behind a multi-minute retry loop.
+ *
+ * @example
+ * const html = await withRetryingCircuit(async (circuit) => {
+ *   const agent = getTorAgentForUrl(circuit, 'http://example.com');
+ *   const r = await fetch('http://example.com', { agent });
+ *   return r.text();
+ * });
+ */
+export async function withRetryingCircuit<T>(
+  fn: (circuit: Circuit) => Promise<T>,
+  options: WithCircuitRetryOptions = {}
+): Promise<T> {
+  const { maxAttempts, onRetry, shouldRetry, ...buildOpts } = options;
+  return retryWithCircuit(fn, {
+    connect: () => connectRandomCircuitWithSafeBootstrap(buildOpts),
+    ...(maxAttempts !== undefined ? { maxAttempts } : {}),
+    ...(onRetry !== undefined ? { onRetry } : {}),
+    ...(shouldRetry !== undefined ? { shouldRetry } : {}),
+  });
+}
+
+/**
+ * Testable core of {@link withRetryingCircuit}: identical behavior, but lets
+ * callers inject the circuit-build step so unit tests can exercise the retry
+ * policy without touching the live Tor network.
+ */
+export async function retryWithCircuit<T>(
+  fn: (circuit: Circuit) => Promise<T>,
+  options: {
+    connect: () => Promise<Circuit>;
+    maxAttempts?: number;
+    onRetry?: (attempt: number, err: Error) => void;
+    shouldRetry?: (err: unknown) => boolean;
+  }
+): Promise<T> {
+  const { connect, maxAttempts = 3, onRetry, shouldRetry = isRetryableTorError } = options;
+  if (maxAttempts < 1) throw new Error('maxAttempts must be >= 1');
+
+  let lastError: unknown;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    let circuit: Circuit | undefined;
+    try {
+      circuit = await connect();
+      return await fn(circuit);
+    } catch (err) {
+      lastError = err;
+      const shouldTryAgain = attempt < maxAttempts && shouldRetry(err);
+      if (shouldTryAgain) {
+        if (onRetry) onRetry(attempt, err instanceof Error ? err : new Error(String(err)));
+        continue;
+      }
+      throw err;
+    } finally {
+      if (circuit) {
+        try {
+          circuit.destroy();
+        } catch {
+          // Circuit may already be destroyed by the DESTROY cell we caught.
+        }
+      }
+    }
+  }
+
+  throw lastError ?? new Error('retryWithCircuit: exhausted without a result or error');
+}
