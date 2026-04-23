@@ -32,6 +32,19 @@ const hasFixtures = fs.existsSync(consensusPath) && fs.existsSync(authKeysPath);
 const consensusText = hasFixtures ? fs.readFileSync(consensusPath, 'utf-8') : '';
 const authKeysText = hasFixtures ? fs.readFileSync(authKeysPath, 'utf-8') : '';
 
+/**
+ * Evaluate the fixture as of its `valid-after` timestamp so these tests don't
+ * start failing once wall-clock time marches past the fixture's cert expiry
+ * window. The committed consensus is from 2026-01-12; several authority certs
+ * have already lapsed at the time of writing.
+ */
+const FIXTURE_NOW = hasFixtures
+  ? (() => {
+      const m = consensusText.match(/^valid-after (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/m);
+      return m ? new Date(m[1] + ' UTC').getTime() : Date.now();
+    })()
+  : Date.now();
+
 // Parse authority certificates (lazy initialized since it's now async)
 let keyCertificates: AuthorityKeyCertificate[] = [];
 let keyCertificatesLoaded = false;
@@ -165,6 +178,7 @@ test('Node.js crypto - verifyConsensusSignatures works', async (t) => {
   const result = await verifyConsensusSignatures(consensusText, {
     keyCertificates: certs,
     requiredSignatures: 5,
+    now: FIXTURE_NOW,
   });
 
   t.log(
