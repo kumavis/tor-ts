@@ -298,8 +298,17 @@ export function isRetryableTorError(err: unknown): boolean {
   }
 
   // Transport-level transients — guard/middle/exit TCP flakiness, stalled
-  // reads surfacing as socket timeouts, etc.
-  if (/ECONNRESET|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|socket hang up|timed out|timeout/i.test(msg)) {
+  // reads surfacing as socket timeouts, connection refused from an unhealthy
+  // fallback directory, etc. Covers every Node system errno we realistically
+  // expect to see when a Tor relay is down, restarting, or firewalled.
+  if (
+    /\b(ECONNREFUSED|ECONNRESET|ECONNABORTED|ETIMEDOUT|ENETUNREACH|EHOSTUNREACH|ENETDOWN|ENETRESET|ENOTCONN|EPIPE|EPROTO)\b/.test(
+      msg
+    )
+  ) {
+    return true;
+  }
+  if (/socket hang up|timed out|timeout/i.test(msg)) {
     return true;
   }
   return false;

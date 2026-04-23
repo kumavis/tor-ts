@@ -48,11 +48,21 @@ test('isRetryableTorError: UNKNOWN_<N> falls back to numeric-code check', (t) =>
 });
 
 test('isRetryableTorError: transport-level hang-ups', (t) => {
+  // Node-style system errors. The "connect ECONNREFUSED 1.2.3.4:443" form
+  // specifically is what we see when a fallback directory is down.
+  t.true(isRetryableTorError(new Error('connect ECONNREFUSED 205.185.119.222:443')));
   t.true(isRetryableTorError(new Error('connect ECONNRESET')));
+  t.true(isRetryableTorError(new Error('connect ECONNABORTED 1.2.3.4:443')));
   t.true(isRetryableTorError(new Error('read ETIMEDOUT')));
+  t.true(isRetryableTorError(new Error('write EPIPE')));
+  t.true(isRetryableTorError(new Error('ENETUNREACH 203.0.113.1')));
+  t.true(isRetryableTorError(new Error('EHOSTUNREACH')));
+  t.true(isRetryableTorError(new Error('ENETDOWN')));
+  t.true(isRetryableTorError(new Error('ENETRESET')));
+  t.true(isRetryableTorError(new Error('ENOTCONN on socket')));
+  t.true(isRetryableTorError(new Error('EPROTO negotiation failed')));
   t.true(isRetryableTorError(new Error('socket hang up')));
   t.true(isRetryableTorError(new Error('Request timed out after 60000ms')));
-  t.true(isRetryableTorError(new Error('ENETUNREACH 203.0.113.1')));
 });
 
 test('isRetryableTorError: unrelated errors do not retry', (t) => {
