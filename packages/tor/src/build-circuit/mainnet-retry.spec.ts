@@ -1,27 +1,11 @@
 /**
- * Unit tests for the retry helper in build-circuit/mainnet.ts. These tests
- * never touch the live Tor network — they call retryWithCircuit with an
- * injected connect() to drive each attempt's outcome deterministically.
+ * Unit tests for the retry helpers in build-circuit/mainnet.ts. These tests
+ * never touch the live Tor network — they drive retryTransient directly with
+ * synthetic attempt functions.
  */
 
 import test from 'ava';
-import { isRetryableTorError, retryWithCircuit } from './mainnet.ts';
-import type { Circuit } from '../circuit.ts';
-
-type FakeCircuit = Circuit & { destroyCount: number };
-
-function fakeCircuit(): FakeCircuit {
-  let destroyCount = 0;
-  const c = {
-    get destroyCount() {
-      return destroyCount;
-    },
-    destroy() {
-      destroyCount += 1;
-    },
-  };
-  return c as unknown as FakeCircuit;
-}
+import { isRetryableTorError, retryTransient } from './mainnet.ts';
 
 test('isRetryableTorError: structured DESTROY with retryable reason', (t) => {
   t.true(isRetryableTorError(new Error('circuit destroyed: CHANNEL_CLOSED (8)')));
@@ -48,8 +32,6 @@ test('isRetryableTorError: UNKNOWN_<N> falls back to numeric-code check', (t) =>
 });
 
 test('isRetryableTorError: transport-level hang-ups', (t) => {
-  // Node-style system errors. The "connect ECONNREFUSED 1.2.3.4:443" form
-  // specifically is what we see when a fallback directory is down.
   t.true(isRetryableTorError(new Error('connect ECONNREFUSED 205.185.119.222:443')));
   t.true(isRetryableTorError(new Error('connect ECONNRESET')));
   t.true(isRetryableTorError(new Error('connect ECONNABORTED 1.2.3.4:443')));
@@ -72,151 +54,140 @@ test('isRetryableTorError: unrelated errors do not retry', (t) => {
   t.false(isRetryableTorError(undefined));
 });
 
-test('retryWithCircuit: returns fn result and destroys the circuit on success', async (t) => {
-  const c = fakeCircuit();
-  const got = await retryWithCircuit(
-    async (circuit) => {
-      t.is(circuit, c);
-      return 42;
-    },
-    { connect: async () => c }
-  );
+test('retryTransient: returns attempt() result on first success', async (t) => {
+  let calls = 0;
+  const got = await retryTransient(async () => {
+    calls += 1;
+    return 42;
+  });
   t.is(got, 42);
-  t.is(c.destroyCount, 1);
+  t.is(calls, 1);
 });
 
-test('retryWithCircuit: retries on a retryable DESTROY then succeeds', async (t) => {
-  const circuits = [fakeCircuit(), fakeCircuit(), fakeCircuit()];
+test('retryTransient: retries on retryable errors, surfaces last result', async (t) => {
   const retried: Array<{ attempt: number; message: string }> = [];
   let n = 0;
-
-  const got = await retryWithCircuit(
+  const got = await retryTransient(
     async () => {
       n += 1;
       if (n === 1) throw new Error('circuit destroyed: CHANNEL_CLOSED (8)');
-      if (n === 2) throw new Error('connect ECONNRESET');
+      if (n === 2) throw new Error('connect ECONNREFUSED 1.2.3.4:443');
       return 'ok';
     },
-    {
-      connect: async () => circuits[n]!,
-      onRetry: (attempt, err) => retried.push({ attempt, message: err.message }),
-    }
+    { onRetry: (attempt, err) => retried.push({ attempt, message: err.message }) }
   );
-
   t.is(got, 'ok');
   t.is(n, 3);
   t.deepEqual(retried, [
     { attempt: 1, message: 'circuit destroyed: CHANNEL_CLOSED (8)' },
-    { attempt: 2, message: 'connect ECONNRESET' },
+    { attempt: 2, message: 'connect ECONNREFUSED 1.2.3.4:443' },
   ]);
-  // All three circuits (including the failed ones) must be cleaned up.
-  for (const c of circuits) t.is(c.destroyCount, 1);
 });
 
-test('retryWithCircuit: propagates non-retryable errors on the first attempt', async (t) => {
-  const c = fakeCircuit();
+test('retryTransient: non-retryable errors propagate on first attempt', async (t) => {
   let retryCalls = 0;
+  let calls = 0;
   await t.throwsAsync(
-    retryWithCircuit(
+    retryTransient(
       async () => {
+        calls += 1;
         throw new Error('caller bug: no such module');
       },
-      {
-        connect: async () => c,
-        onRetry: () => {
-          retryCalls += 1;
-        },
-      }
+      { onRetry: () => (retryCalls += 1) }
     ),
     { message: /caller bug/ }
   );
-  t.is(retryCalls, 0, 'retry hook must not fire for non-retryable errors');
-  t.is(c.destroyCount, 1, 'circuit must still be cleaned up');
+  t.is(calls, 1);
+  t.is(retryCalls, 0);
 });
 
-test('retryWithCircuit: surfaces the last error after exhausting attempts', async (t) => {
-  const circuits = [fakeCircuit(), fakeCircuit(), fakeCircuit()];
+test('retryTransient: surfaces the last retryable error after exhausting attempts', async (t) => {
   let n = 0;
   await t.throwsAsync(
-    retryWithCircuit(
+    retryTransient(
       async () => {
         n += 1;
         throw new Error(`circuit destroyed: TIMEOUT (10) [try ${n}]`);
       },
-      {
-        connect: async () => circuits[n]!,
-        maxAttempts: 3,
-      }
+      { maxAttempts: 3 }
     ),
     { message: /try 3\]/ }
   );
   t.is(n, 3);
-  for (const c of circuits) t.is(c.destroyCount, 1);
 });
 
-test('retryWithCircuit: maxAttempts=1 does not retry', async (t) => {
-  const c = fakeCircuit();
+test('retryTransient: maxAttempts=1 does not retry', async (t) => {
   let n = 0;
   await t.throwsAsync(
-    retryWithCircuit(
+    retryTransient(
       async () => {
         n += 1;
         throw new Error('circuit destroyed: CHANNEL_CLOSED (8)');
       },
-      { connect: async () => c, maxAttempts: 1 }
+      { maxAttempts: 1 }
     ),
     { message: /CHANNEL_CLOSED/ }
   );
   t.is(n, 1);
-  t.is(c.destroyCount, 1);
 });
 
-test('retryWithCircuit: rejects maxAttempts < 1', async (t) => {
+test('retryTransient: rejects maxAttempts < 1', async (t) => {
   await t.throwsAsync(
-    retryWithCircuit(async () => 1, { connect: async () => fakeCircuit(), maxAttempts: 0 }),
-    { message: /maxAttempts/ }
+    retryTransient(async () => 1, { maxAttempts: 0 }),
+    {
+      message: /maxAttempts/,
+    }
   );
 });
 
-test('retryWithCircuit: custom shouldRetry overrides the default predicate', async (t) => {
-  const c = fakeCircuit();
+test('retryTransient: custom shouldRetry overrides the default predicate', async (t) => {
   let n = 0;
-  const got = await retryWithCircuit(
+  const got = await retryTransient(
     async () => {
       n += 1;
       if (n === 1) throw new Error('weird non-standard error');
       return 'ok';
     },
-    {
-      connect: async () => c,
-      shouldRetry: (err) => err instanceof Error && err.message.includes('weird'),
-    }
+    { shouldRetry: (err) => err instanceof Error && err.message.includes('weird') }
   );
   t.is(got, 'ok');
   t.is(n, 2);
 });
 
-test('retryWithCircuit: bootstrap failure (connect() throws) is also retried', async (t) => {
-  let connectCalls = 0;
-  const c = fakeCircuit();
-  const got = await retryWithCircuit(async () => 'done', {
-    connect: async () => {
-      connectCalls += 1;
-      if (connectCalls === 1) throw new Error('circuit destroyed: CHANNEL_CLOSED (8)');
-      return c;
-    },
-  });
-  t.is(got, 'done');
-  t.is(connectCalls, 2);
-  t.is(c.destroyCount, 1);
-});
+test('retryTransient: retry budgets compose as expected', async (t) => {
+  // Model the expected layered behavior: an "outer" loop (operation-level)
+  // calls an "inner" loop (bootstrap-level). Each has its own budget; the
+  // combined worst case is outer * inner attempts.
+  let bootstrapCalls = 0;
+  let opCalls = 0;
 
-test('retryWithCircuit: survives a destroy() that throws during cleanup', async (t) => {
-  const c = {
-    destroy() {
-      throw new Error('internal: already destroyed');
+  const got = await retryTransient(
+    async () => {
+      opCalls += 1;
+      // Inner retry simulates buildCircuitWithRetry: 2 attempts max.
+      const fakeCircuit = await retryTransient(
+        async () => {
+          bootstrapCalls += 1;
+          if (bootstrapCalls === 1) {
+            throw new Error('connect ECONNREFUSED 1.2.3.4:443');
+          }
+          return { id: bootstrapCalls };
+        },
+        { maxAttempts: 2 }
+      );
+      // On op attempt 1 the circuit "dies" after successful build.
+      if (opCalls === 1) {
+        throw new Error('circuit destroyed: CHANNEL_CLOSED (8)');
+      }
+      return fakeCircuit;
     },
-  } as unknown as Circuit;
-  const got = await retryWithCircuit(async () => 'ok', { connect: async () => c });
-  t.is(got, 'ok');
+    { maxAttempts: 2 }
+  );
+
+  t.is(opCalls, 2);
+  // Inner budget exhausted by first bootstrap ECONNREFUSED, so on the second
+  // opCall the inner bootstrap succeeds on its first try (counter keeps
+  // incrementing across the outer retry).
+  t.is(bootstrapCalls, 3);
+  t.deepEqual(got, { id: 3 });
 });

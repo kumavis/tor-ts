@@ -12,7 +12,7 @@
 import http from 'http';
 import test from 'ava';
 import httpProxy from 'http-proxy';
-import { withRetryingCircuit } from 'tor/build-circuit/mainnet';
+import { withTorOperation } from 'tor/build-circuit/mainnet';
 import { getTorAgentForUrl } from 'tor/node';
 
 test('proxy HTTP request through Tor circuit', async (t) => {
@@ -24,11 +24,12 @@ test('proxy HTTP request through Tor circuit', async (t) => {
 
   console.log('Connecting to Tor network...');
 
-  // withRetryingCircuit builds a fresh 3-hop circuit for each attempt and
+  // withTorOperation builds a fresh 3-hop circuit for each attempt and
   // retries automatically on transient Tor-network / transport-level failures
   // (ECONNREFUSED to a fallback dir, DESTROY with CHANNEL_CLOSED / TIMEOUT,
-  // socket hang-ups, etc.).
-  const body = await withRetryingCircuit(
+  // socket hang-ups, etc.). Each attempt rebinds its own proxy server and
+  // reissues the request, so the proxied request stays side-effect-free.
+  const body = await withTorOperation(
     async (circuit) => {
       console.log('Circuit established!');
 

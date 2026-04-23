@@ -314,8 +314,8 @@ export function isRetryableTorError(err: unknown): boolean {
   return false;
 }
 
-export type WithCircuitRetryOptions = CircuitBuildOptions & {
-  /** Maximum number of bootstrap+run attempts. Defaults to 3. */
+export type RetryOptions = {
+  /** Maximum number of attempts. Defaults to 3. Must be >= 1. */
   maxAttempts?: number;
   /**
    * Called before each retry with the failure that triggered it. Useful for
@@ -329,75 +329,138 @@ export type WithCircuitRetryOptions = CircuitBuildOptions & {
 };
 
 /**
- * Build a fresh random 3-hop circuit, run `fn` over it, and destroy the
- * circuit when `fn` returns. If `fn` or the bootstrap throws a retryable Tor
- * error, discard the (possibly half-dead) circuit and try again with a new
- * one up to `maxAttempts` times.
+ * Generic retry loop for a function that may throw transient Tor errors.
  *
- * Non-retryable errors propagate immediately so caller bugs don't get masked
- * behind a multi-minute retry loop.
+ * Exposed publicly so callers can apply the same classifier+loop to their
+ * own custom attempt unit — for example, retrying a single stream open on a
+ * long-lived circuit without rebuilding the circuit, or composing bootstrap
+ * and per-request retries with independent budgets.
+ *
+ * The default `shouldRetry` matches both the structured circuit-destroy
+ * messages produced by {@link Circuit.receiveMessage} and common transport-
+ * level hang-ups (ECONNREFUSED, ECONNRESET, ETIMEDOUT, ...). Non-retryable
+ * errors propagate on the first attempt, so caller bugs aren't hidden by a
+ * multi-minute retry loop.
+ */
+export async function retryTransient<T>(
+  attempt: () => Promise<T>,
+  options: RetryOptions = {}
+): Promise<T> {
+  const { maxAttempts = 3, onRetry, shouldRetry = isRetryableTorError } = options;
+  if (maxAttempts < 1) throw new Error('maxAttempts must be >= 1');
+
+  let lastError: unknown;
+  for (let i = 1; i <= maxAttempts; i++) {
+    try {
+      return await attempt();
+    } catch (err) {
+      lastError = err;
+      if (i < maxAttempts && shouldRetry(err)) {
+        if (onRetry) onRetry(i, err instanceof Error ? err : new Error(String(err)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError ?? new Error('retryTransient: exhausted without a result or error');
+}
+
+// ---------------------------------------------------------------------------
+// Layered retry primitives
+//
+// Two distinct concerns, two distinct helpers:
+//
+//  1. Building a usable circuit — retrying on transient bootstrap failures
+//     (ECONNREFUSED to the fallback directory, DESTROY mid-EXTEND, ...).
+//     See: buildCircuitWithRetry.
+//
+//  2. Running an operation against *some* working circuit, tolerating a
+//     circuit that dies mid-operation by building a fresh one and running
+//     the operation again. See: withTorOperation.
+//
+// The circuits built by each attempt of withTorOperation are *different*
+// circuits, because a circuit is a specific path of relays. If you want to
+// run several operations over the same circuit and only rebuild when it
+// actually dies, call buildCircuitWithRetry yourself, reuse the circuit,
+// and wrap each operation with retryTransient.
+// ---------------------------------------------------------------------------
+
+export type BuildCircuitWithRetryOptions = CircuitBuildOptions & RetryOptions;
+
+/**
+ * Build a fresh random 3-hop circuit, retrying on transient bootstrap
+ * failures. Returns a circuit that was alive at the moment it was returned;
+ * the caller owns it and is responsible for destroying it.
+ *
+ * Retry unit: one full bootstrap+circuit-build.
  *
  * @example
- * const html = await withRetryingCircuit(async (circuit) => {
- *   const agent = getTorAgentForUrl(circuit, 'http://example.com');
- *   const r = await fetch('http://example.com', { agent });
- *   return r.text();
- * });
+ * const circuit = await buildCircuitWithRetry();
+ * try {
+ *   // ... use circuit.openStream(...) as many times as you like ...
+ * } finally {
+ *   circuit.destroy();
+ * }
  */
-export async function withRetryingCircuit<T>(
-  fn: (circuit: Circuit) => Promise<T>,
-  options: WithCircuitRetryOptions = {}
-): Promise<T> {
+export async function buildCircuitWithRetry(
+  options: BuildCircuitWithRetryOptions = {}
+): Promise<Circuit> {
   const { maxAttempts, onRetry, shouldRetry, ...buildOpts } = options;
-  return retryWithCircuit(fn, {
-    connect: () => connectRandomCircuitWithSafeBootstrap(buildOpts),
+  return retryTransient(() => connectRandomCircuitWithSafeBootstrap(buildOpts), {
     ...(maxAttempts !== undefined ? { maxAttempts } : {}),
     ...(onRetry !== undefined ? { onRetry } : {}),
     ...(shouldRetry !== undefined ? { shouldRetry } : {}),
   });
 }
 
-/**
- * Testable core of {@link withRetryingCircuit}: identical behavior, but lets
- * callers inject the circuit-build step so unit tests can exercise the retry
- * policy without touching the live Tor network.
- */
-export async function retryWithCircuit<T>(
-  fn: (circuit: Circuit) => Promise<T>,
-  options: {
-    connect: () => Promise<Circuit>;
-    maxAttempts?: number;
-    onRetry?: (attempt: number, err: Error) => void;
-    shouldRetry?: (err: unknown) => boolean;
-  }
-): Promise<T> {
-  const { connect, maxAttempts = 3, onRetry, shouldRetry = isRetryableTorError } = options;
-  if (maxAttempts < 1) throw new Error('maxAttempts must be >= 1');
+export type WithTorOperationOptions = CircuitBuildOptions & RetryOptions;
 
-  let lastError: unknown;
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    let circuit: Circuit | undefined;
-    try {
-      circuit = await connect();
-      return await fn(circuit);
-    } catch (err) {
-      lastError = err;
-      const shouldTryAgain = attempt < maxAttempts && shouldRetry(err);
-      if (shouldTryAgain) {
-        if (onRetry) onRetry(attempt, err instanceof Error ? err : new Error(String(err)));
-        continue;
-      }
-      throw err;
-    } finally {
-      if (circuit) {
+/**
+ * Run `fn` against a fresh Tor circuit, tolerating a circuit that dies
+ * mid-operation by building a new one and running `fn` again from scratch.
+ *
+ * Retry unit: one full (build circuit + run fn + destroy circuit) cycle.
+ *
+ * Useful when `fn` is a single side-effect-free request (e.g. a GET) — every
+ * attempt will re-run it in full, so do NOT use this for operations that
+ * have observable side effects on the first attempt. For batch workloads
+ * that should survive mid-batch circuit death, call {@link buildCircuitWithRetry}
+ * yourself and wrap each sub-request with {@link retryTransient} so only the
+ * failed request re-runs.
+ *
+ * @example
+ * const html = await withTorOperation(async (circuit) => {
+ *   const agent = getTorAgentForUrl(circuit, 'http://example.com');
+ *   const r = await fetch('http://example.com', { agent });
+ *   return r.text();
+ * });
+ */
+export async function withTorOperation<T>(
+  fn: (circuit: Circuit) => Promise<T>,
+  options: WithTorOperationOptions = {}
+): Promise<T> {
+  const { maxAttempts, onRetry, shouldRetry, ...buildOpts } = options;
+  return retryTransient(
+    async () => {
+      // Build a fresh circuit per attempt. We intentionally do NOT call
+      // buildCircuitWithRetry here: this helper has a single retry budget
+      // that covers both bootstrap and fn failures, so a caller with
+      // maxAttempts=3 gets exactly 3 full tries — not 3 * 3.
+      const circuit = await connectRandomCircuitWithSafeBootstrap(buildOpts);
+      try {
+        return await fn(circuit);
+      } finally {
         try {
           circuit.destroy();
         } catch {
-          // Circuit may already be destroyed by the DESTROY cell we caught.
+          // Circuit may already have been destroyed by a DESTROY cell.
         }
       }
+    },
+    {
+      ...(maxAttempts !== undefined ? { maxAttempts } : {}),
+      ...(onRetry !== undefined ? { onRetry } : {}),
+      ...(shouldRetry !== undefined ? { shouldRetry } : {}),
     }
-  }
-
-  throw lastError ?? new Error('retryWithCircuit: exhausted without a result or error');
+  );
 }
