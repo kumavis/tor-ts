@@ -73,7 +73,7 @@ Canonical references for each layer (also mirrored locally under
 `/tmp/canonical/` while debugging):
 
 | Layer                        | Canonical impl                                                                | Language |
-|------------------------------|-------------------------------------------------------------------------------|----------|
+| ---------------------------- | ----------------------------------------------------------------------------- | -------- |
 | WebSocket carrier            | `tpo/anti-censorship/pluggable-transports/snowflake` (`client/lib/webrtc.go`) | Go       |
 | Turbotunnel preamble         | `snowflake/common/turbotunnel`                                                | Go       |
 | Encapsulation (d/pad frames) | `snowflake/common/encapsulation`                                              | Go       |
@@ -85,7 +85,7 @@ Canonical references for each layer (also mirrored locally under
 Arti does **not** implement Snowflake in-process; when you use it with
 `Bridge ... snowflake ...` lines, `tor-ptmgr` spawns the Go
 `snowflake-client` as an external process per the PT v2.1 spec. That means
-the Go Snowflake stack is the *only* reference implementation — both C-Tor
+the Go Snowflake stack is the _only_ reference implementation — both C-Tor
 and Rust-Arti defer to it. This TS tree is, as far as we know, the second
 implementation anywhere of the client-side Snowflake stack.
 
@@ -141,10 +141,10 @@ implementation anywhere of the client-side Snowflake stack.
    fetch the consensus microdesc flavor.
 
 The flakiness we see — intermittent hangs with no error, often even during
-the 1-hop consensus download — is almost certainly *not* in layers 6–8
+the 1-hop consensus download — is almost certainly _not_ in layers 6–8
 (those are the same for every Tor client, and retrying usually works on
 the same circuit/TLS state). It is almost certainly in our Snowflake
-stack (layers 1–5), where this codebase is the *only* independent
+stack (layers 1–5), where this codebase is the _only_ independent
 implementation and diverges from the canonical Go in ways that matter the
 moment a packet is dropped or a window closes.
 
@@ -160,7 +160,7 @@ symptom.
 `kcp/session.ts` explicitly omits RTO, fast-retransmit, `snd_buf` flushing
 and periodic `update()`:
 
-> "This is *not* a full KCP implementation: it assumes no loss/reordering
+> "This is _not_ a full KCP implementation: it assumes no loss/reordering
 > at the carrier layer and therefore omits retransmission logic."
 
 Canonical behaviour (`kcp-go/sess.go:802`, `kcp.go:876-900`):
@@ -190,7 +190,7 @@ so the 512-packet queue cannot overflow (see §3, §4).
 
 `smux/session.ts:202-205`:
 
-> "We currently *do not* block on peerWindow; we only track it."
+> "We currently _do not_ block on peerWindow; we only track it."
 
 The canonical `Stream.writeV2` (`smux/stream.go:533`) blocks on
 `chUpdate`/`chWriterWakeup` whenever `numWritten − peerConsumed ≥
@@ -205,6 +205,7 @@ Fix direction: add an `await` on a `peerWindow` change channel in
 ### 3. SMUX has no keepalive / dead-session detection (high-confidence)
 
 Canonical `smux/session.go:519-543`:
+
 - sends a `cmdNOP` every `KeepAliveInterval` (snowflake client sets this
   leg to the default 10 s; `KeepAliveTimeout = 10 min` — see
   `client/lib/snowflake.go:394`);
@@ -290,7 +291,7 @@ so the `conv` could also be derived deterministically. Leave as-is.
 
 `packages/browser/src/shims/smux-duplex.ts:27-46` loops on
 `await this.smux.readSome(16384)`. If the smux stream stalls for §1–§4
-reasons, this loop *cannot* observe a timeout or an inbound-close event
+reasons, this loop _cannot_ observe a timeout or an inbound-close event
 — it is suspended on the ByteQueue promise forever. The TLS socket sits
 above this awaiting `data`, and reclaim-tls has no handshake timeout of
 its own. End result: browser UI shows "Connecting…" indefinitely.
@@ -303,7 +304,7 @@ propagate up through the duplex.
 
 `shims/tls.ts:207-220`: writes are serialised through
 `this.writeQueue.then(...)`; any rejection is caught and emitted as
-`'error'`. If the underlying SMUX duplex is backpressured *and* stalled
+`'error'`. If the underlying SMUX duplex is backpressured _and_ stalled
 (see §9), the writeQueue never progresses — no error, no rejection — and
 every subsequent `socket.write(...)` just appends to a dead chain.
 
