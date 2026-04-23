@@ -14,35 +14,71 @@ import fetch from 'node-fetch';
 import { connectRandomCircuitWithSafeBootstrap } from 'tor/build-circuit/mainnet';
 import { getTorAgentForUrl } from 'tor/node';
 
-test('fetch through Tor circuit', async (t) => {
-  t.timeout(300_000); // 5 minutes - Tor bootstrap can be slow
+/**
+ * Retryable Tor-network failures. These are not bugs in this code — they're
+ * the normal, expected condition of the live Tor network. A circuit may die
+ * mid-bootstrap because the selected guard's upstream OR-to-OR link dropped,
+ * or the exit's TCP connect to the target failed, or a relay is overloaded.
+ *
+ * Retryable DESTROY reasons (per tor-spec.txt §5.4):
+ *   4 HIBERNATING, 5 RESOURCELIMIT, 6 CONNECTFAILED, 7 OR_IDENTITY,
+ *   8 CHANNEL_CLOSED, 10 TIMEOUT, 11 DESTROYED
+ */
+function isRetryableTorError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message;
+  if (
+    /circuit destroyed: (HIBERNATING|RESOURCELIMIT|CONNECTFAILED|OR_IDENTITY|CHANNEL_CLOSED|TIMEOUT|DESTROYED)/.test(
+      msg
+    )
+  ) {
+    return true;
+  }
+  // Common transport-level transients.
+  if (/ECONNRESET|ETIMEDOUT|socket hang up|timed out/i.test(msg)) return true;
+  return false;
+}
 
-  // Step 1: Establish a Tor circuit
-  // This connects to a fallback directory, downloads the consensus,
-  // and builds a 3-hop circuit (Guard → Middle → Exit)
-  console.log('Connecting to Tor network...');
+async function fetchThroughTor(target: string): Promise<{ status: number; body: string }> {
   const circuit = await connectRandomCircuitWithSafeBootstrap();
-  console.log('Circuit established!');
+  try {
+    console.log('Circuit established!');
+    const agent = getTorAgentForUrl(circuit, target);
+    console.log(`Fetching ${target} through Tor...`);
+    const response = await fetch(target, { agent });
+    console.log(`Response status: ${response.status}`);
+    const body = await response.text();
+    console.log(`Response length: ${body.length} bytes`);
+    return { status: response.status, body };
+  } finally {
+    circuit.destroy();
+  }
+}
 
-  // Clean up when done
-  t.teardown(() => circuit.destroy());
+test('fetch through Tor circuit', async (t) => {
+  t.timeout(600_000); // 10 minutes total — each attempt can take minutes.
 
-  // Step 2: Create an agent for the target URL
-  // The agent handles routing traffic through the Tor circuit
-  // Using example.com - the IANA-reserved domain guaranteed to always work
   const target = 'http://example.com';
-  const agent = getTorAgentForUrl(circuit, target);
+  console.log('Connecting to Tor network...');
 
-  // Step 3: Make the request using node-fetch with the Tor agent
-  console.log(`Fetching ${target} through Tor...`);
-  const response = await fetch(target, { agent });
-
-  console.log(`Response status: ${response.status}`);
-  t.is(response.status, 200);
-
-  const body = await response.text();
-  console.log(`Response length: ${body.length} bytes`);
-
-  // example.com returns a simple HTML page with "Example Domain" in the title
-  t.true(body.includes('Example Domain'), 'Response should contain "Example Domain"');
+  const maxAttempts = 3;
+  let lastError: Error | undefined;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      const { status, body } = await fetchThroughTor(target);
+      t.is(status, 200);
+      t.true(body.includes('Example Domain'), 'Response should contain "Example Domain"');
+      return;
+    } catch (err) {
+      lastError = err instanceof Error ? err : new Error(String(err));
+      if (attempt < maxAttempts && isRetryableTorError(lastError)) {
+        console.warn(
+          `Attempt ${attempt} hit transient Tor error: ${lastError.message}. Retrying...`
+        );
+        continue;
+      }
+      throw lastError;
+    }
+  }
+  throw lastError ?? new Error('unreachable');
 });
