@@ -61,7 +61,8 @@ test('snowflake ws downlink: sends turbotunnel preamble then encapsulated packet
     }, 10);
   });
 
-  const client = new SnowflakeWsDownlink({ url });
+  // Opt out of random padding for deterministic preamble size.
+  const client = new SnowflakeWsDownlink({ url, preamblePadding: false });
   await client.connect();
   client.sendPacket(Uint8Array.from([1, 2, 3]));
 

@@ -42,8 +42,14 @@ export class SnowflakeWsStack {
     // Wire: KCP output packets -> downlink.
     this.kcp.attachSink((pkt) => this.downlink.sendPacket(pkt));
 
+    // Drive KCP retransmission timer. Without this, any packet dropped by the
+    // server's turbotunnel QueuePacketConn (512-slot bounded channel) would
+    // strand the session forever.
+    this.kcp.startAutoFlush();
+
     // Surface errors.
     this.downlink.on('error', (err) => this.smux.emit('error', err));
+    this.kcp.onError((err) => this.smux.emit('error', err));
   }
 
   async openStream(): Promise<SmuxStream> {
@@ -51,6 +57,8 @@ export class SnowflakeWsStack {
   }
 
   async close(): Promise<void> {
+    this.kcp.stopAutoFlush();
+    this.kcp.close();
     this.downlink.close();
     await Promise.race([once(this.smux, 'close'), new Promise((r) => setTimeout(r, 10))]);
   }
