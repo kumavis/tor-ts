@@ -94,7 +94,10 @@ export class SmuxSession extends EventEmitter {
     void this.recvLoop();
 
     if (this.keepAliveIntervalMs > 0) {
-      this.keepAliveHandle = this.setTimer(() => this.sendKeepAlivePing(), this.keepAliveIntervalMs);
+      this.keepAliveHandle = this.setTimer(
+        () => this.sendKeepAlivePing(),
+        this.keepAliveIntervalMs
+      );
     }
     if (this.keepAliveTimeoutMs > 0) {
       this.keepAliveTimeoutHandle = this.setTimer(

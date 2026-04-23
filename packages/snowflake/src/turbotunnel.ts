@@ -56,11 +56,9 @@ export function buildTurbotunnelPreamble(
   const max = opts.paddingMax ?? DEFAULT_PADDING_MAX;
   if (max < min) throw new Error('paddingMax < paddingMin');
 
-  const randomBytes =
-    opts.randomBytes ?? ((n: number) => Uint8Array.from(crypto.randomBytes(n)));
+  const randomBytes = opts.randomBytes ?? ((n: number) => Uint8Array.from(crypto.randomBytes(n)));
 
-  const size =
-    opts.paddingSize ?? min + Math.floor((randomBytes(1)[0]! / 256) * (max - min + 1));
+  const size = opts.paddingSize ?? min + Math.floor((randomBytes(1)[0]! / 256) * (max - min + 1));
 
   const pad = encodeEncapsulatedPadding(size, randomBytes);
 
