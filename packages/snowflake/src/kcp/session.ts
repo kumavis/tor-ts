@@ -101,7 +101,8 @@ export class MinimalKcpSession {
         (h as unknown as { unref?: () => void }).unref?.();
         return h;
       });
-    this.clearTimer = opts.clearTimer ?? ((h) => clearInterval(h as ReturnType<typeof setInterval>));
+    this.clearTimer =
+      opts.clearTimer ?? ((h) => clearInterval(h as ReturnType<typeof setInterval>));
   }
 
   attachSink(sink: KcpPacketSink): void {

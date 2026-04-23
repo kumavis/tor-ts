@@ -172,19 +172,15 @@ export function encodeEncapsulatedPadding(
     remaining -= p;
 
     let prefix: Uint8Array;
-    if ((((p - 1) >> 0) & 0x3f) === ((p - 1) >> 0)) {
+    if ((((p - 1) >> 0) & 0x3f) === (p - 1) >> 0) {
       p = p - 1;
       prefix = Uint8Array.of((p >> 0) & 0x3f);
-    } else if ((((p - 2) >> 7) & 0x3f) === ((p - 2) >> 7)) {
+    } else if ((((p - 2) >> 7) & 0x3f) === (p - 2) >> 7) {
       p = p - 2;
       prefix = Uint8Array.of(0x40 | ((p >> 7) & 0x3f), (p >> 0) & 0x7f);
     } else {
       p = p - 3;
-      prefix = Uint8Array.of(
-        0x40 | ((p >> 14) & 0x3f),
-        0x80 | ((p >> 7) & 0x3f),
-        (p >> 0) & 0x7f
-      );
+      prefix = Uint8Array.of(0x40 | ((p >> 14) & 0x3f), 0x80 | ((p >> 7) & 0x3f), (p >> 0) & 0x7f);
     }
 
     parts.push(prefix, randomBytes(p));
