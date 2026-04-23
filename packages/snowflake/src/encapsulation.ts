@@ -148,6 +148,58 @@ export class EncapsulationDecoder {
   }
 }
 
+/**
+ * Encode one or more padding chunks whose *total* encoded size (prefix + body)
+ * is `totalBytes`. Mirrors snowflake common/encapsulation.WritePadding, which
+ * picks a prefix size that lets the body exactly fill the remaining budget.
+ *
+ * The padding payload has no semantic meaning; bytes come from `randomBytes`
+ * so repeated preambles don't share a fingerprint.
+ */
+export function encodeEncapsulatedPadding(
+  totalBytes: number,
+  randomBytes: (n: number) => Uint8Array = (n) => new Uint8Array(n)
+): Uint8Array {
+  if (totalBytes < 0) throw new Error('negative length');
+  if (totalBytes === 0) return new Uint8Array(0);
+
+  const parts: Uint8Array[] = [];
+  let remaining = totalBytes;
+  const CHUNK_MAX = 1024;
+
+  while (remaining > 0) {
+    let p = Math.min(CHUNK_MAX, remaining);
+    remaining -= p;
+
+    let prefix: Uint8Array;
+    if ((((p - 1) >> 0) & 0x3f) === ((p - 1) >> 0)) {
+      p = p - 1;
+      prefix = Uint8Array.of((p >> 0) & 0x3f);
+    } else if ((((p - 2) >> 7) & 0x3f) === ((p - 2) >> 7)) {
+      p = p - 2;
+      prefix = Uint8Array.of(0x40 | ((p >> 7) & 0x3f), (p >> 0) & 0x7f);
+    } else {
+      p = p - 3;
+      prefix = Uint8Array.of(
+        0x40 | ((p >> 14) & 0x3f),
+        0x80 | ((p >> 7) & 0x3f),
+        (p >> 0) & 0x7f
+      );
+    }
+
+    parts.push(prefix, randomBytes(p));
+  }
+
+  const total = parts.reduce((a, b) => a + b.byteLength, 0);
+  const out = new Uint8Array(total);
+  let off = 0;
+  for (const part of parts) {
+    out.set(part, off);
+    off += part.byteLength;
+  }
+  return out;
+}
+
 function dataPrefixForLength(n: number): Uint8Array {
   // Mirrors snowflake/common/encapsulation/dataPrefixForLength.
   // 1 byte: 0b10xxxxxx where xxxxxx = n

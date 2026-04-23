@@ -7,6 +7,11 @@ import { buildTurbotunnelPreamble, newClientId } from './turbotunnel.ts';
 export type SnowflakeWsDownlinkOptions = {
   url: string;
   clientId?: ClientId;
+  /**
+   * Include canonical random padding in the turbotunnel preamble. On by
+   * default; set to false for tests against servers that don't accept it.
+   */
+  preamblePadding?: boolean;
 };
 
 /**
@@ -20,11 +25,13 @@ export class SnowflakeWsDownlink extends EventEmitter {
   readonly clientId: ClientId;
   private ws?: WebSocket;
   private readonly dec = new EncapsulationDecoder();
+  private readonly preamblePadding: boolean;
 
   constructor(opts: SnowflakeWsDownlinkOptions) {
     super();
     this.url = opts.url;
     this.clientId = opts.clientId ?? newClientId();
+    this.preamblePadding = opts.preamblePadding ?? true;
   }
 
   async connect(): Promise<void> {
@@ -57,8 +64,9 @@ export class SnowflakeWsDownlink extends EventEmitter {
       ws.once('error', reject);
     });
 
-    // Enter turbotunnel mode.
-    ws.send(buildTurbotunnelPreamble(this.clientId));
+    // Enter turbotunnel mode. The preamble includes canonical random padding
+    // so the session-open signature isn't a fixed 16-byte fingerprint.
+    ws.send(buildTurbotunnelPreamble(this.clientId, { padding: this.preamblePadding }));
   }
 
   sendPacket(pkt: Uint8Array): void {

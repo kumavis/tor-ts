@@ -54,12 +54,11 @@ export class SmuxStreamDuplex extends Duplex {
     _encoding: BufferEncoding,
     callback: (error?: Error | null) => void
   ): void {
-    try {
-      this.smux.write(chunk instanceof Uint8Array ? chunk : Uint8Array.from(chunk));
-      callback();
-    } catch (err) {
-      callback(err as Error);
-    }
+    const data = chunk instanceof Uint8Array ? chunk : Uint8Array.from(chunk);
+    this.smux
+      .write(data)
+      .then(() => callback())
+      .catch((err) => callback(err as Error));
   }
 
   override _final(callback: (error?: Error | null) => void): void {

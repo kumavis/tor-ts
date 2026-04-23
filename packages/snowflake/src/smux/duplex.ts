@@ -32,14 +32,15 @@ export class SmuxStreamDuplex extends Duplex {
     encoding: BufferEncoding,
     callback: (error?: Error | null) => void
   ): void {
-    try {
-      const buf = typeof chunk === 'string' ? Buffer.from(chunk, encoding) : chunk;
-      const u8 = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
-      this.stream.write(u8);
-      callback();
-    } catch (err) {
-      callback(err instanceof Error ? err : new Error(String(err)));
-    }
+    const buf = typeof chunk === 'string' ? Buffer.from(chunk, encoding) : chunk;
+    const u8 = new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength);
+    // Propagate peer-credit backpressure back into the Duplex; _write's
+    // callback is deferred until every byte has been sent past SMUX v2 flow
+    // control, which is exactly what Node stream backpressure semantics want.
+    this.stream
+      .write(u8)
+      .then(() => callback())
+      .catch((err) => callback(err instanceof Error ? err : new Error(String(err))));
   }
 
   override _final(callback: (error?: Error | null) => void): void {
