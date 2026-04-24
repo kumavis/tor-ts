@@ -19,26 +19,24 @@ import test from 'ava';
 import { deferred } from './util.ts';
 
 // Hook unhandledRejection during the test and assert nothing fired.
-function captureUnhandled<T>(fn: () => Promise<T>): Promise<{ result: T; unhandled: unknown[] }> {
-  return new Promise(async (resolve, reject) => {
-    const unhandled: unknown[] = [];
-    const listener = (reason: unknown): void => {
-      unhandled.push(reason);
-    };
-    process.on('unhandledRejection', listener);
-    try {
-      const result = await fn();
-      // Let the microtask queue flush so any pending rejection is observed
-      // via the 'unhandledRejection' event (fires on next microtask tick).
-      await new Promise((r) => setImmediate(r));
-      await new Promise((r) => setImmediate(r));
-      resolve({ result, unhandled });
-    } catch (err) {
-      reject(err as Error);
-    } finally {
-      process.removeListener('unhandledRejection', listener);
-    }
-  });
+async function captureUnhandled<T>(
+  fn: () => Promise<T>
+): Promise<{ result: T; unhandled: unknown[] }> {
+  const unhandled: unknown[] = [];
+  const listener = (reason: unknown): void => {
+    unhandled.push(reason);
+  };
+  process.on('unhandledRejection', listener);
+  try {
+    const result = await fn();
+    // Let the microtask queue flush so any pending rejection is observed
+    // via the 'unhandledRejection' event (fires on next microtask tick).
+    await new Promise<void>((r) => setImmediate(r));
+    await new Promise<void>((r) => setImmediate(r));
+    return { result, unhandled };
+  } finally {
+    process.removeListener('unhandledRejection', listener);
+  }
 }
 
 test('deferred(): reject() without an awaiter does not surface as unhandledRejection', async (t) => {
