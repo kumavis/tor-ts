@@ -689,6 +689,11 @@ export class Circuit extends EventEmitter {
         break;
       }
       case MessageCellType.DESTROY: {
+        // A DESTROY cell may arrive on a circuit we've already torn down —
+        // e.g. after the retry wrapper gave up on this circuit but the guard
+        // is still flushing. Ignore silently; there's no in-flight state left
+        // to fail and the corresponding unsubscribe happened during destroy().
+        if (this.isDestroyed) break;
         const destroyMessage = message.message as CellDestroy;
         const reason = destroyMessage.reason;
         const reasonName = DestroyReasonNames[reason] ?? `UNKNOWN_${reason}`;

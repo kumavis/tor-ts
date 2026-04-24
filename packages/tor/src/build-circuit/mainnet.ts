@@ -326,6 +326,13 @@ export type RetryOptions = {
    * Override for the retry predicate. Defaults to {@link isRetryableTorError}.
    */
   shouldRetry?: (err: unknown) => boolean;
+  /**
+   * Milliseconds to wait before attempt N+1 when attempt N fails. Called
+   * with the 1-based attempt number that just failed. Default: no delay.
+   * A small linear/exponential backoff helps avoid correlated failures when
+   * a guard relay is in the middle of restarting.
+   */
+  backoffMs?: number | ((failedAttempt: number) => number);
 };
 
 /**
@@ -346,8 +353,13 @@ export async function retryTransient<T>(
   attempt: () => Promise<T>,
   options: RetryOptions = {}
 ): Promise<T> {
-  const { maxAttempts = 3, onRetry, shouldRetry = isRetryableTorError } = options;
+  const { maxAttempts = 3, onRetry, shouldRetry = isRetryableTorError, backoffMs } = options;
   if (maxAttempts < 1) throw new Error('maxAttempts must be >= 1');
+
+  const computeDelay = (failedAttempt: number): number => {
+    if (backoffMs === undefined) return 0;
+    return typeof backoffMs === 'function' ? backoffMs(failedAttempt) : backoffMs;
+  };
 
   let lastError: unknown;
   for (let i = 1; i <= maxAttempts; i++) {
@@ -357,6 +369,8 @@ export async function retryTransient<T>(
       lastError = err;
       if (i < maxAttempts && shouldRetry(err)) {
         if (onRetry) onRetry(i, err instanceof Error ? err : new Error(String(err)));
+        const delay = computeDelay(i);
+        if (delay > 0) await new Promise<void>((resolve) => setTimeout(resolve, delay));
         continue;
       }
       throw err;

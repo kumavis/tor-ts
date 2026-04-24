@@ -66,6 +66,18 @@ export function bufferFromUint(length: number, value: number) {
   return data;
 }
 
+/**
+ * Promise deferred with an attached no-op catch handler.
+ *
+ * The no-op `.catch` protects callers that reject() a deferred whose promise
+ * no one ended up awaiting — common during teardown, e.g. a late DESTROY cell
+ * arriving on a hop whose handshake was already resolved or on a circuit the
+ * application has already abandoned. Without this, Node treats those
+ * rejections as unhandled and ava fails the test.
+ *
+ * Other `.then`/`.catch` chains on `promise` still observe the rejection
+ * normally; `.catch` only guarantees one handler exists.
+ */
 export const deferred = <T>(): {
   promise: Promise<T>;
   resolve: (value: T) => void;
@@ -76,6 +88,10 @@ export const deferred = <T>(): {
   const promise = new Promise<T>((res, rej) => {
     resolve = res;
     reject = rej;
+  });
+  promise.catch(() => {
+    // Placeholder handler — ensures the rejection is considered "handled"
+    // even if nobody awaits `deferred.promise`.
   });
   return { promise, resolve: resolve!, reject: reject! };
 };

@@ -39,7 +39,12 @@ test('fetch through Tor circuit', async (t) => {
       return { status: response.status, body: text };
     },
     {
-      maxAttempts: 3,
+      // Bootstrap flakiness on the live network is real: the fallback-directory
+      // pool may be briefly unhealthy, and picking a fresh guard on each retry
+      // doesn't help if several in a row happen to be unreachable. 5 attempts
+      // with a small linear backoff papers over the usual transient storms.
+      maxAttempts: 5,
+      backoffMs: (failedAttempt) => 2_000 * failedAttempt,
       onRetry: (attempt, err) =>
         console.warn(`Attempt ${attempt} hit transient Tor error: ${err.message}. Retrying...`),
     }
