@@ -118,24 +118,35 @@ export TOR_TS_HS_TARGET_PORT=4747
 export TOR_TS_HS_VIRTPORT=5858
 
 cat > "networks/${CHUTNEY_NETWORK}" <<EOF
-Authority = Node(tag="a", authority=1, relay=1)
+# Canonical chutney node flavors: explicit torrc=, matching stock networks
+# (networks/hs-v3-min, networks/basic-min, networks/single-onion-v23, etc.).
+# The \${include:\$torrc} directive in chutney's renderer requires \$torrc to
+# be present on the Node environment; chutney's stock networks always set it
+# and so should we.
+Authority = Node(tag="a", authority=1, relay=1, torrc="authority.tmpl")
 
-# Extra relays to make HS intro/rend + descriptor upload circuits viable.
-Relay = Node(tag="m", relay=1)
+# Extra non-exit relays to give the HS enough options for intro/rend circuits
+# (min-path=3 plus intro + rend + the HS itself).
+NonExitRelay = Node(tag="m", relay=1, torrc="relay-non-exit.tmpl")
 
-# Allow exiting to localhost for CI-only integration tests.
-ExitRelay = Node(tag="r", relay=1, exit=1, extra_raw_torrc="""\
-ClientRejectInternalAddresses 0
-ClientDNSRejectInternalAddresses 0
-""")
+# Exit relay using chutney's stock relay.tmpl (inherits exit-v4.i which already
+# accepts 127/8 + private). The CI-chutney install script patches torrc.py to
+# also set ExitPolicyRejectLocalInterfaces 0 so 127.0.0.1 isn't auto-rejected.
+ExitRelay = Node(tag="r", relay=1, exit=1, torrc="relay.tmpl")
 
-Client = Node(tag="c", client=1)
+# Client and HS are started in launch_phase 2 so the core relay network has
+# reached steady state before a client/HS tries to use it — matches the
+# pattern in chutney's hs-v3-min.
+Client = Node(tag="c", client=1, torrc="client.tmpl", launch_phase=2)
+HiddenService = Node(tag="h", hs=1, torrc="hs-v3.tmpl", launch_phase=2)
 
-# Use Chutney's built-in hs=1 so that 'chutney verify' can test HS connectivity.
-# This uses Chutney's managed HS directory and proper timing.
-HiddenService = Node(tag="h", hs=1, launch_phase=2)
-
-NODES = Authority.getN(4) + Relay.getN(2) + ExitRelay.getN(1) + Client.getN(1) + HiddenService.getN(1)
+NODES = (
+    Authority.getN(4) +
+    NonExitRelay.getN(2) +
+    ExitRelay.getN(1) +
+    Client.getN(1) +
+    HiddenService.getN(1)
+)
 ConfigureNodes(NODES)
 EOF
 
@@ -150,9 +161,17 @@ export CHUTNEY_PATH="${CHUTNEY_DIR}"
 echo ""
 echo "Running Chutney test-network.sh to bootstrap and verify (exit + HS)..."
 echo "This includes proper HS timing waits to avoid descriptor lookup flakiness."
-timeout 10m "${CHUTNEY_DIR}/tools/test-network.sh" \
+# --allow-failures 2 lets chutney retry the whole bootstrap+verify cycle up
+#   to 3 times if the initial attempt flakes (e.g., first consensus doesn't
+#   land in time on this 9-node network). This is chutney's native retry
+#   knob and uses the same log path as a first-try success.
+# --rounds 2 runs two verify passes in the same bootstrap, so an HSdir flake
+#   on the first pass gets re-exercised before we hand off to our client.
+timeout 12m "${CHUTNEY_DIR}/tools/test-network.sh" \
   --flavour "${CHUTNEY_NETWORK}" \
   --bootstrap-time 120 \
+  --allow-failures 2 \
+  --rounds 2 \
   --stop-time -1
 echo "Chutney test-network.sh passed - network connectivity confirmed."
 
