@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import type net from 'node:net';
 
 import { makeChutneyTorClient } from '../src/build-circuit/chutney.ts';
+import { retryTransient } from '../src/build-circuit/mainnet.ts';
 
 async function withTimeout<T>(label: string, ms: number, promise: Promise<T>): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
@@ -117,11 +118,22 @@ async function main() {
       makeChutneyTorClient({ onStatus: (msg) => console.log(`client: ${msg}`) })
     );
 
-    // Connect to hidden service
-    const { circuit } = await withTimeout(
-      'connect to hidden service',
-      overallTimeoutMs + 90_000,
-      client.connectToHiddenService(onionAddress, hsVirtPort, { overallTimeoutMs })
+    // Connect to hidden service. Chutney's tiny 8-node network is prone to
+    // transient rendezvous failures ("Timed out waiting for relayCommand=37")
+    // when the HS-side circuit flakes; retry once with a fresh rendezvous so
+    // a single bad try doesn't eat the whole 10-minute CI budget.
+    const { circuit } = await retryTransient(
+      () =>
+        withTimeout(
+          'connect to hidden service',
+          overallTimeoutMs + 90_000,
+          client.connectToHiddenService(onionAddress, hsVirtPort, { overallTimeoutMs })
+        ),
+      {
+        maxAttempts: 2,
+        onRetry: (attempt, err) =>
+          console.warn(`hs connect attempt ${attempt} failed: ${err.message}. Retrying...`),
+      }
     );
     console.log('hs: connected, opening stream');
 
@@ -190,5 +202,10 @@ async function main() {
 
 main().catch((err) => {
   console.error(err);
-  process.exitCode = 1;
+  // Force-exit: this script holds open channel padding timers, TLS sockets,
+  // and (on failure) pending circuit handshakes. Setting process.exitCode
+  // alone is not enough — Node waits for the event loop to drain and the
+  // outer `timeout` wrapper eventually SIGTERMs us, stretching a 60-second
+  // rendezvous transient into a 15-minute CI job.
+  process.exit(1);
 });

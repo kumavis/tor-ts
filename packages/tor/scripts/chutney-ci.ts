@@ -117,5 +117,6 @@ async function main() {
 
 main().catch((err) => {
   console.error(err);
-  process.exitCode = 1;
+  // See chutney-hidden-service-ci.ts for why process.exit(1) is needed here.
+  process.exit(1);
 });

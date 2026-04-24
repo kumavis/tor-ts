@@ -96,5 +96,8 @@ async function main() {
 
 main().catch((err) => {
   console.error(err);
-  process.exitCode = 1;
+  // Force-exit: WebSocket downlink, KCP auto-flush timer, and smux keepalive
+  // all hold the event loop open; process.exitCode alone would stretch a
+  // fast failure into the outer `timeout` ceiling.
+  process.exit(1);
 });
