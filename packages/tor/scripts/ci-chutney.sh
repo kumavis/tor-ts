@@ -118,35 +118,33 @@ export TOR_TS_HS_TARGET_PORT=4747
 export TOR_TS_HS_VIRTPORT=5858
 
 cat > "networks/${CHUTNEY_NETWORK}" <<EOF
-# Canonical chutney node flavors: explicit torrc=, matching stock networks
-# (networks/hs-v3-min, networks/basic-min, networks/single-onion-v23, etc.).
-# The \${include:\$torrc} directive in chutney's renderer requires \$torrc to
-# be present on the Node environment; chutney's stock networks always set it
-# and so should we.
-Authority = Node(tag="a", authority=1, relay=1, torrc="authority.tmpl")
+# Note: we pin chutney at a gitlab commit (fb0bff1, on the
+# 'fix-determinism' branch) that uses an inline Python torrc generator at
+# lib/chutney/tor/torrc.py — NOT the torrc_templates/*.tmpl files you see
+# on chutney's github mirror. That means Node() picks a template from the
+# authority/relay/exit/hs/client flags automatically; passing torrc="..."
+# here is not supported by this version and breaks configure.
+Authority = Node(tag="a", authority=1, relay=1)
 
 # Extra non-exit relays to give the HS enough options for intro/rend circuits
 # (min-path=3 plus intro + rend + the HS itself).
-NonExitRelay = Node(tag="m", relay=1, torrc="relay-non-exit.tmpl")
+Relay = Node(tag="m", relay=1)
 
-# Exit relay using chutney's stock relay.tmpl (inherits exit-v4.i which already
-# accepts 127/8 + private). The CI-chutney install script patches torrc.py to
-# also set ExitPolicyRejectLocalInterfaces 0 so 127.0.0.1 isn't auto-rejected.
-ExitRelay = Node(tag="r", relay=1, exit=1, torrc="relay.tmpl")
+# Allow exiting to localhost for CI-only integration tests. The CI-chutney
+# install script patches chutney's inline torrc.py to set
+# ExitPolicyRejectLocalInterfaces 0 so 127.0.0.1 isn't auto-rejected.
+ExitRelay = Node(tag="r", relay=1, exit=1, extra_raw_torrc="""\\
+ClientRejectInternalAddresses 0
+ClientDNSRejectInternalAddresses 0
+""")
 
-# Client and HS are started in launch_phase 2 so the core relay network has
-# reached steady state before a client/HS tries to use it — matches the
-# pattern in chutney's hs-v3-min.
-Client = Node(tag="c", client=1, torrc="client.tmpl", launch_phase=2)
-HiddenService = Node(tag="h", hs=1, torrc="hs-v3.tmpl", launch_phase=2)
+Client = Node(tag="c", client=1)
 
-NODES = (
-    Authority.getN(4) +
-    NonExitRelay.getN(2) +
-    ExitRelay.getN(1) +
-    Client.getN(1) +
-    HiddenService.getN(1)
-)
+# Use Chutney's built-in hs=1 so that 'chutney verify' can test HS connectivity.
+# This uses Chutney's managed HS directory and proper timing.
+HiddenService = Node(tag="h", hs=1, launch_phase=2)
+
+NODES = Authority.getN(4) + Relay.getN(2) + ExitRelay.getN(1) + Client.getN(1) + HiddenService.getN(1)
 ConfigureNodes(NODES)
 EOF
 
