@@ -154,6 +154,46 @@ test('retryTransient: custom shouldRetry overrides the default predicate', async
   t.is(n, 2);
 });
 
+test('retryTransient: backoffMs delays between retries', async (t) => {
+  const delaysObserved: number[] = [];
+  let lastTick = Date.now();
+  let n = 0;
+  await retryTransient(
+    async () => {
+      const now = Date.now();
+      if (n > 0) delaysObserved.push(now - lastTick);
+      lastTick = now;
+      n += 1;
+      if (n < 3) throw new Error('circuit destroyed: TIMEOUT (10)');
+      return 'ok';
+    },
+    { maxAttempts: 3, backoffMs: 30 }
+  );
+  t.is(n, 3);
+  t.is(delaysObserved.length, 2);
+  for (const d of delaysObserved) t.true(d >= 25, `delay ${d} < 25ms`);
+});
+
+test('retryTransient: backoffMs as a function gets the failed-attempt number', async (t) => {
+  const calls: number[] = [];
+  let n = 0;
+  await retryTransient(
+    async () => {
+      n += 1;
+      if (n < 4) throw new Error('circuit destroyed: TIMEOUT (10)');
+      return 'ok';
+    },
+    {
+      maxAttempts: 4,
+      backoffMs: (failedAttempt) => {
+        calls.push(failedAttempt);
+        return 0; // don't actually sleep in the test
+      },
+    }
+  );
+  t.deepEqual(calls, [1, 2, 3]);
+});
+
 test('retryTransient: retry budgets compose as expected', async (t) => {
   // Model the expected layered behavior: an "outer" loop (operation-level)
   // calls an "inner" loop (bootstrap-level). Each has its own budget; the
