@@ -11,6 +11,7 @@ import { TorClient, type CircuitResult } from '../client.ts';
 import { fetchViaTorCircuit } from '../http-fetch.ts';
 import { ConsensusManager } from '../consensus-manager.ts';
 import { MicrodescManager, InMemoryMicrodescStorage } from '../microdesc-manager.ts';
+import type { DirectoryAuthorityIdentity } from '../consensus-signature.ts';
 
 /* chutney testing instructions:
 
@@ -242,16 +243,57 @@ export async function connectRandomChutneyCircuitWithSafeBootstrap(): Promise<{
 }
 
 /**
- * Fetch the chutney consensus over an existing directory circuit, skipping
- * mainnet's signature verification because chutney's authorities aren't on
- * the hardcoded keylist. Handy for callers that want the raw consensus
- * without instantiating a full {@link ConsensusManager}.
+ * Discover the chutney directory authorities from the filesystem. Each
+ * authority writes its `authority_certificate` to
+ * `$CHUTNEY_DATA_DIR/nodes/<n>a/keys/`; the file's `fingerprint` line is
+ * the authority's v3ident — the same trust anchor mainnet uses for
+ * `DIRECTORY_AUTHORITIES`. Returning these to the verifier replaces the
+ * old `dangerouslySkipSignatureVerification` opt-out.
+ */
+export async function discoverChutneyAuthorities(): Promise<DirectoryAuthorityIdentity[]> {
+  const dataDir = process.env.CHUTNEY_DATA_DIR;
+  if (!dataDir) {
+    throw new Error('CHUTNEY_DATA_DIR not set; cannot discover chutney directory authorities');
+  }
+  const nodesDir = path.join(dataDir, 'nodes');
+  const entries = await fs.readdir(nodesDir, { withFileTypes: true });
+  const authorities: DirectoryAuthorityIdentity[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const certPath = path.join(nodesDir, entry.name, 'keys', 'authority_certificate');
+    let certText: string;
+    try {
+      certText = await fs.readFile(certPath, 'utf8');
+    } catch {
+      continue;
+    }
+    const fpHex = certText.match(/^fingerprint\s+([0-9A-Fa-f]{40})\b/m)?.[1];
+    if (!fpHex) continue;
+    const identityKeyMatch = certText.match(
+      /-----BEGIN RSA PUBLIC KEY-----[\s\S]*?-----END RSA PUBLIC KEY-----/
+    );
+    authorities.push({
+      nickname: entry.name,
+      v3ident: fpHex.toUpperCase(),
+      identityKeyPem: identityKeyMatch?.[0] ?? '',
+    });
+  }
+  if (authorities.length === 0) {
+    throw new Error(`No chutney authority_certificate files found under ${nodesDir}`);
+  }
+  return authorities;
+}
+
+/**
+ * Fetch the chutney consensus over an existing directory circuit, verifying
+ * signatures against chutney's own discovered authority list.
  */
 export async function fetchChutneyConsensusOverCircuit(
   directoryCircuit: Circuit
 ): Promise<VerifiedMicroDescConsensus> {
+  const trustedAuthorities = await discoverChutneyAuthorities();
   const manager = new ConsensusManager(directoryCircuit, {
-    defaultRefreshOptions: { dangerouslySkipSignatureVerification: true },
+    defaultRefreshOptions: { trustedAuthorities },
   });
   return manager.getConsensus();
 }
@@ -312,11 +354,12 @@ export async function makeChutneyTorClient(
 
   const dirClient = new DirectoryClient(bootstrapCircuit);
 
-  // Reuse the standard ConsensusManager (same code path the tamanegi browser
-  // runs); signature verification is opted out via defaultRefreshOptions
-  // because chutney's authorities aren't on the hardcoded mainnet keylist.
+  // Discover chutney's directory authorities from disk and use them as the
+  // trust anchor — same verification path mainnet runs, just with a
+  // network-specific keylist.
+  const trustedAuthorities = await discoverChutneyAuthorities();
   const consensusManager = new ConsensusManager(bootstrapCircuit, {
-    defaultRefreshOptions: { dangerouslySkipSignatureVerification: true },
+    defaultRefreshOptions: { trustedAuthorities },
   });
   const consensus = await consensusManager.getConsensus();
   log(`Got consensus with ${consensus.relays.length} relays`);

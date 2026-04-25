@@ -66,10 +66,11 @@ export type BrowserTorClientOptions = {
   /** Callback for microdescriptor download progress (used during hidden service connections) */
   onMicrodescProgress?: MicrodescProgressCallback;
   /**
-   * **DANGEROUS**: Skip consensus signature verification.
-   * Only use in test environments.
+   * Trust anchor for consensus signature verification. Defaults to the
+   * hardcoded mainnet authorities. Pass an alternate list to verify a
+   * non-mainnet consensus (e.g. chutney) without skipping signatures.
    */
-  dangerouslySkipSignatureVerification?: boolean;
+  trustedAuthorities?: import('tor').DirectoryAuthorityIdentity[];
   /** Skip using cached consensus from sessionStorage */
   skipConsensusCache?: boolean;
   /** Pre-loaded consensus text (e.g. from IndexedDB). Passed to bootstrap. */

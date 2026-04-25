@@ -433,12 +433,17 @@ export async function verifySignatureWithData(
 
 /**
  * Find a directory authority by their identity fingerprint.
+ *
+ * `trustedAuthorities` lets the caller widen (or replace) the trust anchor —
+ * useful in chutney/test environments where the authorities aren't on the
+ * hardcoded mainnet keylist. Defaults to {@link DIRECTORY_AUTHORITIES}.
  */
 export function findAuthorityByFingerprint(
-  fingerprint: string
+  fingerprint: string,
+  trustedAuthorities: DirectoryAuthorityIdentity[] = DIRECTORY_AUTHORITIES
 ): DirectoryAuthorityIdentity | undefined {
   const normalized = fingerprint.toUpperCase();
-  return DIRECTORY_AUTHORITIES.find((auth) => auth.v3ident.toUpperCase() === normalized);
+  return trustedAuthorities.find((auth) => auth.v3ident.toUpperCase() === normalized);
 }
 
 /**
@@ -463,6 +468,13 @@ export type VerifyConsensusOptions = {
   requiredSignatures?: number | undefined;
 
   /**
+   * Trust anchor: the set of directory authorities whose v3ident fingerprints
+   * the verifier is willing to accept. Defaults to {@link DIRECTORY_AUTHORITIES}
+   * (mainnet); chutney/test setups inject their own list discovered from disk.
+   */
+  trustedAuthorities?: DirectoryAuthorityIdentity[] | undefined;
+
+  /**
    * Current time for checking certificate validity.
    * Defaults to Date.now().
    */
@@ -485,9 +497,9 @@ export async function verifyConsensusSignatures(
   consensusText: string,
   options: VerifyConsensusOptions
 ): Promise<ConsensusVerificationResult> {
-  const { keyCertificates, now = Date.now() } = options;
+  const { keyCertificates, now = Date.now(), trustedAuthorities = DIRECTORY_AUTHORITIES } = options;
 
-  const totalKnownAuthorities = DIRECTORY_AUTHORITIES.length;
+  const totalKnownAuthorities = trustedAuthorities.length;
   const defaultRequired = Math.floor(totalKnownAuthorities / 2) + 1;
   const requiredSignatureCount = options.requiredSignatures ?? defaultRequired;
 
@@ -526,7 +538,7 @@ export async function verifyConsensusSignatures(
   const signedPortion = getConsensusSignedPortion(consensusText);
 
   for (const sig of signatures) {
-    const authority = findAuthorityByFingerprint(sig.identityFingerprint);
+    const authority = findAuthorityByFingerprint(sig.identityFingerprint, trustedAuthorities);
 
     if (!authority) {
       results.push({

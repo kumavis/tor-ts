@@ -54,6 +54,7 @@ import {
   verifyConsensusSignatures,
   type ConsensusVerificationResult,
   type AuthorityKeyCertificate,
+  type DirectoryAuthorityIdentity,
 } from '../consensus-signature.ts';
 import type { ExitPolicy } from '../exit-policy.ts';
 
@@ -367,6 +368,13 @@ export type VerifyConsensusOptions = {
   requiredSignatures?: number;
 
   /**
+   * Trust anchor: directory authorities whose signatures the verifier accepts.
+   * Defaults to {@link DIRECTORY_AUTHORITIES} (mainnet); chutney/test setups
+   * pass an alternate list discovered from disk.
+   */
+  trustedAuthorities?: DirectoryAuthorityIdentity[];
+
+  /**
    * Whether to throw if signature verification fails.
    * Default: true
    */
@@ -565,6 +573,7 @@ export async function parseAndVerifyConsensus(
   const {
     keyCertificates,
     requiredSignatures,
+    trustedAuthorities,
     throwOnVerificationFailure = true,
     now = Date.now(),
   } = options;
@@ -575,7 +584,8 @@ export async function parseAndVerifyConsensus(
   // Verify signatures (async)
   const signatureVerification = await verifyConsensusSignatures(microDescContent, {
     keyCertificates,
-    requiredSignatures,
+    ...(requiredSignatures !== undefined ? { requiredSignatures } : {}),
+    ...(trustedAuthorities !== undefined ? { trustedAuthorities } : {}),
     now,
   });
 

@@ -15,11 +15,12 @@
 import type { Circuit } from './circuit.ts';
 import type { VerifiedMicroDescConsensus } from './build-circuit/directory.ts';
 import {
-  dangerouslyTrustUnverifiedConsensus,
   parseMicroDescConsensus,
+  dangerouslyTrustUnverifiedConsensus,
 } from './build-circuit/directory.ts';
 import type { DownloadProgressCallback } from './directory-client.ts';
 import { fetchAndVerifyConsensus } from './directory-client.ts';
+import type { DirectoryAuthorityIdentity } from './consensus-signature.ts';
 
 /**
  * Consensus validity status.
@@ -47,8 +48,12 @@ export type ConsensusRefreshOptions = {
   onProgress?: DownloadProgressCallback;
   /** Callback for status messages */
   onStatus?: (message: string) => void;
-  /** Skip signature verification (dangerous, for testing only) */
-  dangerouslySkipSignatureVerification?: boolean;
+  /**
+   * Trust anchor for consensus signature verification. Defaults to the
+   * hardcoded mainnet authorities. Chutney/test setups inject their own
+   * list discovered from disk so signatures still verify.
+   */
+  trustedAuthorities?: DirectoryAuthorityIdentity[];
   /** Timeout in milliseconds */
   timeoutMs?: number;
 };
@@ -306,8 +311,8 @@ export class ConsensusManager {
   ): Promise<{ consensus: VerifiedMicroDescConsensus; rawContent: string }> {
     return fetchAndVerifyConsensus(this.circuit, {
       ...(options.timeoutMs !== undefined && { timeoutMs: options.timeoutMs }),
-      ...(options.dangerouslySkipSignatureVerification !== undefined && {
-        dangerouslySkipSignatureVerification: options.dangerouslySkipSignatureVerification,
+      ...(options.trustedAuthorities !== undefined && {
+        trustedAuthorities: options.trustedAuthorities,
       }),
       ...(options.onProgress && { onProgress: options.onProgress }),
       ...(options.onStatus && { onStatus: options.onStatus }),
