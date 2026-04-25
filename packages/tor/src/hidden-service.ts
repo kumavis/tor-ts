@@ -2434,6 +2434,29 @@ export async function connectToHiddenServiceCore(
   await waitForRelayCommand(rendCircuit, RelayCell.RENDEZVOUS_ESTABLISHED, perHandshakeTimeoutMs);
   log('RENDEZVOUS_ESTABLISHED received from RP');
 
+  // Step 6a: Arm the RENDEZVOUS2 listener BEFORE sending INTRODUCE1.
+  //
+  // On fast networks (chutney localhost, LAN, etc.) the HS can receive our
+  // INTRODUCE2, extend a circuit back to the RP, and have RENDEZVOUS1 reach
+  // the RP — which then forwards it to our client as RENDEZVOUS2 — in under
+  // 10 ms. If we attach the listener *after* introduction returns, the cell
+  // has already come and gone by the time we care. That's the bug that made
+  // the chutney HS test look like it was silently failing: the diagnostic
+  // we added showed RENDEZVOUS2 arriving BEFORE "Waiting for rendezvous
+  // completion" was logged.
+  //
+  // The observer helper also runs from here so "0 cells received" in the
+  // error path means the cell truly never arrived, not that we missed it.
+  const rendezvousObserver = observeRelayTraffic(rendCircuit);
+  const rendezvous2Promise = waitForRelayCommand(
+    rendCircuit,
+    RelayCell.RENDEZVOUS2,
+    rendezvousTimeoutMs
+  );
+  // Swallow any unhandled rejection on the promise until we await it below;
+  // the final try/catch in step 7 is what surfaces the failure.
+  rendezvous2Promise.catch(() => {});
+
   // Step 6: Try intro points until one succeeds
   const introErrors: Error[] = [];
   let successfulIntro:
@@ -2533,14 +2556,13 @@ export async function connectToHiddenServiceCore(
   await new Promise((resolve) => setTimeout(resolve, 100));
   introCircuit.destroy({ preserveChannel: true });
 
-  // Step 7: Wait for RENDEZVOUS2 and complete hs-ntor
+  // Step 7: Await RENDEZVOUS2 (listener was armed before introduction in 6a).
   // Use a dedicated rendezvous timeout (default 60s) rather than the overall timeout.
   // If the hidden service received our introduction, it should respond within this window.
-  const rendezvousObserver = observeRelayTraffic(rendCircuit);
   log(`Waiting for rendezvous completion (timeout: ${rendezvousTimeoutMs}ms)...`);
   let r2: { streamId: number; relayCommand: number; data: Buffer };
   try {
-    r2 = await waitForRelayCommand(rendCircuit, RelayCell.RENDEZVOUS2, rendezvousTimeoutMs);
+    r2 = await rendezvous2Promise;
   } catch (err) {
     const observed = rendezvousObserver.snapshot();
     rendCircuit.destroy();
