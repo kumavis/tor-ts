@@ -937,6 +937,25 @@ export function deriveSubcredential(params: {
   return sha3(Buffer.from('subcredential', 'ascii'), cred, params.blindedPublicKey);
 }
 
+/**
+ * Compact one-line dump of a LinkSpecifier list for diagnostics. Includes the
+ * type byte and the raw data hex (or IPv4+port for type-0 specs); useful when
+ * cross-checking the rendezvous point we tell the HS to extend to against the
+ * HS's own consensus view.
+ */
+function formatLinkSpecsForLog(specs: LinkSpecifier[]): string {
+  return specs
+    .map((ls) => {
+      if (ls.type === LinkSpecifierTypes.TlsOverTcpIPv4 && ls.data.length === 6) {
+        const ip = `${ls.data[0]}.${ls.data[1]}.${ls.data[2]}.${ls.data[3]}`;
+        const port = ls.data.readUInt16BE(4);
+        return `[t=${ls.type} ${ip}:${port}]`;
+      }
+      return `[t=${ls.type} ${ls.data.toString('hex')}]`;
+    })
+    .join(' ');
+}
+
 function extractArmoredMessage(text: string, begin: string, end: string): Buffer {
   const start = text.indexOf(begin);
   if (start === -1) throw new Error(`Missing ${begin} armor`);
@@ -2012,6 +2031,36 @@ export async function buildIntroduce1Payload(
  * @param timeoutMs - Timeout in milliseconds
  * @returns The relay event data
  */
+/**
+ * Attach a passive observer to a circuit's 'relay' event for the lifetime of
+ * a single critical wait, returning a snapshot of which relay commands were
+ * seen. Useful for diagnosing rendezvous timeouts: we need to know whether
+ * RENDEZVOUS1 actually arrived from the HS but parsing failed, vs nothing
+ * arrived at all.
+ */
+function observeRelayTraffic(circuit: Circuit): {
+  snapshot: () => { totalCells: number; commandSummary: string };
+  detach: () => void;
+} {
+  const counts = new Map<number, number>();
+  let total = 0;
+  const onRelay = (evt: { streamId: number; relayCommand: number; data: Buffer }): void => {
+    total += 1;
+    counts.set(evt.relayCommand, (counts.get(evt.relayCommand) ?? 0) + 1);
+  };
+  circuit.on('relay', onRelay);
+  return {
+    snapshot: () => ({
+      totalCells: total,
+      commandSummary: [...counts.entries()]
+        .sort(([, a], [, b]) => b - a)
+        .map(([cmd, n]) => `cmd=${cmd}×${n}`)
+        .join(' '),
+    }),
+    detach: () => circuit.off('relay', onRelay),
+  };
+}
+
 export async function waitForRelayCommand(
   circuit: Circuit,
   relayCommand: number,
@@ -2269,6 +2318,32 @@ export async function connectToHiddenServiceCore(
 
   log(`Found ${descriptor.introPoints.length} introduction point(s)`);
 
+  // Diagnostic dump of the inputs to INTRODUCE1. This is what lets a future
+  // CI failure tell us which side disagrees: subcred + blinded key tie us to
+  // a specific time period and SRV usage; the intro auth-key + service
+  // enc-key are read from the descriptor and used as inputs to hs-ntor;
+  // the rendezvous-point descriptor tells us what we asked the HS to extend
+  // back to. A `Timed out waiting for relayCommand=37` upstream of these
+  // matching the HS's own view means the HS dropped INTRODUCE2 silently
+  // (failed MAC, failed link-spec cross-check, or failed rendezvous-extend).
+  log(
+    `HS pubkey:    ${publicIdentityKey.toString('hex')}\n` +
+      `         blinded key:  ${blindedPublicKey.toString('hex')}\n` +
+      `         subcredential:${subcred.toString('hex')}\n` +
+      `         rendezvous point:\n` +
+      `           rsaId:    ${rendezvousPoint.rsaIdDigest.toString('hex')}\n` +
+      `           onionKey: ${rendezvousPoint.onionKey.toString('hex')}\n` +
+      `           linkspecs:${formatLinkSpecsForLog(rendezvousPoint.linkSpecifiers)}\n` +
+      `         intro points:${descriptor.introPoints
+        .map(
+          (ip, idx) =>
+            `\n           [${idx}] auth=${ip.authKeyEd25519
+              .toString('hex')
+              .slice(0, 16)}… enc=${ip.serviceEncKey.toString('hex').slice(0, 16)}…`
+        )
+        .join('')}`
+  );
+
   // Step 4: Order intro points (by experience if available, otherwise shuffled)
   let introPoints = shuffleInPlace([...descriptor.introPoints]);
   if (introPoints.length === 0) {
@@ -2288,12 +2363,20 @@ export async function connectToHiddenServiceCore(
 
   const rendezvousCookie = Buffer.from(randomBytesOpt(20));
   log('Establishing rendezvous point...');
+  log(
+    `Sending ESTABLISH_RENDEZVOUS (cookie=${rendezvousCookie
+      .toString('hex')
+      .slice(0, 16)}…) on circuit through RP ${rendezvousPoint.rsaIdDigest
+      .toString('hex')
+      .slice(0, 16)}…`
+  );
   await rendCircuit.sendRelayMessage({
     streamId: 0,
     relayCommand: RelayCell.ESTABLISH_RENDEZVOUS,
     data: rendezvousCookie,
   });
   await waitForRelayCommand(rendCircuit, RelayCell.RENDEZVOUS_ESTABLISHED, perHandshakeTimeoutMs);
+  log('RENDEZVOUS_ESTABLISHED received from RP');
 
   // Step 6: Try intro points until one succeeds
   const introErrors: Error[] = [];
@@ -2311,7 +2394,11 @@ export async function connectToHiddenServiceCore(
       const introPeer = peerInfoFromIntroPoint(intro);
       introCircuit = await buildCircuit(introPeer, { avoid: [rendezvousPoint] });
 
-      log(`Sending introduction (attempt ${attempt + 1}/${maxIntroAttempts})...`);
+      log(
+        `Sending introduction (attempt ${attempt + 1}/${maxIntroAttempts}) ` +
+          `via IP rsaId=${introPeer.rsaIdDigest.toString('hex').slice(0, 16)}… ` +
+          `intro auth=${intro.authKeyEd25519.toString('hex').slice(0, 16)}…`
+      );
       const { payload: introducePayload, state } = await buildIntroduce1Payload({
         introAuthKeyEd25519: intro.authKeyEd25519,
         serviceEncKey: intro.serviceEncKey,
@@ -2319,6 +2406,13 @@ export async function connectToHiddenServiceCore(
         rendezvousCookie,
         rendezvousPoint,
       });
+      log(
+        `INTRODUCE1 payload: ${introducePayload.length}B, sha3=${Buffer.from(
+          sha3_256(introducePayload)
+        )
+          .toString('hex')
+          .slice(0, 16)}…`
+      );
 
       await introCircuit.sendRelayMessage({
         streamId: 0,
@@ -2386,19 +2480,25 @@ export async function connectToHiddenServiceCore(
   // Step 7: Wait for RENDEZVOUS2 and complete hs-ntor
   // Use a dedicated rendezvous timeout (default 60s) rather than the overall timeout.
   // If the hidden service received our introduction, it should respond within this window.
+  const rendezvousObserver = observeRelayTraffic(rendCircuit);
   log(`Waiting for rendezvous completion (timeout: ${rendezvousTimeoutMs}ms)...`);
   let r2: { streamId: number; relayCommand: number; data: Buffer };
   try {
     r2 = await waitForRelayCommand(rendCircuit, RelayCell.RENDEZVOUS2, rendezvousTimeoutMs);
   } catch (err) {
+    const observed = rendezvousObserver.snapshot();
     rendCircuit.destroy();
     const msg = err instanceof Error ? err.message : String(err);
     throw new Error(
-      `Rendezvous failed: timed out waiting for hidden service response (${rendezvousTimeoutMs}ms). ` +
-        `The service may be offline, overloaded, or unable to decrypt the introduction. ` +
+      `Rendezvous failed: timed out waiting for hidden service response ` +
+        `(${rendezvousTimeoutMs}ms). The service may be offline, overloaded, ` +
+        `or unable to decrypt the introduction. ` +
+        `Cells received on rendezvous circuit during the wait: ` +
+        `${observed.totalCells} (${observed.commandSummary || 'none'}). ` +
         `Original error: ${msg}`
     );
   }
+  rendezvousObserver.detach();
   if (r2.data.length < 64) throw new Error('RENDEZVOUS2 too short');
 
   const Y = r2.data.subarray(0, 32);
