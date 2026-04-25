@@ -28,7 +28,6 @@ type Unacked = {
   resendts: number;
   rto: number;
   xmit: number;
-  firstSentAt: number;
 };
 
 /**
@@ -209,14 +208,9 @@ export class MinimalKcpSession {
     return this.flush();
   }
 
-  /** Count of segments still awaiting ACK (exposed for tests / backpressure). */
+  /** Count of segments still awaiting ACK (exposed for tests). */
   get inflight(): number {
     return this.sndBuf.size;
-  }
-
-  /** Number of bytes queued but not yet turned into a segment. */
-  get pending(): number {
-    return this.sndQueueBytes;
   }
 
   private flush(): number {
@@ -242,7 +236,6 @@ export class MinimalKcpSession {
       };
       this.sndBuf.set(sn, {
         seg,
-        firstSentAt: now,
         resendts: (now + this.rtoInitial) >>> 0,
         rto: this.rtoInitial,
         xmit: 1,

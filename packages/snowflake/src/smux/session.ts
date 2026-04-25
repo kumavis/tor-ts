@@ -369,22 +369,6 @@ export class SmuxStream {
     }
   }
 
-  /**
-   * Best-effort synchronous write. Returns the number of bytes actually sent;
-   * if less than data.length, the caller should await {@link write} or retry.
-   */
-  tryWrite(data: Uint8Array): number {
-    if (this.closedErr) throw this.closedErr;
-    if (data.byteLength === 0) return 0;
-    const inflight = (this.numWritten - this.peerConsumed) >>> 0;
-    const win = ((this.peerWindow - inflight) | 0) >>> 0;
-    if (win === 0) return 0;
-    const take = Math.min(this.sess.maxFrameSize, data.byteLength, win);
-    this.sess.writeFrame(SMUX_CMD.PSH, this.sid, data.subarray(0, take));
-    this.numWritten = (this.numWritten + take) >>> 0;
-    return take;
-  }
-
   close(): void {
     if (this.closedErr) return;
     try {
