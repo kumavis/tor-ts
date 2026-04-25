@@ -200,12 +200,20 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  // Force-exit: this script holds open channel padding timers, TLS sockets,
-  // and (on failure) pending circuit handshakes. Setting process.exitCode
-  // alone is not enough — Node waits for the event loop to drain and the
-  // outer `timeout` wrapper eventually SIGTERMs us, stretching a 60-second
-  // rendezvous transient into a 15-minute CI job.
-  process.exit(1);
-});
+main().then(
+  () => {
+    // Same reason as the failure path: channel-padding timers and TLS
+    // sockets keep the event loop alive past the assertions, so even a
+    // green run otherwise idles until CI's outer `timeout` SIGKILLs it.
+    process.exit(0);
+  },
+  (err) => {
+    console.error(err);
+    // Force-exit: this script holds open channel padding timers, TLS sockets,
+    // and (on failure) pending circuit handshakes. Setting process.exitCode
+    // alone is not enough — Node waits for the event loop to drain and the
+    // outer `timeout` wrapper eventually SIGTERMs us, stretching a 60-second
+    // rendezvous transient into a 15-minute CI job.
+    process.exit(1);
+  }
+);

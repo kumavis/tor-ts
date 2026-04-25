@@ -22,8 +22,12 @@ async function withTimeout<T>(label: string, ms: number, promise: Promise<T>): P
 }
 
 function logRaw(label: string): void {
-  // Force flush so the partial log survives a SIGTERM from the outer timeout.
-  process.stdout.write(`[chutney-ci] ${new Date().toISOString()} ${label}\n`);
+  // Write to BOTH stderr (unbuffered) and stdout. Under bash `timeout`
+  // SIGTERM, Node's stdout pipe buffer may be lost; stderr is line-buffered
+  // on Linux and is far more likely to survive the kill.
+  const line = `[chutney-ci] ${new Date().toISOString()} ${label}\n`;
+  process.stderr.write(line);
+  process.stdout.write(line);
 }
 
 let currentStep = '<startup>';
@@ -200,8 +204,20 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  // See chutney-hidden-service-ci.ts for why process.exit(1) is needed here.
-  process.exit(1);
-});
+main().then(
+  () => {
+    // After success, exit explicitly. Tor channels (TLS sockets, KCP/SMUX
+    // timers in the snowflake variant, the http.Server we listened on)
+    // tend to keep the event loop alive past circuit.destroy(); without
+    // this exit() the process idled until CI's outer 'timeout 2m' SIGKILLed
+    // it, surfacing as a bare 'exit 124' even though the assertions all
+    // passed.
+    setStep('<done>');
+    process.exit(0);
+  },
+  (err) => {
+    console.error(err);
+    // See chutney-hidden-service-ci.ts for why process.exit(1) is needed here.
+    process.exit(1);
+  }
+);
