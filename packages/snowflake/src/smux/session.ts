@@ -380,6 +380,14 @@ export class SmuxStream {
     } catch {
       // ignore — session may already be closed
     }
+    // Mark the stream locally closed so subsequent write()s throw fast and
+    // any pending write-window waiters wake up with an error rather than
+    // hanging. Once removed from the session map (below), the stream cannot
+    // receive any more inbound frames, so close rx too — pending readers
+    // would otherwise wait forever for bytes that will never arrive.
+    this.closedErr = new Error('stream closed');
+    this.rejectWriteWaiters(this.closedErr);
+    this.rx.close();
     this.sess._removeStream(this.sid);
   }
 
