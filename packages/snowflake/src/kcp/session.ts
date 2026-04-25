@@ -254,8 +254,11 @@ export class MinimalKcpSession {
     }
 
     // Step 2: retransmit any unacked segment whose resendts has passed.
+    // Compare with a wrap-safe signed-diff (kcp-go's `itimediff`): KCP
+    // timestamps are 32-bit milliseconds, so they wrap roughly every 49
+    // days, and a plain `now >= resendts` would stop firing after wrap.
     for (const [, entry] of this.sndBuf) {
-      if (now >= entry.resendts) {
+      if (((now - entry.resendts) | 0) >= 0) {
         // Refresh una on retransmit so the peer can trim its own buffers.
         entry.seg.una = this.recvNext >>> 0;
         entry.seg.ts = now;
