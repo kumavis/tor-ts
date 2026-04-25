@@ -83,7 +83,11 @@ export async function discoverChutneyBootstrapPeer(): Promise<ChutneyBootstrapPe
     } catch {
       continue;
     }
-    const orPortText = torrc.match(/^OrPort\s+(\d+)\b/m)?.[1];
+    // Tolerate every chutney OrPort form: bare `OrPort 5004`,
+    // `OrPort 127.0.0.1:5004`, `OrPort 0.0.0.0:5004`, `OrPort [::1]:5004`.
+    // The optional `\S*:` swallows everything up to the last colon so the
+    // capture lands on the actual port number.
+    const orPortText = torrc.match(/^OrPort\s+(?:\S*:)?(\d+)\b/m)?.[1];
     if (!orPortText) continue;
     const orPort = Number.parseInt(orPortText, 10);
     if (!Number.isFinite(orPort) || orPort <= 0) continue;
