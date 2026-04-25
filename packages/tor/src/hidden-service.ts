@@ -996,25 +996,6 @@ export function pickRendezvousPoint(consensus: VerifiedMicroDescConsensus): {
   };
 }
 
-/**
- * Compact one-line dump of a LinkSpecifier list for diagnostics. Includes the
- * type byte and the raw data hex (or IPv4+port for type-0 specs); useful when
- * cross-checking the rendezvous point we tell the HS to extend to against the
- * HS's own consensus view.
- */
-function formatLinkSpecsForLog(specs: LinkSpecifier[]): string {
-  return specs
-    .map((ls) => {
-      if (ls.type === LinkSpecifierTypes.TlsOverTcpIPv4 && ls.data.length === 6) {
-        const ip = `${ls.data[0]}.${ls.data[1]}.${ls.data[2]}.${ls.data[3]}`;
-        const port = ls.data.readUInt16BE(4);
-        return `[t=${ls.type} ${ip}:${port}]`;
-      }
-      return `[t=${ls.type} ${ls.data.toString('hex')}]`;
-    })
-    .join(' ');
-}
-
 function extractArmoredMessage(text: string, begin: string, end: string): Buffer {
   const start = text.indexOf(begin);
   if (start === -1) throw new Error(`Missing ${begin} armor`);
@@ -2374,32 +2355,6 @@ export async function connectToHiddenServiceCore(
 
   log(`Found ${descriptor.introPoints.length} introduction point(s)`);
 
-  // Diagnostic dump of the inputs to INTRODUCE1. This is what lets a future
-  // CI failure tell us which side disagrees: subcred + blinded key tie us to
-  // a specific time period and SRV usage; the intro auth-key + service
-  // enc-key are read from the descriptor and used as inputs to hs-ntor;
-  // the rendezvous-point descriptor tells us what we asked the HS to extend
-  // back to. A `Timed out waiting for relayCommand=37` upstream of these
-  // matching the HS's own view means the HS dropped INTRODUCE2 silently
-  // (failed MAC, failed link-spec cross-check, or failed rendezvous-extend).
-  log(
-    `HS pubkey:    ${publicIdentityKey.toString('hex')}\n` +
-      `         blinded key:  ${blindedPublicKey.toString('hex')}\n` +
-      `         subcredential:${subcred.toString('hex')}\n` +
-      `         rendezvous point:\n` +
-      `           rsaId:    ${rendezvousPoint.rsaIdDigest.toString('hex')}\n` +
-      `           onionKey: ${rendezvousPoint.onionKey.toString('hex')}\n` +
-      `           linkspecs:${formatLinkSpecsForLog(rendezvousPoint.linkSpecifiers)}\n` +
-      `         intro points:${descriptor.introPoints
-        .map(
-          (ip, idx) =>
-            `\n           [${idx}] auth=${ip.authKeyEd25519
-              .toString('hex')
-              .slice(0, 16)}… enc=${ip.serviceEncKey.toString('hex').slice(0, 16)}…`
-        )
-        .join('')}`
-  );
-
   // Step 4: Order intro points (by experience if available, otherwise shuffled)
   let introPoints = shuffleInPlace([...descriptor.introPoints]);
   if (introPoints.length === 0) {
@@ -2419,20 +2374,12 @@ export async function connectToHiddenServiceCore(
 
   const rendezvousCookie = Buffer.from(randomBytesOpt(20));
   log('Establishing rendezvous point...');
-  log(
-    `Sending ESTABLISH_RENDEZVOUS (cookie=${rendezvousCookie
-      .toString('hex')
-      .slice(0, 16)}…) on circuit through RP ${rendezvousPoint.rsaIdDigest
-      .toString('hex')
-      .slice(0, 16)}…`
-  );
   await rendCircuit.sendRelayMessage({
     streamId: 0,
     relayCommand: RelayCell.ESTABLISH_RENDEZVOUS,
     data: rendezvousCookie,
   });
   await waitForRelayCommand(rendCircuit, RelayCell.RENDEZVOUS_ESTABLISHED, perHandshakeTimeoutMs);
-  log('RENDEZVOUS_ESTABLISHED received from RP');
 
   // Step 6a: Arm the RENDEZVOUS2 listener BEFORE sending INTRODUCE1.
   //
@@ -2473,11 +2420,7 @@ export async function connectToHiddenServiceCore(
       const introPeer = peerInfoFromIntroPoint(intro);
       introCircuit = await buildCircuit(introPeer, { avoid: [rendezvousPoint] });
 
-      log(
-        `Sending introduction (attempt ${attempt + 1}/${maxIntroAttempts}) ` +
-          `via IP rsaId=${introPeer.rsaIdDigest.toString('hex').slice(0, 16)}… ` +
-          `intro auth=${intro.authKeyEd25519.toString('hex').slice(0, 16)}…`
-      );
+      log(`Sending introduction (attempt ${attempt + 1}/${maxIntroAttempts})...`);
       const { payload: introducePayload, state } = await buildIntroduce1Payload({
         introAuthKeyEd25519: intro.authKeyEd25519,
         serviceEncKey: intro.serviceEncKey,
@@ -2485,13 +2428,6 @@ export async function connectToHiddenServiceCore(
         rendezvousCookie,
         rendezvousPoint,
       });
-      log(
-        `INTRODUCE1 payload: ${introducePayload.length}B, sha3=${Buffer.from(
-          sha3_256(introducePayload)
-        )
-          .toString('hex')
-          .slice(0, 16)}…`
-      );
 
       await introCircuit.sendRelayMessage({
         streamId: 0,
