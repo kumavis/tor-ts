@@ -31,19 +31,11 @@ export type BrowserBootstrapOptions = {
   /** Callback for consensus download progress */
   onConsensusProgress?: (progress: DownloadProgress) => void;
   /**
-   * **DANGEROUS**: Skip consensus signature verification entirely.
-   *
-   * WARNING: This disables a critical security check. The consensus document
-   * could be forged by an attacker to direct you to malicious relays.
-   *
-   * Only use this option if:
-   * - You're in a test environment
-   * - You're debugging/developing and understand the risks
-   * - The crypto implementation for your platform is not yet complete
-   *
-   * Default: false
+   * Trust anchor for consensus signature verification. Defaults to the
+   * hardcoded mainnet authorities; pass an alternate list to verify a
+   * non-mainnet consensus (e.g. chutney) without skipping signatures.
    */
-  dangerouslySkipSignatureVerification?: boolean;
+  trustedAuthorities?: import('tor').DirectoryAuthorityIdentity[];
   /**
    * Skip using cached consensus from sessionStorage.
    * Forces a fresh download even if a valid cached consensus exists.
@@ -100,7 +92,7 @@ export async function performBootstrap(
     relayUrl = 'wss://snowflake.torproject.net/',
     onStatus,
     onConsensusProgress,
-    dangerouslySkipSignatureVerification = false,
+    trustedAuthorities,
     skipConsensusCache = false,
     logPrefix = 'tor-browser',
   } = options;
@@ -146,7 +138,7 @@ export async function performBootstrap(
     initialRawContent: cachedRaw,
     defaultRefreshOptions: {
       timeoutMs: 600_000, // Longer timeout for browser environment
-      dangerouslySkipSignatureVerification,
+      ...(trustedAuthorities !== undefined ? { trustedAuthorities } : {}),
       onProgress: onConsensusProgress,
       onStatus: log,
     },

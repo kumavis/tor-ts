@@ -467,14 +467,9 @@ export function parseMicrodescriptorBatch(
 }
 
 import type { MicroDescNodeInfo, VerifiedMicroDescConsensus } from './build-circuit/directory.ts';
-import {
-  parseMicroDescConsensus,
-  parseAndVerifyConsensus,
-  microDescNodeInfoToPeerInfo,
-  dangerouslyTrustUnverifiedConsensus,
-} from './build-circuit/directory.ts';
+import { parseAndVerifyConsensus, microDescNodeInfoToPeerInfo } from './build-circuit/directory.ts';
 
-import type { AuthorityKeyCertificate } from './consensus-signature.ts';
+import type { AuthorityKeyCertificate, DirectoryAuthorityIdentity } from './consensus-signature.ts';
 import { parseAllKeyCertificates } from './consensus-signature.ts';
 
 /**
@@ -488,19 +483,12 @@ export type FetchConsensusOptions = {
   timeoutMs?: number;
 
   /**
-   * **DANGEROUS**: Skip consensus signature verification entirely.
-   *
-   * WARNING: This disables a critical security check. The consensus document
-   * could be forged by an attacker to direct you to malicious relays.
-   *
-   * Only use this option if:
-   * - You're in a test environment
-   * - You're debugging/developing and understand the risks
-   * - The crypto implementation for your platform is not yet complete
-   *
-   * Default: false
+   * Trust anchor: directory authorities whose v3ident the verifier accepts.
+   * Defaults to the hardcoded mainnet authorities. Pass an alternate list
+   * (e.g. discovered from chutney's filesystem) to verify a non-mainnet
+   * consensus without skipping signature checks.
    */
-  dangerouslySkipSignatureVerification?: boolean;
+  trustedAuthorities?: DirectoryAuthorityIdentity[];
 
   /**
    * Callback for consensus download progress.
@@ -543,7 +531,7 @@ export async function fetchAndVerifyConsensus(
   circuit: Circuit,
   options: FetchConsensusOptions = {}
 ): Promise<FetchConsensusResult> {
-  const { timeoutMs, dangerouslySkipSignatureVerification = false, onProgress, onStatus } = options;
+  const { timeoutMs, trustedAuthorities, onProgress, onStatus } = options;
 
   const dirClient = new DirectoryClient(circuit, timeoutMs ? { timeoutMs } : undefined);
 
@@ -551,32 +539,19 @@ export async function fetchAndVerifyConsensus(
   onStatus?.('Downloading network consensus...');
   const rawContent = await dirClient.downloadMicrodescConsensus(onProgress);
 
-  let consensus: VerifiedMicroDescConsensus;
-  let keyCertificates: AuthorityKeyCertificate[] = [];
+  // Download key certificates for signature verification
+  onStatus?.('Downloading authority key certificates...');
+  const keyCertsText = await dirClient.downloadKeyCertificates();
+  const keyCertificates = parseAllKeyCertificates(keyCertsText);
+  onStatus?.(`Downloaded ${keyCertificates.length} key certificates`);
 
-  if (dangerouslySkipSignatureVerification) {
-    // Parse without verification - only for testing (e.g., Chutney)
-    const unverified = parseMicroDescConsensus(rawContent);
-    // SKIP VERIFICATION: Caller explicitly requested dangerouslySkipSignatureVerification.
-    // This should only be used in test environments (Chutney) where directory
-    // authorities don't match mainnet authorities.
-    consensus = dangerouslyTrustUnverifiedConsensus(
-      unverified,
-      'dangerouslySkipSignatureVerification=true (caller explicitly skipped)'
-    );
-  } else {
-    // Download key certificates for signature verification
-    onStatus?.('Downloading authority key certificates...');
-    const keyCertsText = await dirClient.downloadKeyCertificates();
-    keyCertificates = parseAllKeyCertificates(keyCertsText);
-    onStatus?.(`Downloaded ${keyCertificates.length} key certificates`);
-
-    // Parse and verify
-    const result = await parseAndVerifyConsensus(rawContent, {
-      keyCertificates,
-    });
-    consensus = result.consensus;
-  }
+  // Parse and verify (trustedAuthorities defaults to DIRECTORY_AUTHORITIES;
+  // chutney passes its own discovered list).
+  const result = await parseAndVerifyConsensus(rawContent, {
+    keyCertificates,
+    ...(trustedAuthorities !== undefined ? { trustedAuthorities } : {}),
+  });
+  const consensus = result.consensus;
 
   if (consensus.relays.length === 0) {
     throw new Error('No relays found in consensus');
