@@ -43,7 +43,8 @@ const FIXTURE_NOW = hasFixtures
       const m = consensusText.match(/^valid-after (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/m);
       // Construct an explicit ISO-8601 string instead of relying on
       // implementation-dependent parsing of "YYYY-MM-DD HH:MM:SS UTC".
-      return m ? new Date(m[1].replace(' ', 'T') + 'Z').getTime() : Date.now();
+      const captured = m?.[1];
+      return captured ? new Date(captured.replace(' ', 'T') + 'Z').getTime() : Date.now();
     })()
   : Date.now();
 
