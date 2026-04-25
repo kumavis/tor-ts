@@ -419,11 +419,12 @@ export type BuildCircuitWithRetryOptions = CircuitBuildOptions & RetryOptions;
 export async function buildCircuitWithRetry(
   options: BuildCircuitWithRetryOptions = {}
 ): Promise<Circuit> {
-  const { maxAttempts, onRetry, shouldRetry, ...buildOpts } = options;
+  const { maxAttempts, onRetry, shouldRetry, backoffMs, ...buildOpts } = options;
   return retryTransient(() => connectRandomCircuitWithSafeBootstrap(buildOpts), {
     ...(maxAttempts !== undefined ? { maxAttempts } : {}),
     ...(onRetry !== undefined ? { onRetry } : {}),
     ...(shouldRetry !== undefined ? { shouldRetry } : {}),
+    ...(backoffMs !== undefined ? { backoffMs } : {}),
   });
 }
 
@@ -453,7 +454,7 @@ export async function withTorOperation<T>(
   fn: (circuit: Circuit) => Promise<T>,
   options: WithTorOperationOptions = {}
 ): Promise<T> {
-  const { maxAttempts, onRetry, shouldRetry, ...buildOpts } = options;
+  const { maxAttempts, onRetry, shouldRetry, backoffMs, ...buildOpts } = options;
   return retryTransient(
     async () => {
       // Build a fresh circuit per attempt. We intentionally do NOT call
@@ -475,6 +476,7 @@ export async function withTorOperation<T>(
       ...(maxAttempts !== undefined ? { maxAttempts } : {}),
       ...(onRetry !== undefined ? { onRetry } : {}),
       ...(shouldRetry !== undefined ? { shouldRetry } : {}),
+      ...(backoffMs !== undefined ? { backoffMs } : {}),
     }
   );
 }
