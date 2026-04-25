@@ -84,7 +84,7 @@ import {
   serializeExtend2,
   getRelayCellName,
 } from './relay-cell.ts';
-import { BytesReader, deferred } from './util.ts';
+import { BytesReader } from './util.ts';
 import EventEmitter from 'node:events';
 import { ReadableStream, WritableStream } from 'stream/web';
 
@@ -161,8 +161,20 @@ export type PeerInfo = {
 class Hop {
   isConnected = false;
   peerInfo!: PeerInfo;
-  handshakePromiseKit = deferred<void>();
+  handshakePromiseKit = Promise.withResolvers<void>();
   cipherPair!: CipherPair;
+
+  constructor() {
+    // Circuit.connect() awaits handshakePromiseKit one hop at a time; the
+    // DESTROY-cell handler in Circuit.receiveMessage rejects every unconnected
+    // hop's kit, including the ones whose EXTEND2 hasn't been issued yet.
+    // Those orphan rejections have no awaiter — attach an inert .then handler
+    // so they don't crash Node. The real EXTEND2 awaiter still observes the
+    // rejection through its own .then chain.
+    this.handshakePromiseKit.promise.catch(() => {
+      // intentional: see comment above
+    });
+  }
 
   ntorEphemeralKeyPrivate!: Buffer;
   ntorEphemeralKeyPublic!: Buffer;
@@ -330,7 +342,7 @@ export class CircuitStream extends EventEmitter {
   streamId!: number;
   destination!: string;
   destroyed = false;
-  connectionPromiseKit = deferred<void>();
+  connectionPromiseKit = Promise.withResolvers<void>();
   source: ReadableStream;
   sink: WritableStream;
 
@@ -355,7 +367,15 @@ export class CircuitStream extends EventEmitter {
     this.on('error', (err) => {
       console.warn(`[CircuitStream ${this.streamId}] error:`, err.message);
     });
-    // Note: deferred() now includes a built-in catch handler to prevent unhandled rejection warnings.
+    // The stream's owner awaits connectionPromiseKit.promise via circuit.open(),
+    // but a DESTROY cell can land between stream construction and that await
+    // (or after the caller has stopped caring). Attach an inert catch so an
+    // unawaited rejection doesn't crash Node; the real awaiter still observes
+    // the rejection through its own .then chain, and the 'error' event handler
+    // above logs it.
+    this.connectionPromiseKit.promise.catch(() => {
+      // intentional: see comment above
+    });
   }
   write!: (data: Buffer) => Promise<void>;
 
