@@ -2,12 +2,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { Circuit, type PeerInfo } from '../circuit.ts';
 import { TlsChannelConnection, createTlsChannelManager } from '../channel.ts';
-import {
-  dangerouslyDownloadMicrodescFromDirectory,
-  parseMicroDescConsensus,
-  dangerouslyTrustUnverifiedConsensus,
-  dangerouslyLookupPeerInfo,
-} from './directory.ts';
+import { addressAndPortToLinkSpecifier, AddressTypes, LinkSpecifierTypes } from '../messaging.ts';
 import type { MicroDescNodeInfo, VerifiedMicroDescConsensus } from './directory.ts';
 import { pickRelayWithFlags } from './util.ts';
 import { DirectoryClient, lookupPeerInfo } from '../directory-client.ts';
@@ -16,79 +11,6 @@ import { TorClient, type CircuitResult } from '../client.ts';
 import { fetchViaTorCircuit } from '../http-fetch.ts';
 import { ConsensusManager } from '../consensus-manager.ts';
 import { MicrodescManager, InMemoryMicrodescStorage } from '../microdesc-manager.ts';
-
-function mustFindMicroDescNodeInfo(
-  nodes: MicroDescNodeInfo[],
-  predicate: (node: MicroDescNodeInfo) => boolean,
-  description: string
-): MicroDescNodeInfo {
-  const found = nodes.find(predicate);
-  if (!found) {
-    throw new Error(`Failed to find chutney relay: ${description}`);
-  }
-  return found;
-}
-
-async function discoverDirectoryServerIpPort(): Promise<string> {
-  if (process.env.CHUTNEY_DIRECTORY_SERVER) {
-    return process.env.CHUTNEY_DIRECTORY_SERVER;
-  }
-
-  const dataDir = process.env.CHUTNEY_DATA_DIR;
-  if (dataDir) {
-    // Chutney writes generated torrc files under: $CHUTNEY_DATA_DIR/nodes/<node>/torrc
-    // (nodes is usually a symlink to nodes.<timestamp>)
-    const nodesDir = path.join(dataDir, 'nodes');
-    try {
-      const entries = await fs.readdir(nodesDir, { withFileTypes: true });
-      for (const entry of entries) {
-        if (!entry.isDirectory()) continue;
-        const torrcPath = path.join(nodesDir, entry.name, 'torrc');
-        let torrc: string;
-        try {
-          torrc = await fs.readFile(torrcPath, 'utf8');
-        } catch {
-          continue;
-        }
-        const match = torrc.match(/^DirPort\s+(\d+)\b/m);
-        if (!match) continue;
-        const dirPortText = match[1];
-        if (!dirPortText) continue;
-        const dirPort = Number.parseInt(dirPortText, 10);
-        if (!Number.isFinite(dirPort) || dirPort <= 0) continue;
-        return `127.0.0.1:${dirPort}`;
-      }
-    } catch {
-      // fall through to default
-    }
-  }
-
-  // Historical default for this repo's chutney scripts
-  return '127.0.0.1:7000';
-}
-
-export async function discoverChutneyDirectoryServer(): Promise<string> {
-  return await discoverDirectoryServerIpPort();
-}
-
-export async function getChutneyMicrodescConsensus(): Promise<{
-  directoryServer: string;
-  consensus: VerifiedMicroDescConsensus;
-}> {
-  const directoryServer = await discoverDirectoryServerIpPort();
-  const microDescContent = await dangerouslyDownloadMicrodescFromDirectory(directoryServer);
-  const unverified = parseMicroDescConsensus(microDescContent);
-
-  // SKIP VERIFICATION: Chutney is a test network with local directory authorities
-  // that don't match the hardcoded mainnet authorities. Signature verification
-  // would always fail because the test authorities' keys aren't known.
-  const consensus = dangerouslyTrustUnverifiedConsensus(
-    unverified,
-    'Chutney test network (local authorities, no mainnet keys)'
-  );
-
-  return { directoryServer, consensus };
-}
 
 /* chutney testing instructions:
 
@@ -117,217 +39,221 @@ restart
 ```
 */
 
-export async function getStandardChutneyCircuitPath() {
-  const { directoryServer, consensus } = await getChutneyMicrodescConsensus();
-  const microDescNodeInfos = consensus.relays;
-
-  const circuitPlan: Array<MicroDescNodeInfo> = [];
-  circuitPlan.push(
-    mustFindMicroDescNodeInfo(
-      microDescNodeInfos,
-      (n) => n.onion_router_port === 5004,
-      'orport 5004'
-    )
-  );
-  circuitPlan.push(
-    mustFindMicroDescNodeInfo(
-      microDescNodeInfos,
-      (n) => n.onion_router_port === 5001,
-      'orport 5001'
-    )
-  );
-  circuitPlan.push(
-    mustFindMicroDescNodeInfo(
-      microDescNodeInfos,
-      (n) => n.onion_router_port === 5000,
-      'orport 5000'
-    )
-  );
-
-  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(
-    circuitPlan.map(async (relayInfo) => {
-      return await dangerouslyLookupPeerInfo(directoryServer, relayInfo);
-    })
-  );
-  // reverse so that gateway is first and exit is last
-  circuitPeerInfos.reverse();
-
-  return circuitPeerInfos;
-}
-
-export async function getRandomChutneyCircuitPath() {
-  const { directoryServer, consensus } = await getChutneyMicrodescConsensus();
-  const microDescNodeInfos = consensus.relays;
-
-  const circuitPlan: Array<MicroDescNodeInfo> = [];
-
-  const forcedExitRsaIdDigestHex = process.env.TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX?.toLowerCase();
-  if (forcedExitRsaIdDigestHex) {
-    const forcedExit = microDescNodeInfos.find((n) => {
-      const digestHex = n.rsaIdDigest.toString('hex');
-      return digestHex === forcedExitRsaIdDigestHex;
-    });
-    if (!forcedExit) {
-      throw new Error(
-        `TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX=${forcedExitRsaIdDigestHex} not found in microdesc`
-      );
-    }
-    circuitPlan.push(forcedExit);
-  } else {
-    circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Exit'], circuitPlan));
-  }
-
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, [], circuitPlan));
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Guard'], circuitPlan));
-
-  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(
-    circuitPlan.map(async (relayInfo) => {
-      return await dangerouslyLookupPeerInfo(directoryServer, relayInfo);
-    })
-  );
-  // reverse so that gateway is first and exit is last
-  circuitPeerInfos.reverse();
-
-  return circuitPeerInfos;
-}
-
-export async function getRandomChutneyCircuitPathToTarget(
-  target: PeerInfo,
-  opts: { avoidRsaIdDigests?: Buffer[] } = {}
-) {
-  const { directoryServer, consensus } = await getChutneyMicrodescConsensus();
-  const microDescNodeInfos = consensus.relays;
-
-  const avoid = new Set<string>([
-    target.rsaIdDigest.toString('hex'),
-    ...(opts.avoidRsaIdDigests ?? []).map((b) => b.toString('hex')),
-  ]);
-
-  const ignore: MicroDescNodeInfo[] = microDescNodeInfos.filter((n) =>
-    avoid.has(n.rsaIdDigest.toString('hex'))
-  );
-
-  const circuitPlan: Array<MicroDescNodeInfo> = [];
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, [], ignore));
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Guard'], [...ignore, ...circuitPlan]));
-
-  // Build in exit->...->guard order, then reverse at the end.
-  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(
-    circuitPlan.map(async (relayInfo) => {
-      return await dangerouslyLookupPeerInfo(directoryServer, relayInfo);
-    })
-  );
-  circuitPeerInfos.unshift(target);
-  circuitPeerInfos.reverse();
-  return circuitPeerInfos;
-}
-
 // =============================================================================
-// Safe versions using DirectoryClient over circuits
+// Chutney bootstrap (TLS to a chutney relay, mirroring fallback bootstrap)
 // =============================================================================
 //
-// These mirror the mainnet client path: parse the consensus that came back
-// over a Tor circuit, then look up each picked relay's PeerInfo through the
-// same DirectoryClient. The single chutney-specific bit is calling
-// `dangerouslyTrustUnverifiedConsensus` instead of mainnet's signed
-// verification — chutney's directory authorities aren't on the hardcoded
-// mainnet keylist, so signatures cannot be checked. Everything else is
-// shared with the path the tamanegi browser runs (browser/src/client.ts).
+// Chutney runs every relay on 127.0.0.1 and writes their config + identity
+// fingerprint to disk under $CHUTNEY_DATA_DIR/nodes/<n>/. We pick any node
+// off disk, TLS-connect to its OrPort, and build a single-hop circuit using
+// CREATE_FAST. Nothing about consensus or peer info is fetched over plain
+// HTTP — every subsequent lookup uses BEGIN_DIR over this circuit, the same
+// path mainnet and the tamanegi browser run.
+
+export type ChutneyBootstrapPeer = {
+  ip: string;
+  orPort: number;
+  rsaIdDigest: Buffer;
+};
 
 /**
- * Build a random circuit path safely using an existing circuit for directory lookups.
- *
- * This is the safe alternative to getRandomChutneyCircuitPath().
+ * Discover any usable chutney relay's `(ip, orPort, rsaIdDigest)` from the
+ * filesystem laid out by `chutney start`. Reads `$CHUTNEY_DATA_DIR/nodes/*`
+ * (chutney itself sets that env var). The first node with a parseable
+ * `OrPort` and a 40-hex `fingerprint` wins; chutney's `127.0.0.1` is
+ * implicit.
  */
-export async function getRandomChutneyCircuitPathSafe(
-  directoryCircuit: Circuit
-): Promise<PeerInfo[]> {
-  const client = new DirectoryClient(directoryCircuit);
-  const microDescContent = await client.downloadMicrodescConsensus();
-  const unverified = parseMicroDescConsensus(microDescContent);
+export async function discoverChutneyBootstrapPeer(): Promise<ChutneyBootstrapPeer> {
+  const dataDir = process.env.CHUTNEY_DATA_DIR;
+  if (!dataDir) {
+    throw new Error('CHUTNEY_DATA_DIR not set; cannot discover a chutney bootstrap peer');
+  }
+  const nodesDir = path.join(dataDir, 'nodes');
+  const entries = await fs.readdir(nodesDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (!entry.isDirectory()) continue;
+    const torrcPath = path.join(nodesDir, entry.name, 'torrc');
+    const fingerprintPath = path.join(nodesDir, entry.name, 'fingerprint');
+    let torrc: string;
+    let fingerprintLine: string;
+    try {
+      torrc = await fs.readFile(torrcPath, 'utf8');
+      fingerprintLine = await fs.readFile(fingerprintPath, 'utf8');
+    } catch {
+      continue;
+    }
+    const orPortText = torrc.match(/^OrPort\s+(\d+)\b/m)?.[1];
+    if (!orPortText) continue;
+    const orPort = Number.parseInt(orPortText, 10);
+    if (!Number.isFinite(orPort) || orPort <= 0) continue;
+    // fingerprint file: "<nickname> <40-hex (groups of 4)>"
+    const fpHex = fingerprintLine.split(/\s+/).slice(1).join('').replace(/\s/g, '');
+    if (fpHex.length !== 40) continue;
+    const rsaIdDigest = Buffer.from(fpHex, 'hex');
+    if (rsaIdDigest.length !== 20) continue;
+    return { ip: '127.0.0.1', orPort, rsaIdDigest };
+  }
+  throw new Error(`No usable chutney nodes found in ${nodesDir}`);
+}
 
-  // SKIP VERIFICATION: Chutney is a test network with local directory authorities
-  // that don't match the hardcoded mainnet authorities.
-  const consensus = dangerouslyTrustUnverifiedConsensus(
-    unverified,
-    'Chutney test network (local authorities, no mainnet keys)'
-  );
-  const microDescNodeInfos = consensus.relays;
+/**
+ * PeerInfo for a chutney bootstrap peer. `onionKey` is empty so the circuit
+ * uses CREATE_FAST — we don't have the ntor onion key on hand and don't need
+ * it for a single-hop, identity-verified-by-TLS bootstrap.
+ */
+export function chutneyBootstrapPeerToPeerInfo(peer: ChutneyBootstrapPeer): PeerInfo {
+  return {
+    onionKey: Buffer.alloc(0),
+    rsaIdDigest: peer.rsaIdDigest,
+    linkSpecifiers: [
+      addressAndPortToLinkSpecifier({
+        type: AddressTypes.IPv4,
+        ip: peer.ip,
+        port: peer.orPort,
+      }),
+      { type: LinkSpecifierTypes.LegacyId, data: peer.rsaIdDigest },
+    ],
+  };
+}
 
-  const circuitPlan: Array<MicroDescNodeInfo> = [];
+/**
+ * Bootstrap a chutney session by connecting TLS-direct to a chutney relay
+ * and building a 1-hop circuit. Equivalent of mainnet's
+ * {@link bootstrapWithFallbackDirectory}; safe to use as the
+ * `directoryCircuit` argument for {@link connectRandomCircuitSafe}.
+ */
+export async function bootstrapWithChutneyDirectory(): Promise<Circuit> {
+  const peer = await discoverChutneyBootstrapPeer();
+  const peerInfo = chutneyBootstrapPeerToPeerInfo(peer);
+  const channel = new TlsChannelConnection();
+  await channel.connectPeerInfo(peerInfo);
+  const circuit = new Circuit({ path: [peerInfo], channel });
+  await circuit.connect();
+  return circuit;
+}
 
+// =============================================================================
+// Safe path-building over an existing chutney directory circuit
+// =============================================================================
+//
+// These look identical to the mainnet pattern in build-circuit/mainnet.ts —
+// they are just kept here because chutney has its own forced-exit pin
+// (TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX) that pins a specific exit relay
+// across CI runs. Everything else routes through the standard
+// DirectoryClient/lookupPeerInfo, no plain-HTTP, no `dangerouslyLookup*`.
+
+function pickChutneyExit(microDescNodeInfos: MicroDescNodeInfo[]): MicroDescNodeInfo {
   const forcedExitRsaIdDigestHex = process.env.TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX?.toLowerCase();
   if (forcedExitRsaIdDigestHex) {
-    const forcedExit = microDescNodeInfos.find((n: MicroDescNodeInfo) => {
-      const digestHex = n.rsaIdDigest.toString('hex');
-      return digestHex === forcedExitRsaIdDigestHex;
-    });
+    const forcedExit = microDescNodeInfos.find(
+      (n) => n.rsaIdDigest.toString('hex') === forcedExitRsaIdDigestHex
+    );
     if (!forcedExit) {
       throw new Error(
         `TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX=${forcedExitRsaIdDigestHex} not found in microdesc`
       );
     }
-    circuitPlan.push(forcedExit);
-  } else {
-    circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Exit'], circuitPlan));
+    return forcedExit;
   }
-
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, [], circuitPlan));
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Guard'], circuitPlan));
-
-  // Look up PeerInfo safely through the circuit
-  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(
-    circuitPlan.map((relayInfo) => lookupPeerInfo(client, relayInfo))
-  );
-
-  // reverse so that gateway is first and exit is last
-  circuitPeerInfos.reverse();
-  return circuitPeerInfos;
+  return pickRelayWithFlags(microDescNodeInfos, ['Exit'], []);
 }
 
 /**
- * Build a random circuit path to a target safely using an existing circuit.
- *
- * This is the safe alternative to getRandomChutneyCircuitPathToTarget().
+ * Build a random 3-hop chutney circuit path using an existing directory
+ * circuit. Honors the `TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX` pin if set.
+ */
+export async function getRandomChutneyCircuitPathSafe(
+  directoryCircuit: Circuit,
+  consensus: VerifiedMicroDescConsensus
+): Promise<PeerInfo[]> {
+  const client = new DirectoryClient(directoryCircuit);
+  const relays = consensus.relays;
+
+  const circuitPlan: MicroDescNodeInfo[] = [];
+  circuitPlan.push(pickChutneyExit(relays));
+  circuitPlan.push(pickRelayWithFlags(relays, [], circuitPlan));
+  circuitPlan.push(pickRelayWithFlags(relays, ['Guard'], circuitPlan));
+
+  const peerInfos = await Promise.all(circuitPlan.map((r) => lookupPeerInfo(client, r)));
+  // exit-first → guard-first
+  peerInfos.reverse();
+  return peerInfos;
+}
+
+/**
+ * Build a 3-hop circuit path that ends at `target`, using `directoryCircuit`
+ * for safe peer lookups. Used for HS introduction circuits.
  */
 export async function getRandomChutneyCircuitPathToTargetSafe(
   directoryCircuit: Circuit,
+  consensus: VerifiedMicroDescConsensus,
   target: PeerInfo,
   opts: { avoidRsaIdDigests?: Buffer[] } = {}
 ): Promise<PeerInfo[]> {
   const client = new DirectoryClient(directoryCircuit);
-  const microDescContent = await client.downloadMicrodescConsensus();
-  const unverified = parseMicroDescConsensus(microDescContent);
-
-  // SKIP VERIFICATION: Chutney is a test network with local directory authorities
-  // that don't match the hardcoded mainnet authorities.
-  const consensus = dangerouslyTrustUnverifiedConsensus(
-    unverified,
-    'Chutney test network (local authorities, no mainnet keys)'
-  );
-  const microDescNodeInfos = consensus.relays;
+  const relays = consensus.relays;
 
   const avoid = new Set<string>([
     target.rsaIdDigest.toString('hex'),
     ...(opts.avoidRsaIdDigests ?? []).map((b) => b.toString('hex')),
   ]);
+  const ignore = relays.filter((n) => avoid.has(n.rsaIdDigest.toString('hex')));
 
-  const ignore: MicroDescNodeInfo[] = microDescNodeInfos.filter((n: MicroDescNodeInfo) =>
-    avoid.has(n.rsaIdDigest.toString('hex'))
-  );
+  const circuitPlan: MicroDescNodeInfo[] = [];
+  circuitPlan.push(pickRelayWithFlags(relays, [], ignore));
+  circuitPlan.push(pickRelayWithFlags(relays, ['Guard'], [...ignore, ...circuitPlan]));
 
-  const circuitPlan: Array<MicroDescNodeInfo> = [];
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, [], ignore));
-  circuitPlan.push(pickRelayWithFlags(microDescNodeInfos, ['Guard'], [...ignore, ...circuitPlan]));
+  const peerInfos = await Promise.all(circuitPlan.map((r) => lookupPeerInfo(client, r)));
+  peerInfos.unshift(target);
+  // target-first → guard-first
+  peerInfos.reverse();
+  return peerInfos;
+}
 
-  // Look up PeerInfo safely through the circuit
-  const circuitPeerInfos: Array<PeerInfo> = await Promise.all(
-    circuitPlan.map((relayInfo) => lookupPeerInfo(client, relayInfo))
-  );
+/**
+ * Bootstrap chutney + build a full 3-hop circuit. Mirrors mainnet's
+ * {@link connectRandomCircuitWithSafeBootstrap} and is the entry point CI
+ * scripts should use instead of any `dangerously*` plumbing.
+ *
+ * Returns the new 3-hop circuit and the PeerInfo path that built it. The
+ * bootstrap circuit is destroyed before returning.
+ */
+export async function connectRandomChutneyCircuitWithSafeBootstrap(): Promise<{
+  circuit: Circuit;
+  path: PeerInfo[];
+}> {
+  const bootstrapCircuit = await bootstrapWithChutneyDirectory();
+  try {
+    const consensus = await fetchChutneyConsensusOverCircuit(bootstrapCircuit);
+    const path = await getRandomChutneyCircuitPathSafe(bootstrapCircuit, consensus);
+    const first = path[0];
+    if (!first) throw new Error('Empty chutney circuit path');
 
-  circuitPeerInfos.unshift(target);
-  circuitPeerInfos.reverse();
-  return circuitPeerInfos;
+    const channel = new TlsChannelConnection();
+    await channel.connectPeerInfo(first);
+    const circuit = new Circuit({ path, channel });
+    await circuit.connect();
+    bootstrapCircuit.destroy();
+    return { circuit, path };
+  } catch (err) {
+    bootstrapCircuit.destroy();
+    throw err;
+  }
+}
+
+/**
+ * Fetch the chutney consensus over an existing directory circuit, skipping
+ * mainnet's signature verification because chutney's authorities aren't on
+ * the hardcoded keylist. Handy for callers that want the raw consensus
+ * without instantiating a full {@link ConsensusManager}.
+ */
+export async function fetchChutneyConsensusOverCircuit(
+  directoryCircuit: Circuit
+): Promise<VerifiedMicroDescConsensus> {
+  const manager = new ConsensusManager(directoryCircuit, {
+    defaultRefreshOptions: { dangerouslySkipSignatureVerification: true },
+  });
+  return manager.getConsensus();
 }
 
 // ============================================================================
@@ -379,23 +305,22 @@ export async function makeChutneyTorClient(
   // Create channel manager for TLS connection reuse
   const channelManager = createTlsChannelManager();
 
-  // Get consensus
-  const { consensus } = await getChutneyMicrodescConsensus();
-  log(`Got consensus with ${consensus.relays.length} relays`);
-
-  // Build bootstrap circuit
-  const bootstrapPath = await getRandomChutneyCircuitPath();
-  const bootstrapFirst = bootstrapPath[0];
-  if (!bootstrapFirst) throw new Error('Empty bootstrap circuit path');
-
-  const bootstrapChannel = await channelManager.getOrCreate(bootstrapFirst);
-  const bootstrapCircuit = new Circuit({ path: bootstrapPath, channel: bootstrapChannel });
-  await bootstrapCircuit.connect();
+  // 1-hop bootstrap circuit via TLS to a chutney relay (same shape as
+  // mainnet's fallback-directory bootstrap).
+  const bootstrapCircuit = await bootstrapWithChutneyDirectory();
   log('Bootstrap circuit established');
 
   const dirClient = new DirectoryClient(bootstrapCircuit);
 
-  // Create microdescriptor manager with in-memory storage
+  // Reuse the standard ConsensusManager (same code path the tamanegi browser
+  // runs); signature verification is opted out via defaultRefreshOptions
+  // because chutney's authorities aren't on the hardcoded mainnet keylist.
+  const consensusManager = new ConsensusManager(bootstrapCircuit, {
+    defaultRefreshOptions: { dangerouslySkipSignatureVerification: true },
+  });
+  const consensus = await consensusManager.getConsensus();
+  log(`Got consensus with ${consensus.relays.length} relays`);
+
   // Microdescriptors are fetched lazily when needed (e.g., for hidden service connections)
   const microdescManager = new MicrodescManager({
     storage: new InMemoryMicrodescStorage(),
@@ -407,6 +332,7 @@ export async function makeChutneyTorClient(
     const avoidRsaIdDigests = opts?.avoid?.map((p) => p.rsaIdDigest);
     const path = await getRandomChutneyCircuitPathToTargetSafe(
       bootstrapCircuit,
+      consensus,
       target,
       avoidRsaIdDigests ? { avoidRsaIdDigests } : undefined
     );
@@ -421,7 +347,7 @@ export async function makeChutneyTorClient(
 
   // Build a general circuit
   const buildCircuit = async (_opts?: { targetPorts?: number[] }): Promise<CircuitResult> => {
-    const path = await getRandomChutneyCircuitPath();
+    const path = await getRandomChutneyCircuitPathSafe(bootstrapCircuit, consensus);
     const first = path[0];
     if (!first) throw new Error('Empty circuit path');
 
@@ -436,16 +362,6 @@ export async function makeChutneyTorClient(
       destroy: () => circuit.destroy({ preserveChannel: true }),
     };
   };
-
-  // Reuse the standard ConsensusManager (same code path the tamanegi browser
-  // runs); signature verification is opted out via defaultRefreshOptions
-  // because chutney's authorities aren't on the hardcoded mainnet keylist.
-  const consensusManager = new ConsensusManager(bootstrapCircuit, {
-    initialVerifiedConsensus: consensus,
-    defaultRefreshOptions: {
-      dangerouslySkipSignatureVerification: true,
-    },
-  });
 
   log('Client initialized');
 

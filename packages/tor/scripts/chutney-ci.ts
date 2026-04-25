@@ -2,8 +2,7 @@ import http from 'node:http';
 import { once } from 'node:events';
 
 import { Circuit } from '../src/circuit.ts';
-import { TlsChannelConnection } from '../src/channel.ts';
-import { getRandomChutneyCircuitPath } from '../src/build-circuit/chutney.ts';
+import { connectRandomChutneyCircuitWithSafeBootstrap } from '../src/build-circuit/chutney.ts';
 
 async function withTimeout<T>(label: string, ms: number, promise: Promise<T>): Promise<T> {
   let timeout: NodeJS.Timeout | undefined;
@@ -46,14 +45,15 @@ async function main() {
       })()
     );
 
-    const path = await withTimeout(
-      'get chutney circuit path',
-      perStepTimeoutMs,
-      getRandomChutneyCircuitPath()
+    const built = await withTimeout(
+      'bootstrap chutney + build circuit',
+      perStepTimeoutMs * 2,
+      connectRandomChutneyCircuitWithSafeBootstrap()
     );
+    circuit = built.circuit;
     console.log(
       'selected path:',
-      path.map((p) => ({
+      built.path.map((p) => ({
         rsaIdDigest: p.rsaIdDigest?.toString('hex'),
         linkSpecifiers: p.linkSpecifiers?.map((ls) => ({
           type: ls.type,
@@ -61,11 +61,6 @@ async function main() {
         })),
       }))
     );
-    const channel = new TlsChannelConnection();
-    await withTimeout('connect to first hop', perStepTimeoutMs, channel.connectPeerInfo(path[0]));
-
-    circuit = new Circuit({ path, channel });
-    await withTimeout('build circuit', perStepTimeoutMs, circuit.connect());
 
     const stream = await withTimeout(
       'open stream',
