@@ -2475,57 +2475,67 @@ export async function connectToHiddenServiceCore(
     }
   }
 
-  if (!successfulIntro) {
-    rendCircuit.destroy();
+  // Wrap everything between observer-attach and rendezvous-completion in a
+  // try/finally so the 'relay' listener is always removed from rendCircuit,
+  // even on early throws (no successful intro, RENDEZVOUS2 timeout, malformed
+  // RENDEZVOUS2 body). The success path falls through to the same detach().
+  try {
+    if (!successfulIntro) {
+      rendCircuit.destroy();
 
-    // If we used a cached descriptor and all intros failed, invalidate the cache
-    // The descriptor might be stale (intro points changed)
-    if (usedCachedDescriptor && descriptorCache) {
-      log('All intro points failed with cached descriptor; invalidating cache');
-      descriptorCache.invalidate(publicIdentityKey);
+      // If we used a cached descriptor and all intros failed, invalidate the cache
+      // The descriptor might be stale (intro points changed)
+      if (usedCachedDescriptor && descriptorCache) {
+        log('All intro points failed with cached descriptor; invalidating cache');
+        descriptorCache.invalidate(publicIdentityKey);
+      }
+
+      const errorSummary = introErrors.map((e) => e.message).join('; ');
+      throw new Error(`All ${maxIntroAttempts} introduction attempts failed: ${errorSummary}`);
     }
 
-    const errorSummary = introErrors.map((e) => e.message).join('; ');
-    throw new Error(`All ${maxIntroAttempts} introduction attempts failed: ${errorSummary}`);
+    const { introCircuit, state } = successfulIntro;
+
+    // Give the intro point a moment to fully relay the message before closing.
+    // The intro point needs to forward INTRODUCE2 to the service over its circuit.
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    introCircuit.destroy({ preserveChannel: true });
+
+    // Step 7: Await RENDEZVOUS2 (listener was armed before introduction in 6a).
+    // Use a dedicated rendezvous timeout (default 60s) rather than the overall timeout.
+    // If the hidden service received our introduction, it should respond within this window.
+    log(`Waiting for rendezvous completion (timeout: ${rendezvousTimeoutMs}ms)...`);
+    let r2: { streamId: number; relayCommand: number; data: Buffer };
+    try {
+      r2 = await rendezvous2Promise;
+    } catch (err) {
+      const observed = rendezvousObserver.snapshot();
+      rendCircuit.destroy();
+      const msg = err instanceof Error ? err.message : String(err);
+      throw new Error(
+        `Rendezvous failed: timed out waiting for hidden service response ` +
+          `(${rendezvousTimeoutMs}ms). The service may be offline, overloaded, ` +
+          `or unable to decrypt the introduction. ` +
+          `Cells received on rendezvous circuit during the wait: ` +
+          `${observed.totalCells} (${observed.commandSummary || 'none'}). ` +
+          `Original error: ${msg}`
+      );
+    }
+    if (r2.data.length < 64) {
+      rendCircuit.destroy();
+      throw new Error('RENDEZVOUS2 too short');
+    }
+
+    const Y = r2.data.subarray(0, 32);
+    const auth = r2.data.subarray(32, 64);
+    const { NTOR_KEY_SEED } = hsNtorComplete({ state, Y, auth });
+    const cipherPair = makeHsRendezvousCipherPairFromKeySeed(NTOR_KEY_SEED);
+    rendCircuit.addVirtualHop(cipherPair);
+
+    log('Connected to hidden service!');
+
+    return { circuit: rendCircuit, descriptor };
+  } finally {
+    rendezvousObserver.detach();
   }
-
-  const { introCircuit, state } = successfulIntro;
-
-  // Give the intro point a moment to fully relay the message before closing.
-  // The intro point needs to forward INTRODUCE2 to the service over its circuit.
-  await new Promise((resolve) => setTimeout(resolve, 100));
-  introCircuit.destroy({ preserveChannel: true });
-
-  // Step 7: Await RENDEZVOUS2 (listener was armed before introduction in 6a).
-  // Use a dedicated rendezvous timeout (default 60s) rather than the overall timeout.
-  // If the hidden service received our introduction, it should respond within this window.
-  log(`Waiting for rendezvous completion (timeout: ${rendezvousTimeoutMs}ms)...`);
-  let r2: { streamId: number; relayCommand: number; data: Buffer };
-  try {
-    r2 = await rendezvous2Promise;
-  } catch (err) {
-    const observed = rendezvousObserver.snapshot();
-    rendCircuit.destroy();
-    const msg = err instanceof Error ? err.message : String(err);
-    throw new Error(
-      `Rendezvous failed: timed out waiting for hidden service response ` +
-        `(${rendezvousTimeoutMs}ms). The service may be offline, overloaded, ` +
-        `or unable to decrypt the introduction. ` +
-        `Cells received on rendezvous circuit during the wait: ` +
-        `${observed.totalCells} (${observed.commandSummary || 'none'}). ` +
-        `Original error: ${msg}`
-    );
-  }
-  rendezvousObserver.detach();
-  if (r2.data.length < 64) throw new Error('RENDEZVOUS2 too short');
-
-  const Y = r2.data.subarray(0, 32);
-  const auth = r2.data.subarray(32, 64);
-  const { NTOR_KEY_SEED } = hsNtorComplete({ state, Y, auth });
-  const cipherPair = makeHsRendezvousCipherPairFromKeySeed(NTOR_KEY_SEED);
-  rendCircuit.addVirtualHop(cipherPair);
-
-  log('Connected to hidden service!');
-
-  return { circuit: rendCircuit, descriptor };
 }
