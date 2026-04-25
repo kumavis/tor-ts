@@ -351,15 +351,19 @@ export class SmuxStream {
     while (off < data.byteLength) {
       // Compute available peer window in 32-bit modular arithmetic (matches smux v2).
       const inflight = (this.numWritten - this.peerConsumed) >>> 0;
-      const win = ((this.peerWindow - inflight) | 0) >>> 0;
       if (inflight > 0x7fffffff) {
         // Defensive: peer claims to have consumed more than we sent.
         throw new Error('smux: peer consumed more than sent');
       }
-      if (win === 0) {
+      // No credit when we've already filled the peer's window. We must NOT
+      // compute `(peerWindow - inflight) >>> 0` here: that underflows to a
+      // huge unsigned value when inflight > peerWindow, which would defeat
+      // backpressure precisely when it should block.
+      if (inflight >= this.peerWindow) {
         await this.waitForWriteWindow();
         continue;
       }
+      const win = this.peerWindow - inflight;
       const remaining = data.byteLength - off;
       const take = Math.min(this.sess.maxFrameSize, remaining, win);
       const chunk = data.subarray(off, off + take);
