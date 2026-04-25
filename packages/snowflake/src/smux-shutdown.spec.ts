@@ -29,8 +29,9 @@ test('shutdown: closing the carrier with no smux error listener does not crash',
     }
   );
 
-  // Important: do NOT attach an 'error' listener — that's what triggered the
-  // crash in CI. The session must shut down gracefully on its own.
+  // Important: do NOT attach an 'error' listener — having no listener is what
+  // turned the EventEmitter throw into a process-killing unhandled rejection
+  // (see file docstring above). The session must shut down gracefully on its own.
 
   const closeP = new Promise<void>((resolve) => smux.once('close', () => resolve()));
 
