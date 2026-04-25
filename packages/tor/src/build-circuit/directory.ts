@@ -652,29 +652,30 @@ export async function dangerouslyLookupPeerInfoWithEd25519IdentityKey(
   if (ed25519IdentityKey.length !== 32) {
     throw new Error(`Expected 32-byte ed25519 identity, got ${ed25519IdentityKey.length}`);
   }
-  const peerInfo = microDescNodeInfoToPeerInfo(nodeInfo, onionKey);
+  const peerInfo = microDescNodeInfoToPeerInfo(nodeInfo, onionKey, ed25519IdentityKey);
   return { peerInfo, ed25519IdentityKey };
 }
 
 export function microDescNodeInfoToPeerInfo(
   nodeInfo: MicroDescNodeInfo,
-  onionKey: Buffer
+  onionKey: Buffer,
+  ed25519IdentityKey?: Buffer
 ): PeerInfo {
   const linkSpecifiers: Array<LinkSpecifier> = [];
-  // For purposes of indistinguishability, implementations SHOULD send
-  //  these link specifiers, if using them, in this order:
-  // [00], [02], [03], [01].
-
-  // [00] TLS-over-TCP, IPv4 address
-  //       A four-byte IPv4 address plus two-byte ORPort
-  // [01] TLS-over-TCP, IPv6 address
-  //       A sixteen-byte IPv6 address plus two-byte ORPort
-  // [02] Legacy identity
-  //       A 20-byte SHA1 identity fingerprint. At most one may be listed.
-  // [03] Ed25519 identity
-  //       A 32-byte Ed25519 identity fingerprint. At most one may
-  //       be listed.
-
+  // Per tor-spec.txt §5.1.2, clients SHOULD send these link specifiers — if
+  // using them — in the order [00], [02], [03], [01].
+  //
+  // [00] TLS-over-TCP, IPv4 address (4B + 2B port)
+  // [01] TLS-over-TCP, IPv6 address (16B + 2B port)
+  // [02] Legacy identity (20B SHA1 fingerprint)
+  // [03] Ed25519 identity (32B ed25519 fingerprint)
+  //
+  // Prior to this change we only sent [00] and [02]. That works for normal
+  // circuit extension (EXTEND2 accepts missing ed25519 keys) but breaks
+  // hidden-service rendezvous on modern tor: when the HS extends to the
+  // rendezvous point indicated in INTRODUCE2, it silently drops the cell
+  // if ed25519 is expected but missing. See rend-spec-v3.txt Appendix G.1
+  // test vector plaintext, which explicitly includes the [03] specifier.
   linkSpecifiers.push(
     addressAndPortToLinkSpecifier({
       type: AddressTypes.IPv4,
@@ -686,14 +687,13 @@ export function microDescNodeInfoToPeerInfo(
     type: LinkSpecifierTypes.LegacyId,
     data: nodeInfo.rsaIdDigest,
   });
-  // TODO: include ed25519 linkSpecifiers if available
-  // Ed25519 identity keys are not required in EXTEND2 cells, so all zero
-  //  keys SHOULD be accepted. If the extending relay knows the ed25519 key from
-  //  the consensus, it SHOULD also check that key. (See section 5.1.2.)
-  // linkSpecifiers.push({
-  //   type: LinkSpecifierTypes.Ed25519Id,
-  //   data: Buffer.alloc(32),
-  // })
+  const ed25519 = ed25519IdentityKey ?? nodeInfo.ed25519Identity;
+  if (ed25519 && ed25519.length === 32) {
+    linkSpecifiers.push({
+      type: LinkSpecifierTypes.Ed25519Id,
+      data: ed25519,
+    });
+  }
   return {
     onionKey,
     rsaIdDigest: nodeInfo.rsaIdDigest,

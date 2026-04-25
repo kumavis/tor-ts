@@ -728,7 +728,11 @@ export async function fetchHsdirCandidates(
   for (const [digest, microdesc] of microdescriptors) {
     const node = digestToNode.get(digest);
     if (node && microdesc.ntorOnionKey && microdesc.ed25519Identity) {
-      const peerInfo = microDescNodeInfoToPeerInfo(node, microdesc.ntorOnionKey);
+      const peerInfo = microDescNodeInfoToPeerInfo(
+        node,
+        microdesc.ntorOnionKey,
+        microdesc.ed25519Identity
+      );
       candidates.push({
         peerInfo,
         ed25519IdentityKey: microdesc.ed25519Identity,
@@ -1726,7 +1730,7 @@ export type HsNtorClientState = {
   N_hs_subcred: Buffer;
 };
 
-function hsNtorDeriveEncAndMac(params: {
+export function hsNtorDeriveEncAndMac(params: {
   x: Buffer;
   X: Buffer;
   B: Buffer;

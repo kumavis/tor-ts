@@ -1,0 +1,81 @@
+/**
+ * Test our hs-ntor derivation against the official spec test vectors from
+ * torspec/rend-spec-v3.txt Appendix G.1 (NTOR-WITH-EXTRA-DATA).
+ */
+
+import test from 'ava';
+import { aes256CtrXor, sha3_256 } from 'tor-crypto';
+import { hsNtorDeriveEncAndMac } from './hidden-service.ts';
+
+const hex = (s: string): Buffer => Buffer.from(s.replace(/\s+/g, ''), 'hex');
+
+// Inputs from rend-spec-v3.txt G.1
+const AUTH_KEY = hex('34E171E4358E501BFF21ED907E96AC6BFEF697C779D040BBAF49ACC30FC5D21F'); // KP_hs_ipd_sid
+const B = hex('8E5127A40E83AABF6493E41F142B6EE3604B85A3961CD7E38D247239AFF71979'); // KP_hss_ntor
+const N_hs_subcred = hex('0085D26A9DEBA252263BF0231AEAC59B17CA11BAD8A218238AD6487CBAD68B57');
+const x = hex('60B4D6BF5234DCF87A4E9D7487BDF3F4A69B6729835E825CA29089CFDDA1E341');
+const X = hex('BF04348B46D09AED726F1D66C618FDEA1DE58E8CB8B89738D7356A0C59111D5D');
+
+// Expected outputs from the spec
+const ENC_KEY_EXPECTED = hex('9B8917BA3D05F3130DACCE5300C3DC27F6D012912F1C733036F822D0ED238706');
+const MAC_KEY_EXPECTED = hex('FC4058DA59D4DF61E7B40985D122F502FD59336BC21C30CAF5E7F0D4A2C38FD5');
+
+test('hs-ntor: derives ENC_KEY/MAC_KEY matching rend-spec-v3 G.1 test vector', (t) => {
+  const { ENC_KEY, MAC_KEY } = hsNtorDeriveEncAndMac({
+    x,
+    X,
+    B,
+    AUTH_KEY,
+    N_hs_subcred,
+  });
+  t.deepEqual(ENC_KEY, ENC_KEY_EXPECTED, 'ENC_KEY must match spec');
+  t.deepEqual(MAC_KEY, MAC_KEY_EXPECTED, 'MAC_KEY must match spec');
+});
+
+// Full INTRODUCE1 body from rend-spec-v3 G.1 (310 bytes: H|X|C|M).
+// Transcribed verbatim from rend-spec-v3.txt lines 2785-2794.
+const INTRO1_BODY = hex(
+  '000000000000000000000000000000000000000002002034E171E4358E501BFF' +
+    '21ED907E96AC6BFEF697C779D040BBAF49ACC30FC5D21F00BF04348B46D09AED' +
+    '726F1D66C618FDEA1DE58E8CB8B89738D7356A0C59111D5DADBECCCB38E37830' +
+    '4DCC179D3D9E437B452AF5702CED2CCFEC085BC02C4C175FA446525C1B9D5530' +
+    '563C362FDFFB802DAB8CD9EBC7A5EE17DA62E37DEEB0EB187FBB48C63298B0E8' +
+    '3F391B7566F42ADC97C46BA7588278273A44CE96BC68FFDAE31EF5F0913B9A9C' +
+    '7E0F173DBC0BDDCD4ACB4C4600980A7DDD9EAEC6E7F3FA3FC37CD95E5B8BFB3E' +
+    '35717012B78B4930569F895CB349A07538E42309C993223AEA77EF8AEA64F25D' +
+    'DEE97DA623F1AEC0A47F150002150455845C385E5606E41A9A199E7111D54EF2' +
+    'D1A51B7554D8B3692D85AC587FB9E69DF990EFB776D8'
+);
+
+// Plaintext P from rend-spec-v3 G.1 (190 bytes). Lines 2758-2763.
+const INTRO1_PLAINTEXT = hex(
+  '6BD364C12638DD5C3BE23D76ACA05B04E6CE932C0101000100200DE6130E4FCA' +
+    'C4EDDA24E21220CC3EADAE403EF6B7D11C8273AC71908DE565450300067F0000' +
+    '0113890214F823C4F8CC085C792E0AEE0283FE00AD7520B37D0320728D5DF39B' +
+    '7B7077A0118A900FF4456C382F0041300ACF9C58E51C392795EF870000000000' +
+    '0000000000000000000000000000000000000000000000000000000000000000' +
+    '000000000000000000000000000000000000000000000000000000000000'
+);
+
+test('hs-ntor: spec G.1 MAC + AES-CTR give the documented cell body', async (t) => {
+  t.is(INTRO1_BODY.length, 56 + 32 + 190 + 32, 'body length per spec G.1');
+  t.is(INTRO1_PLAINTEXT.length, 190, 'plaintext length per spec G.1');
+
+  const H = INTRO1_BODY.subarray(0, 56);
+  const bodyX = INTRO1_BODY.subarray(56, 88);
+  const C = INTRO1_BODY.subarray(88, 88 + 190);
+  const M = INTRO1_BODY.subarray(88 + 190);
+  t.deepEqual(bodyX, X, 'body contains the spec-provided CLIENT_PK');
+
+  // 1. AES-256-CTR (IV=0) over ENC_KEY of P must reproduce C.
+  const iv0 = Buffer.alloc(16, 0);
+  const ourC = await aes256CtrXor(ENC_KEY_EXPECTED, iv0, INTRO1_PLAINTEXT);
+  t.deepEqual(Buffer.from(ourC), C, 'AES-CTR(ENC_KEY, IV=0, P) must match spec C');
+
+  // 2. MAC(MAC_KEY, H | X | C) must reproduce M. mac() is
+  //    SHA3-256(htonll(keylen) | key | message).
+  const keyLen = Buffer.alloc(8);
+  keyLen.writeBigUInt64BE(BigInt(MAC_KEY_EXPECTED.length));
+  const ourM = sha3_256(Buffer.concat([keyLen, MAC_KEY_EXPECTED, H, bodyX, C]));
+  t.deepEqual(Buffer.from(ourM), M, 'MAC(MAC_KEY, H|X|C) must match spec M');
+});
