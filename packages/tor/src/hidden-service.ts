@@ -944,6 +944,10 @@ export function deriveSubcredential(params: {
  *
  * Filters (canonical tor, hs_client.c `pick_rendezvous_node`):
  *   1. Must advertise HSRend protocol version 2 (v3 onion service rendezvous).
+ *      Relays whose consensus entry lacks any HSRend protocol-version field at
+ *      all are accepted as a permissive fallback — chutney consensuses
+ *      occasionally omit the field for testing relays. A relay that *does*
+ *      advertise an HSRend version but not v2 is still rejected.
  *   2. Must NOT be an authority (those are heavily loaded and not for relay).
  *   3. Must NOT be an Exit (canonical tor avoids Exits for RP so non-exit
  *      load stays balanced).
