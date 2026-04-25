@@ -40,6 +40,26 @@ const INTRO1_TARGET_LEN = Math.min(
   INTRO1_ENCRYPTED_SECTION_MAX
 );
 
+/**
+ * Verbose HS-flow diagnostics (HSDir selection, SRV/period candidates, blinded
+ * keys, replica indices, etc.) are gated behind TOR_TS_HS_DEBUG. Set the env
+ * var to `1`/`true` to surface them through the existing `log` callback.
+ *
+ * The default log callback is a no-op for the production path; this gate is
+ * for the case where the caller *did* wire a log sink and we want to keep
+ * routine flows quiet there too.
+ */
+const HS_DEBUG_ENABLED = ((): boolean => {
+  const v =
+    typeof process !== 'undefined' && process?.env ? process.env.TOR_TS_HS_DEBUG : undefined;
+  if (v === undefined) return false;
+  return v === '1' || v.toLowerCase() === 'true';
+})();
+
+function makeHsDebugLog(log: (msg: string) => void): (msg: string) => void {
+  return HS_DEBUG_ENABLED ? log : () => {};
+}
+
 // ============================================================================
 // Protocol Version Parsing Utilities
 // ============================================================================
@@ -753,7 +773,7 @@ export function selectHsdirsForFetch(params: {
   spreadFetch: number;
   log?: (msg: string) => void;
 }): PeerInfo[] {
-  const log = params.log ?? (() => {});
+  const dlog = makeHsDebugLog(params.log ?? (() => {}));
 
   const ring = params.hsdirs
     .map((h) => {
@@ -780,7 +800,7 @@ export function selectHsdirsForFetch(params: {
       periodNum: params.periodNum,
     });
 
-    log(`DEBUG: Replica ${replica} hs_index: ${hsIdx.toString('hex').slice(0, 16)}...`);
+    dlog(`Replica ${replica} hs_index: ${hsIdx.toString('hex').slice(0, 16)}...`);
 
     let start = ring.findIndex((x) => Buffer.compare(x.idx, hsIdx) > 0);
     if (start === -1) start = 0;
@@ -795,9 +815,8 @@ export function selectHsdirsForFetch(params: {
       added++;
 
       if (added === 1) {
-        // Log first selected HSDir for this replica for debugging
-        log(
-          `DEBUG: Replica ${replica} first HSDir: ${key.slice(0, 8)} at hsdir_index: ${entry.idx.toString('hex').slice(0, 16)}...`
+        dlog(
+          `Replica ${replica} first HSDir: ${key.slice(0, 8)} at hsdir_index: ${entry.idx.toString('hex').slice(0, 16)}...`
         );
       }
     }
@@ -2165,6 +2184,7 @@ export async function connectToHiddenServiceCore(
     iptExperienceTracker,
     descriptorCache,
   } = options;
+  const dlog = makeHsDebugLog(log);
 
   const { consensus, dirClient, microdescManager, buildCircuit } = ctx;
 
@@ -2243,19 +2263,19 @@ export async function connectToHiddenServiceCore(
     log('Fetching hidden service descriptor...');
     const descriptorDeadline = Date.now() + Math.min(overallTimeoutMs, 180_000);
 
-    // Debug logging for HSDir lookup
+    // Verbose HSDir-lookup diagnostics — gated on TOR_TS_HS_DEBUG.
     const now = new Date();
-    log(`DEBUG: Current time: ${now.toISOString()}`);
-    log(`DEBUG: Consensus valid-after: ${consensus.validAfter?.toISOString()}`);
-    log(`DEBUG: Period candidates: [${periodCandidates.join(', ')}]`);
-    log(`DEBUG: Period length (minutes): ${periodLengthMinutes}`);
-    log(
-      `DEBUG: SRV current: ${consensus.sharedRandCurrentValue?.toString('hex').slice(0, 16) ?? 'MISSING'}...`
+    dlog(`Current time: ${now.toISOString()}`);
+    dlog(`Consensus valid-after: ${consensus.validAfter?.toISOString()}`);
+    dlog(`Period candidates: [${periodCandidates.join(', ')}]`);
+    dlog(`Period length (minutes): ${periodLengthMinutes}`);
+    dlog(
+      `SRV current: ${consensus.sharedRandCurrentValue?.toString('hex').slice(0, 16) ?? 'MISSING'}...`
     );
-    log(
-      `DEBUG: SRV previous: ${consensus.sharedRandPreviousValue?.toString('hex').slice(0, 16) ?? 'MISSING'}...`
+    dlog(
+      `SRV previous: ${consensus.sharedRandPreviousValue?.toString('hex').slice(0, 16) ?? 'MISSING'}...`
     );
-    log(`DEBUG: nReplicas=${nReplicas}, spreadFetch=${spreadFetch}`);
+    dlog(`nReplicas=${nReplicas}, spreadFetch=${spreadFetch}`);
 
     for (const periodNum of periodCandidates) {
       if (descriptor) break;
@@ -2268,8 +2288,7 @@ export async function connectToHiddenServiceCore(
       });
       subcred = deriveSubcredential({ publicIdentityKey, blindedPublicKey });
 
-      // Debug: log the blinded key for this period
-      log(`DEBUG: Trying period ${periodNum}, blinded key: ${toBase64UrlNoPad(blindedPublicKey)}`);
+      dlog(`Trying period ${periodNum}, blinded key: ${toBase64UrlNoPad(blindedPublicKey)}`);
 
       const fetchSrv = getFetchSrv(consensus, periodLengthMinutes, periodNum);
       const srvValues = getSrvValues(consensus, periodLengthMinutes, periodNum);
@@ -2288,11 +2307,11 @@ export async function connectToHiddenServiceCore(
           ? 'current'
           : 'previous';
         if (isDisasterSrv) {
-          log(
-            `DEBUG: Using DISASTER SRV for ${srvLabel} (consensus missing shared-rand-${srvLabel}-value)`
+          dlog(
+            `Using DISASTER SRV for ${srvLabel} (consensus missing shared-rand-${srvLabel}-value)`
           );
         } else {
-          log(`DEBUG: Using real ${srvLabel} SRV: ${srv.toString('hex').slice(0, 16)}...`);
+          dlog(`Using real ${srvLabel} SRV: ${srv.toString('hex').slice(0, 16)}...`);
         }
 
         const hsdirPeersThisRound = selectHsdirsForFetch({
