@@ -106,6 +106,11 @@ export class MinimalKcpSession {
 
   attachSink(sink: KcpPacketSink): void {
     this.sink = sink;
+    // The carrier wiring may attach late (e.g. SnowflakeWsStack constructs the
+    // SmuxSession — which immediately starts a keepalive timer — before its
+    // own connect() runs attachSink). Anything that was queued while the sink
+    // was missing should go out now.
+    if (!this.closed && this.sndQueueBytes > 0) this.flush();
   }
 
   onError(listener: (err: Error) => void): void {
@@ -214,7 +219,11 @@ export class MinimalKcpSession {
   }
 
   private flush(): number {
-    if (!this.sink) throw new Error('no sink attached');
+    // If the sink hasn't been wired yet, defer rather than crashing. Anything
+    // already in sndQueue stays put; attachSink() retries the flush once the
+    // sink shows up. Throwing from here would surface as an uncaughtException
+    // because flush() runs from a microtask scheduled by write().
+    if (!this.sink) return 0;
     let emitted = 0;
     const now = this.now() >>> 0;
 
