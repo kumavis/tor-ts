@@ -216,19 +216,14 @@ echo ""
 
 cd "${ROOT_DIR}"
 
-# Which chutney integration tests to run.
-#
-# Default is "exit" only: chutney's own 'verify' already confirms our HS is
-# reachable via chutney's C-tor client, but our TypeScript HS client fails
-# rendezvous reliably on chutney — INTRODUCE_ACK comes back but RENDEZVOUS2
-# (relay command 37) never does, on every attempt, across different HSDirs
-# and intro-point selections. That's a real bug in packages/tor/src/
-# hidden-service.ts (likely in INTRODUCE1 payload construction — wrong
-# ephemeral key derivation, auth key, or handshake-type byte) and needs a
-# proper debugging pass to fix, so run the "hidden-service" test explicitly
-# by setting TOR_TS_CHUTNEY_TESTS=exit,hidden-service when you want to
-# reproduce the failure locally.
-TOR_TS_CHUTNEY_TESTS="${TOR_TS_CHUTNEY_TESTS:-exit}"
+# Which chutney integration tests to run. Exit + hidden-service both run
+# by default. The hidden-service test was temporarily disabled in 1bdb977
+# while debugging a reproducible "Timed out waiting for relayCommand=37"
+# rendezvous failure — root-caused to a missing Ed25519Id link specifier
+# on the rendezvous point in microDescNodeInfoToPeerInfo (fixed in the
+# same PR, with spec-vector and unit tests in hidden-service-test-vector
+# .spec.ts + directory.spec.ts).
+TOR_TS_CHUTNEY_TESTS="${TOR_TS_CHUTNEY_TESTS:-exit,hidden-service}"
 IFS=',' read -ra TESTS <<< "${TOR_TS_CHUTNEY_TESTS}"
 for t in "${TESTS[@]}"; do
   case "${t}" in

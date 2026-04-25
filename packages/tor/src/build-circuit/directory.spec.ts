@@ -159,6 +159,57 @@ test('microDescNodeInfoToPeerInfo: creates PeerInfo with correct link specifiers
   );
   t.truthy(legacyIdSpec);
   t.is(legacyIdSpec!.data.length, 20); // SHA1 fingerprint
+
+  // Without an ed25519 identity input, the Ed25519Id specifier is omitted.
+  t.is(peerInfo.linkSpecifiers.filter((ls) => ls.type === LinkSpecifierTypes.Ed25519Id).length, 0);
+});
+
+test('microDescNodeInfoToPeerInfo: includes Ed25519Id when ed25519 identity is supplied', (t) => {
+  const relays = parseRelaysForTest(sampleMicroDesc);
+  const nodeInfo = relays[0]!;
+  const onionKey = Buffer.alloc(32).fill(0x42);
+  const ed25519 = Buffer.alloc(32).fill(0xab);
+
+  const peerInfo = microDescNodeInfoToPeerInfo(nodeInfo, onionKey, ed25519);
+
+  // Order per tor-spec.txt §5.1.2: [00], [02], [03], [01].
+  const types = peerInfo.linkSpecifiers.map((ls) => ls.type);
+  t.deepEqual(types, [
+    LinkSpecifierTypes.TlsOverTcpIPv4,
+    LinkSpecifierTypes.LegacyId,
+    LinkSpecifierTypes.Ed25519Id,
+  ]);
+
+  const ed25519Spec = peerInfo.linkSpecifiers.find(
+    (ls) => ls.type === LinkSpecifierTypes.Ed25519Id
+  );
+  t.truthy(ed25519Spec);
+  t.deepEqual(ed25519Spec!.data, ed25519);
+});
+
+test('microDescNodeInfoToPeerInfo: uses nodeInfo.ed25519Identity when no override provided', (t) => {
+  const relays = parseRelaysForTest(sampleMicroDesc);
+  const nodeInfo = { ...relays[0]!, ed25519Identity: Buffer.alloc(32).fill(0xcd) };
+  const onionKey = Buffer.alloc(32).fill(0x42);
+
+  const peerInfo = microDescNodeInfoToPeerInfo(nodeInfo, onionKey);
+
+  const ed25519Spec = peerInfo.linkSpecifiers.find(
+    (ls) => ls.type === LinkSpecifierTypes.Ed25519Id
+  );
+  t.truthy(ed25519Spec);
+  t.deepEqual(ed25519Spec!.data, nodeInfo.ed25519Identity);
+});
+
+test('microDescNodeInfoToPeerInfo: ignores ed25519 with wrong length', (t) => {
+  const relays = parseRelaysForTest(sampleMicroDesc);
+  const nodeInfo = relays[0]!;
+  const onionKey = Buffer.alloc(32).fill(0x42);
+  const badEd25519 = Buffer.alloc(31).fill(0xab); // wrong length
+
+  const peerInfo = microDescNodeInfoToPeerInfo(nodeInfo, onionKey, badEd25519);
+
+  t.is(peerInfo.linkSpecifiers.filter((ls) => ls.type === LinkSpecifierTypes.Ed25519Id).length, 0);
 });
 
 test('parseMicroDescConsensus: handles empty input', (t) => {

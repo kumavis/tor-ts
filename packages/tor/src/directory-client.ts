@@ -617,7 +617,18 @@ export async function lookupPeerInfo(
 ): Promise<PeerInfo> {
   const descriptor = await client.downloadRelayServerDescriptor(nodeInfo.rsaIdDigest);
   const onionKey = extractNtorOnionKeyFromDescriptor(descriptor);
-  return microDescNodeInfoToPeerInfo(nodeInfo, onionKey);
+  // The full server descriptor always contains master-key-ed25519; extract
+  // and pass it so the returned PeerInfo includes an Ed25519Id link
+  // specifier. Without it, modern tor hidden services silently drop the
+  // rendezvous extension built from INTRODUCE2.
+  let ed25519IdentityKey: Buffer | undefined;
+  try {
+    ed25519IdentityKey = extractEd25519IdentityFromDescriptor(descriptor);
+  } catch {
+    // Older relays may omit the line; fall back to nodeInfo.ed25519Identity
+    // inside microDescNodeInfoToPeerInfo.
+  }
+  return microDescNodeInfoToPeerInfo(nodeInfo, onionKey, ed25519IdentityKey);
 }
 
 /**
@@ -633,7 +644,7 @@ export async function lookupPeerInfoWithEd25519IdentityKey(
   const descriptor = await client.downloadRelayServerDescriptor(nodeInfo.rsaIdDigest);
   const onionKey = extractNtorOnionKeyFromDescriptor(descriptor);
   const ed25519IdentityKey = extractEd25519IdentityFromDescriptor(descriptor);
-  const peerInfo = microDescNodeInfoToPeerInfo(nodeInfo, onionKey);
+  const peerInfo = microDescNodeInfoToPeerInfo(nodeInfo, onionKey, ed25519IdentityKey);
   return { peerInfo, ed25519IdentityKey };
 }
 
