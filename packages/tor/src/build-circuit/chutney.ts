@@ -14,7 +14,7 @@ import { DirectoryClient, lookupPeerInfo } from '../directory-client.ts';
 import { type BuildCircuitFn } from '../hidden-service.ts';
 import { TorClient, type CircuitResult } from '../client.ts';
 import { fetchViaTorCircuit } from '../http-fetch.ts';
-import { ConsensusManager, type ConsensusRefreshOptions } from '../consensus-manager.ts';
+import { ConsensusManager } from '../consensus-manager.ts';
 import { MicrodescManager, InMemoryMicrodescStorage } from '../microdesc-manager.ts';
 
 function mustFindMicroDescNodeInfo(
@@ -225,26 +225,14 @@ export async function getRandomChutneyCircuitPathToTarget(
 // =============================================================================
 // Safe versions using DirectoryClient over circuits
 // =============================================================================
-
-/**
- * Get Chutney consensus safely over an existing circuit's directory stream.
- *
- * This is the safe alternative to getChutneyMicrodescConsensus().
- */
-export async function getChutneyMicrodescConsensusSafe(
-  directoryCircuit: Circuit
-): Promise<VerifiedMicroDescConsensus> {
-  const client = new DirectoryClient(directoryCircuit);
-  const microDescContent = await client.downloadMicrodescConsensus();
-  const unverified = parseMicroDescConsensus(microDescContent);
-
-  // SKIP VERIFICATION: Chutney is a test network with local directory authorities
-  // that don't match the hardcoded mainnet authorities.
-  return dangerouslyTrustUnverifiedConsensus(
-    unverified,
-    'Chutney test network (local authorities, no mainnet keys)'
-  );
-}
+//
+// These mirror the mainnet client path: parse the consensus that came back
+// over a Tor circuit, then look up each picked relay's PeerInfo through the
+// same DirectoryClient. The single chutney-specific bit is calling
+// `dangerouslyTrustUnverifiedConsensus` instead of mainnet's signed
+// verification — chutney's directory authorities aren't on the hardcoded
+// mainnet keylist, so signatures cannot be checked. Everything else is
+// shared with the path the tamanegi browser runs (browser/src/client.ts).
 
 /**
  * Build a random circuit path safely using an existing circuit for directory lookups.
@@ -342,25 +330,6 @@ export async function getRandomChutneyCircuitPathToTargetSafe(
   return circuitPeerInfos;
 }
 
-/**
- * Connect a random Chutney circuit safely using an existing circuit for directory lookups.
- */
-export async function connectRandomChutneyCircuitSafe(directoryCircuit: Circuit): Promise<Circuit> {
-  const circuitPeerInfos = await getRandomChutneyCircuitPathSafe(directoryCircuit);
-  const gatewayPeerInfo = circuitPeerInfos[0];
-  if (!gatewayPeerInfo) {
-    throw new Error('Failed to build circuit path (no gateway peer)');
-  }
-  const channel = new TlsChannelConnection();
-  await channel.connectPeerInfo(gatewayPeerInfo);
-  const circuit = new Circuit({
-    path: circuitPeerInfos,
-    channel,
-  });
-  await circuit.connect();
-  return circuit;
-}
-
 // ============================================================================
 // Chutney Tor Client
 // ============================================================================
@@ -374,32 +343,6 @@ export type ChutneyTorClientOptions = {
  * Chutney Tor client - TorClient configured for Chutney test network.
  */
 export type ChutneyTorClient = TorClient<TlsChannelConnection>;
-
-/**
- * Consensus manager for Chutney test networks.
- *
- * Chutney uses local directory authorities that don't match mainnet keys,
- * so signature verification is skipped.
- */
-class ChutneyConsensusManager extends ConsensusManager {
-  protected override async fetchConsensus(
-    options: ConsensusRefreshOptions
-  ): Promise<{ consensus: VerifiedMicroDescConsensus; rawContent: string }> {
-    const client = new DirectoryClient(this.circuit);
-    const rawContent = await client.downloadMicrodescConsensus(options.onProgress);
-
-    const unverified = parseMicroDescConsensus(rawContent);
-
-    // SKIP VERIFICATION: Chutney is a test network with local directory authorities
-    // that don't match the hardcoded mainnet authorities.
-    const consensus = dangerouslyTrustUnverifiedConsensus(
-      unverified,
-      'Chutney test network (local authorities, no mainnet keys)'
-    );
-
-    return { consensus, rawContent };
-  }
-}
 
 /**
  * Create a Tor client for the Chutney test network.
@@ -494,9 +437,14 @@ export async function makeChutneyTorClient(
     };
   };
 
-  // Create Chutney-specific consensus manager (skips signature verification)
-  const consensusManager = new ChutneyConsensusManager(bootstrapCircuit, {
+  // Reuse the standard ConsensusManager (same code path the tamanegi browser
+  // runs); signature verification is opted out via defaultRefreshOptions
+  // because chutney's authorities aren't on the hardcoded mainnet keylist.
+  const consensusManager = new ConsensusManager(bootstrapCircuit, {
     initialVerifiedConsensus: consensus,
+    defaultRefreshOptions: {
+      dangerouslySkipSignatureVerification: true,
+    },
   });
 
   log('Client initialized');
