@@ -1163,7 +1163,48 @@ export class Circuit extends EventEmitter {
   addVirtualHop(cipherPair: CircuitCipherPair) {
     this.hops.push(new VirtualHop(cipherPair as CipherPair));
   }
+
+  /**
+   * Attach a passive observer to this circuit's `'relay'` event for the
+   * lifetime of a single critical wait. Call `detach()` when you no longer
+   * care; call `snapshot()` to read what arrived. Useful for diagnosing
+   * timeouts where you need to know whether *anything* came in vs whether
+   * a specific cell came in but you were not the one who consumed it.
+   *
+   * The observer never resolves anything itself — it's strictly read-only.
+   */
+  observeRelayTraffic(): RelayTrafficObserver {
+    const counts = new Map<number, number>();
+    let total = 0;
+    const onRelay = (evt: { streamId: number; relayCommand: number; data: Buffer }): void => {
+      total += 1;
+      counts.set(evt.relayCommand, (counts.get(evt.relayCommand) ?? 0) + 1);
+    };
+    this.on('relay', onRelay);
+    return {
+      snapshot: () => ({
+        totalCells: total,
+        commandSummary: [...counts.entries()]
+          .sort(([, a], [, b]) => b - a)
+          .map(([cmd, n]) => `cmd=${cmd}×${n}`)
+          .join(' '),
+      }),
+      detach: () => {
+        this.off('relay', onRelay);
+      },
+    };
+  }
 }
+
+/**
+ * Read-only handle returned by {@link Circuit.observeRelayTraffic}. Holds
+ * cumulative counts of `'relay'` events received since attach; `snapshot()`
+ * returns the totals so far, and `detach()` removes the listener.
+ */
+export type RelayTrafficObserver = {
+  snapshot: () => { totalCells: number; commandSummary: string };
+  detach: () => void;
+};
 
 function createRandomCircuitId(protocolVersion: number, isInitiator: boolean): Buffer {
   if (protocolVersion === undefined) {
