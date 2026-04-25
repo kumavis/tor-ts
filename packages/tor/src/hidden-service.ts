@@ -938,6 +938,65 @@ export function deriveSubcredential(params: {
 }
 
 /**
+ * Pick a rendezvous point from the consensus, applying the canonical tor
+ * filters for RP selection. Exposed so a test can verify the filter without
+ * running the full HS flow.
+ *
+ * Filters (canonical tor, hs_client.c `pick_rendezvous_node`):
+ *   1. Must advertise HSRend protocol version 2 (v3 onion service rendezvous).
+ *   2. Must NOT be an authority (those are heavily loaded and not for relay).
+ *   3. Must NOT be an Exit (canonical tor avoids Exits for RP so non-exit
+ *      load stays balanced).
+ *
+ * If no relay matches all three filters we degrade gracefully: first drop
+ * the Exit filter, then drop the Authority filter too. This keeps the
+ * client functional on pathologically small or malformed consensuses while
+ * still preferring the canonical choice when the consensus has it.
+ *
+ * Returns the chosen node plus the count of fully-qualified candidates — the
+ * caller logs that count so we can tell at a glance whether we had to fall
+ * back.
+ */
+export function pickRendezvousPoint(consensus: VerifiedMicroDescConsensus): {
+  node: MicroDescNodeInfo;
+  qualifiedCount: number;
+} {
+  const supportsHsRend2 = (r: MicroDescNodeInfo): boolean => {
+    const versions = r.protocols?.HSRend;
+    if (!versions) return true; // accept relays without explicit version info
+    return supportsProtocolVersion(versions, 2);
+  };
+  const qualified = consensus.relays.filter((r) => {
+    if (!supportsHsRend2(r)) return false;
+    const flags = r.flags ?? [];
+    if (flags.includes('Authority')) return false;
+    if (flags.includes('Exit')) return false;
+    return true;
+  });
+  if (qualified.length > 0) {
+    return {
+      node: pickRelayWithFlags(qualified, [], []),
+      qualifiedCount: qualified.length,
+    };
+  }
+  // Degrade step 1: allow Exits.
+  const nonAuth = consensus.relays.filter(
+    (r) => !(r.flags ?? []).includes('Authority') && supportsHsRend2(r)
+  );
+  if (nonAuth.length > 0) {
+    return {
+      node: pickRelayWithFlags(nonAuth, [], []),
+      qualifiedCount: 0,
+    };
+  }
+  // Degrade step 2: any relay.
+  return {
+    node: pickRelayWithFlags(consensus.relays, [], []),
+    qualifiedCount: 0,
+  };
+}
+
+/**
  * Compact one-line dump of a LinkSpecifier list for diagnostics. Includes the
  * type byte and the raw data hex (or IPv4+port for type-0 specs); useful when
  * cross-checking the rendezvous point we tell the HS to extend to against the
@@ -2166,15 +2225,12 @@ export async function connectToHiddenServiceCore(
   // Start rendezvous setup in parallel with descriptor fetch
   // This saves time since rendezvous doesn't depend on the descriptor
   log('Selecting rendezvous point...');
-  const rendCandidates = consensus.relays.filter((r) => {
-    const versions = r.protocols?.HSRend;
-    if (!versions) return true;
-    return supportsProtocolVersion(versions, 2);
-  });
-  const rendNodeInfo = pickRelayWithFlags(
-    rendCandidates.length ? rendCandidates : consensus.relays,
-    [],
-    []
+  const { node: rendNodeInfo, qualifiedCount } = pickRendezvousPoint(consensus);
+  log(
+    `Rendezvous point picked: ${rendNodeInfo.nickname} (rsaId=${rendNodeInfo.rsaIdDigest
+      .toString('hex')
+      .slice(0, 16)}…, flags=${(rendNodeInfo.flags ?? []).join(',') || 'none'}) ` +
+      `from ${qualifiedCount} qualified candidate(s) / ${consensus.relays.length} total`
   );
 
   // Start building rendezvous circuit in parallel
