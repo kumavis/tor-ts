@@ -19,6 +19,11 @@ import test from 'ava';
 import { deferred } from './util.ts';
 
 // Hook unhandledRejection during the test and assert nothing fired.
+//
+// IMPORTANT: any test that calls this MUST run via `test.serial(...)`. The
+// `process.on('unhandledRejection', ...)` listener is process-global, so two
+// concurrent captures would observe each other's unhandled rejections (and
+// any unrelated rejection from another concurrent test in the same worker).
 async function captureUnhandled<T>(
   fn: () => Promise<T>
 ): Promise<{ result: T; unhandled: unknown[] }> {
@@ -39,14 +44,17 @@ async function captureUnhandled<T>(
   }
 }
 
-test('deferred(): reject() without an awaiter does not surface as unhandledRejection', async (t) => {
-  const { unhandled } = await captureUnhandled(async () => {
-    const d = deferred<void>();
-    d.reject(new Error('nobody is listening'));
-    return undefined;
-  });
-  t.deepEqual(unhandled, [], 'no unhandled rejection leaked');
-});
+test.serial(
+  'deferred(): reject() without an awaiter does not surface as unhandledRejection',
+  async (t) => {
+    const { unhandled } = await captureUnhandled(async () => {
+      const d = deferred<void>();
+      d.reject(new Error('nobody is listening'));
+      return undefined;
+    });
+    t.deepEqual(unhandled, [], 'no unhandled rejection leaked');
+  }
+);
 
 test('deferred(): awaiters still observe rejection', async (t) => {
   const d = deferred<number>();
