@@ -94,10 +94,19 @@ async function main() {
   }
 }
 
-main().catch((err) => {
-  console.error(err);
-  // Force-exit: WebSocket downlink, KCP auto-flush timer, and smux keepalive
-  // all hold the event loop open; process.exitCode alone would stretch a
-  // fast failure into the outer `timeout` ceiling.
-  process.exit(1);
-});
+main().then(
+  () => {
+    // Same timer issue applies to the success path: WebSocket downlink, KCP
+    // auto-flush, and smux keepalive all keep the event loop alive after
+    // assertions complete, so a green run otherwise idles until the outer
+    // `timeout 3m` SIGKILLs us.
+    process.exit(0);
+  },
+  (err) => {
+    console.error(err);
+    // Force-exit: WebSocket downlink, KCP auto-flush timer, and smux keepalive
+    // all hold the event loop open; process.exitCode alone would stretch a
+    // fast failure into the outer `timeout` ceiling.
+    process.exit(1);
+  }
+);
