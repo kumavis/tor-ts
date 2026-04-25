@@ -2094,36 +2094,6 @@ export async function buildIntroduce1Payload(
  * @param timeoutMs - Timeout in milliseconds
  * @returns The relay event data
  */
-/**
- * Attach a passive observer to a circuit's 'relay' event for the lifetime of
- * a single critical wait, returning a snapshot of which relay commands were
- * seen. Useful for diagnosing rendezvous timeouts: we need to know whether
- * RENDEZVOUS1 actually arrived from the HS but parsing failed, vs nothing
- * arrived at all.
- */
-function observeRelayTraffic(circuit: Circuit): {
-  snapshot: () => { totalCells: number; commandSummary: string };
-  detach: () => void;
-} {
-  const counts = new Map<number, number>();
-  let total = 0;
-  const onRelay = (evt: { streamId: number; relayCommand: number; data: Buffer }): void => {
-    total += 1;
-    counts.set(evt.relayCommand, (counts.get(evt.relayCommand) ?? 0) + 1);
-  };
-  circuit.on('relay', onRelay);
-  return {
-    snapshot: () => ({
-      totalCells: total,
-      commandSummary: [...counts.entries()]
-        .sort(([, a], [, b]) => b - a)
-        .map(([cmd, n]) => `cmd=${cmd}×${n}`)
-        .join(' '),
-    }),
-    detach: () => circuit.off('relay', onRelay),
-  };
-}
-
 export async function waitForRelayCommand(
   circuit: Circuit,
   relayCommand: number,
@@ -2417,7 +2387,7 @@ export async function connectToHiddenServiceCore(
   //
   // The observer helper also runs from here so "0 cells received" in the
   // error path means the cell truly never arrived, not that we missed it.
-  const rendezvousObserver = observeRelayTraffic(rendCircuit);
+  const rendezvousObserver = rendCircuit.observeRelayTraffic();
   const rendezvous2Promise = waitForRelayCommand(
     rendCircuit,
     RelayCell.RENDEZVOUS2,
