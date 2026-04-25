@@ -41,7 +41,9 @@ const authKeysText = hasFixtures ? fs.readFileSync(authKeysPath, 'utf-8') : '';
 const FIXTURE_NOW = hasFixtures
   ? (() => {
       const m = consensusText.match(/^valid-after (\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})/m);
-      return m ? new Date(m[1] + ' UTC').getTime() : Date.now();
+      // Construct an explicit ISO-8601 string instead of relying on
+      // implementation-dependent parsing of "YYYY-MM-DD HH:MM:SS UTC".
+      return m ? new Date(m[1].replace(' ', 'T') + 'Z').getTime() : Date.now();
     })()
   : Date.now();
 
