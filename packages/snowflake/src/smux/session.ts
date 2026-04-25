@@ -292,9 +292,14 @@ export class SmuxStream {
 
   _onFin(): void {
     this.fin = true;
+    // Mark the stream locally closed too — once the peer has sent FIN it has
+    // forgotten our sid, so any further PSH we send is silently dropped.
+    // Without setting closedErr, write()'s only guard would let new writes
+    // through (silent data loss). Use ??= to preserve any prior close error.
+    this.closedErr ??= new Error('EOF');
     this.rx.close();
     // No more writes will be accepted on peer's end; unblock any pending writers.
-    this.rejectWriteWaiters(new Error('EOF'));
+    this.rejectWriteWaiters(this.closedErr);
     this.sess._removeStream(this.sid);
   }
 
