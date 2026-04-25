@@ -21,10 +21,51 @@ async function withTimeout<T>(label: string, ms: number, promise: Promise<T>): P
   }
 }
 
-function logStep(label: string): void {
+function logRaw(label: string): void {
   // Force flush so the partial log survives a SIGTERM from the outer timeout.
   process.stdout.write(`[chutney-ci] ${new Date().toISOString()} ${label}\n`);
 }
+
+let currentStep = '<startup>';
+let stepStartedAt = Date.now();
+function setStep(label: string): void {
+  currentStep = label;
+  stepStartedAt = Date.now();
+  logRaw(label);
+}
+
+// Survive a SIGTERM from the outer `timeout` by writing the last known step
+// to stdout before the process is forcibly killed. Without this, a hang shows
+// up in CI as a bare 'exit code 124' with no breadcrumb.
+for (const sig of ['SIGTERM', 'SIGINT'] as const) {
+  process.on(sig, () => {
+    const elapsed = Date.now() - stepStartedAt;
+    process.stdout.write(
+      `[chutney-ci] FATAL ${new Date().toISOString()} caught ${sig} during step "${currentStep}" (${elapsed}ms in)\n`
+    );
+    process.stdout.write('[chutney-ci] active handles: ');
+    try {
+      const handles = (
+        process as unknown as { _getActiveHandles: () => Array<{ constructor: { name: string } }> }
+      )._getActiveHandles();
+      process.stdout.write(handles.map((h) => h.constructor?.name ?? 'unknown').join(', ') + '\n');
+    } catch {
+      process.stdout.write('(unavailable)\n');
+    }
+    process.exit(124);
+  });
+}
+
+// Also emit a heartbeat every 5s so a hang surfaces as visible "still in step X"
+// lines even when the final flush is lost.
+const heartbeat = setInterval(() => {
+  if (currentStep === '<done>') return;
+  const elapsed = Date.now() - stepStartedAt;
+  process.stdout.write(
+    `[chutney-ci] heartbeat: still in "${currentStep}" (${elapsed}ms elapsed)\n`
+  );
+}, 5_000);
+heartbeat.unref();
 
 async function main() {
   const expectedBody = 'hello-from-tor-ts-chutney-ci';
@@ -47,7 +88,7 @@ async function main() {
   let bootstrapCircuit: Circuit | undefined;
   let circuit: Circuit | undefined;
   try {
-    logStep('starting local http server');
+    setStep('starting local http server');
     await withTimeout(
       'start local http server',
       10_000,
@@ -57,22 +98,22 @@ async function main() {
       })()
     );
 
-    logStep('bootstrap: TLS + 1-hop CREATE_FAST to a chutney relay');
+    setStep('bootstrap: TLS + 1-hop CREATE_FAST to a chutney relay');
     bootstrapCircuit = await withTimeout(
       'chutney bootstrap',
       perStepTimeoutMs,
       bootstrapWithChutneyDirectory()
     );
 
-    logStep('fetch consensus over bootstrap circuit');
+    setStep('fetch consensus over bootstrap circuit');
     const consensus = await withTimeout(
       'fetch chutney consensus',
       perStepTimeoutMs,
       fetchChutneyConsensusOverCircuit(bootstrapCircuit)
     );
-    logStep(`consensus has ${consensus.relays.length} relays`);
+    setStep(`consensus has ${consensus.relays.length} relays`);
 
-    logStep('look up 3-hop path peer info');
+    setStep('look up 3-hop path peer info');
     const path = await withTimeout(
       'lookup chutney 3-hop peer info',
       perStepTimeoutMs,
@@ -89,11 +130,11 @@ async function main() {
       }))
     );
 
-    logStep('connect TLS to first hop');
+    setStep('connect TLS to first hop');
     const channel = new TlsChannelConnection();
     await withTimeout('TLS to first hop', perStepTimeoutMs, channel.connectPeerInfo(path[0]!));
 
-    logStep('build 3-hop circuit');
+    setStep('build 3-hop circuit');
     circuit = new Circuit({ path, channel });
     await withTimeout('build 3-hop circuit', perStepTimeoutMs, circuit.connect());
 
@@ -101,7 +142,7 @@ async function main() {
     bootstrapCircuit.destroy();
     bootstrapCircuit = undefined;
 
-    logStep('open stream to local http server');
+    setStep('open stream to local http server');
     const stream = await withTimeout(
       'open stream',
       perStepTimeoutMs,
@@ -126,14 +167,14 @@ async function main() {
     const requestText =
       `GET / HTTP/1.1\r\n` + `Host: 127.0.0.1:${port}\r\n` + `Connection: close\r\n` + `\r\n`;
 
-    logStep('write HTTP request');
+    setStep('write HTTP request');
     await withTimeout(
       'write request',
       perStepTimeoutMs,
       stream.write(Buffer.from(requestText, 'ascii'))
     );
 
-    logStep('await response');
+    setStep('await response');
     await withTimeout('read response', overallTimeoutMs, streamEndedP);
 
     const responseText = Buffer.concat(responseChunks).toString('utf8');
@@ -143,7 +184,7 @@ async function main() {
     if (!responseText.includes(expectedBody)) {
       throw new Error(`Expected body "${expectedBody}" in response, got:\n${responseText}`);
     }
-    logStep('test passed');
+    setStep('test passed');
   } finally {
     try {
       bootstrapCircuit?.destroy();
