@@ -23,10 +23,8 @@ import { LinkSpecifierTypes } from 'tor/messaging';
 
 import { DirectoryClient, lookupPeerInfo } from 'tor/directory-client';
 import { pickRelayWithFlags } from 'tor/build-circuit/util';
-import {
-  fetchChutneyConsensusOverCircuit,
-  type MicroDescNodeInfo,
-} from 'tor/build-circuit/chutney';
+import { fetchChutneyConsensusOverCircuit } from 'tor/build-circuit/chutney';
+import type { MicroDescNodeInfo } from 'tor/build-circuit/directory';
 
 import { SnowflakeTlsChannelConnection } from './tor-channel.ts';
 
