@@ -1,5 +1,15 @@
 import test from 'ava';
-import { x25519, ed25519, randomBytes, ed25519VerifySync } from 'tor-crypto';
+import {
+  x25519,
+  ed25519,
+  randomBytes,
+  ed25519VerifySync,
+  sha3,
+  mac,
+  dMac,
+  kdfShake256,
+  base32EncodeLowerNoPad,
+} from 'tor-crypto';
 import * as ed from '@noble/ed25519';
 
 import {
@@ -20,7 +30,6 @@ import {
   createEd25519Certificate,
   type IntroductionPoint,
 } from './hidden-service-host.ts';
-import { sha3, mac, dMac, kdfShake256, base32EncodeLowerNoPad } from 'tor-crypto';
 import {
   parseOnionV3Address,
   deriveBlindedPublicKey,
@@ -471,7 +480,7 @@ test('publishHiddenService rejects out-of-range ports', async (t) => {
   // We don't need a real TorClient — the port check fires first.
   await t.throwsAsync(
     publishHiddenService({
-      // @ts-expect-error — passing a stub torClient on purpose
+      // @ts-expect-error: stub TorClient — port validation runs before any torClient method is touched
       torClient: {},
       port: 0,
       onConnection: () => {},
@@ -480,7 +489,7 @@ test('publishHiddenService rejects out-of-range ports', async (t) => {
   );
   await t.throwsAsync(
     publishHiddenService({
-      // @ts-expect-error
+      // @ts-expect-error: stub TorClient — port validation runs before any torClient method is touched
       torClient: {},
       port: 70000,
       onConnection: () => {},
@@ -492,10 +501,10 @@ test('publishHiddenService rejects out-of-range ports', async (t) => {
 test('publishHiddenService rejects non-function onConnection', async (t) => {
   await t.throwsAsync(
     publishHiddenService({
-      // @ts-expect-error
+      // @ts-expect-error: stub TorClient — onConnection check runs before any torClient method is touched
       torClient: {},
       port: 80,
-      // @ts-expect-error
+      // @ts-expect-error: deliberately wrong type to exercise the runtime onConnection guard
       onConnection: 'not a function',
     }),
     { message: /onConnection/ }
