@@ -1119,6 +1119,14 @@ export class Circuit extends EventEmitter {
     }
     const stream = this.createStream(query);
     const { streamId } = stream;
+    // RESOLVE streams never receive a RELAY_CONNECTED — the exit replies
+    // with RELAY_RESOLVED and then immediately RELAY_END. The default
+    // `stream.write` from `createStream` awaits `connectionLatch.wait()`,
+    // so any caller that mistakenly tried to write on a resolve stream
+    // would hang forever. Make that case fail loudly instead.
+    stream.write = async () => {
+      throw new Error(`Cannot write to RESOLVE stream ${streamId}`);
+    };
     return new Promise<RelayResolvedRecord[]>((resolve, reject) => {
       const cleanup = () => {
         stream.off('resolved', onResolved);

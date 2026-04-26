@@ -311,6 +311,13 @@ export function socksRequestFrameLength(data: Buffer): number | undefined {
  * the client cares about them (e.g. for BIND); for CONNECT the spec lets
  * us answer with the all-zeros IPv4 address, which is what we do unless
  * the caller passes a real bound address.
+ *
+ * Always emits a 10-byte reply with `ATYP = IPv4`, regardless of input.
+ * If `boundAddress` doesn't parse as a dotted-quad IPv4, the bound-address
+ * fields silently fall back to `0.0.0.0` (the port byte is preserved).
+ * Callers that need IPv6 / DOMAIN bound-addresses should use
+ * {@link buildSocksTypedReply} instead — that helper validates strictly
+ * and throws on malformed input.
  */
 export function buildSocksReply(
   reply: SocksReply,
@@ -732,7 +739,12 @@ export class SocksProxyServer extends EventEmitter {
           const ctx: SocksConnectionContext = auth ? { request, auth } : { request };
 
           if (request.command === SocksCommand.CONNECT) {
-            this.handleConnect(socket, request, auth, ctx, closeAll, {
+            // Set the phase before kicking off the async open: the .then
+            // handler runs in a microtask, but a future refactor that
+            // happened to do work synchronously could see a stale phase
+            // if we assigned it after the call.
+            phase = ConnectionPhase.Connecting;
+            this.handleConnect(socket, ctx, closeAll, {
               setRelayingPhase: (cs) => {
                 circuitStream = cs;
                 phase = ConnectionPhase.Relaying;
@@ -752,7 +764,6 @@ export class SocksProxyServer extends EventEmitter {
                 );
               },
             });
-            phase = ConnectionPhase.Connecting;
             return;
           }
 
@@ -760,13 +771,13 @@ export class SocksProxyServer extends EventEmitter {
             request.command === SocksCommand.RESOLVE ||
             request.command === SocksCommand.RESOLVE_PTR
           ) {
-            this.handleResolve(socket, request, ctx, closeAll, {
+            phase = ConnectionPhase.Connecting;
+            this.handleResolve(socket, ctx, {
               isClosed: () => phase === ConnectionPhase.Closed,
               markClosed: () => {
                 phase = ConnectionPhase.Closed;
               },
             });
-            phase = ConnectionPhase.Connecting;
             return;
           }
 
@@ -775,8 +786,12 @@ export class SocksProxyServer extends EventEmitter {
         }
       } catch (err) {
         this.emit('connectionError', err as Error);
+        // `replyFatal` already half-closes via `socket.end()`; calling
+        // `closeAll()` here would race the FIN with `socket.destroy()`
+        // and the failure reply could be lost on the wire. The
+        // socket's `'close'` listener will trigger `closeAll()` after
+        // the FIN flushes.
         replyFatal(SocksReply.GENERAL_FAILURE);
-        closeAll();
       }
     });
   }
@@ -810,8 +825,6 @@ export class SocksProxyServer extends EventEmitter {
 
   private handleConnect(
     socket: net.Socket,
-    request: SocksRequest,
-    auth: SocksAuth | undefined,
     ctx: SocksConnectionContext,
     closeAll: (err?: Error) => void,
     hooks: {
@@ -820,6 +833,7 @@ export class SocksProxyServer extends EventEmitter {
       flushPipelined: (stream: CircuitStream) => void;
     }
   ): void {
+    const { request, auth } = ctx;
     const destination = formatTorDestination(request.destinationAddress, request.destinationPort);
     this.emit('connect', { destination, request, auth, socket });
 
@@ -843,34 +857,36 @@ export class SocksProxyServer extends EventEmitter {
       })
       .catch((err: Error) => {
         this.emit('connectionError', err);
+        // Write the error reply with `socket.end()` and let the OS-level
+        // FIN flush the bytes to the client. Calling `closeAll()` here
+        // would race the FIN with `socket.destroy()` and lose the reply
+        // bytes; the natural `'close'` event still triggers cleanup.
         if (!socket.destroyed) {
           socket.write(buildSocksReply(socksReplyForOpenError(err)));
           socket.end();
         }
-        closeAll();
       });
   }
 
   private handleResolve(
     socket: net.Socket,
-    request: SocksRequest,
     ctx: SocksConnectionContext,
-    closeAll: (err?: Error) => void,
     hooks: {
       isClosed: () => boolean;
       markClosed: () => void;
     }
   ): void {
+    const { request } = ctx;
     let query: string;
     try {
       query = buildResolveQuery(request);
     } catch (err) {
       this.emit('connectionError', err as Error);
+      // Same FIN-vs-RST consideration as in `handleConnect`'s catch path.
       if (!socket.destroyed) {
         socket.write(buildSocksReply(SocksReply.ADDRESS_TYPE_NOT_SUPPORTED));
         socket.end();
       }
-      closeAll();
       return;
     }
     this.emit('resolve', { request, query, socket });
@@ -882,8 +898,10 @@ export class SocksProxyServer extends EventEmitter {
         socket.write(reply);
         socket.end();
         // RESOLVE / RESOLVE_PTR are one-shot: after the reply we're done.
+        // The natural `'close'` event removes the socket from
+        // `this.connections` via `closeAll`; mark phase Closed so that
+        // path becomes a no-op once it fires.
         hooks.markClosed();
-        this.connections.delete(socket);
       })
       .catch((err: Error) => {
         this.emit('connectionError', err);
@@ -891,7 +909,6 @@ export class SocksProxyServer extends EventEmitter {
           socket.write(buildSocksReply(socksReplyForOpenError(err)));
           socket.end();
         }
-        closeAll();
       });
   }
 
