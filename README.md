@@ -25,7 +25,7 @@ Implemented:
 - [x] Signed-consensus verification (against the hardcoded mainnet authorities; injectable trust anchor for chutney/test nets)
 - [x] Bandwidth-weighted relay selection with exit-policy filtering
 - [x] CI integration tests against the live Tor network and a local [chutney](https://gitlab.torproject.org/tpo/core/chutney) test net
-- [x] SOCKS5 proxy server (`SocksProxyServer`) that fronts arbitrary clients with a Tor circuit; supports CONNECT to IPv4/IPv6/domain targets
+- [x] SOCKS5 proxy server (`SocksProxyServer`) that fronts arbitrary clients with a Tor circuit; supports CONNECT, RESOLVE, and RESOLVE_PTR (proposal-100) to IPv4/IPv6/domain targets, with USERNAME_PASSWORD as a stream-isolation key
 
 Not implemented:
 

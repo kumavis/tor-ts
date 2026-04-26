@@ -82,8 +82,11 @@ import {
   RelayEndError,
   RelayEndReasons,
   RelayEndReasonNames,
+  buildRelayResolvePayload,
+  parseRelayResolvedPayload,
   serializeExtend2,
   getRelayCellName,
+  type RelayResolvedRecord,
 } from './relay-cell.ts';
 import { BytesReader, PromiseLatch } from './util.ts';
 import EventEmitter from 'node:events';
@@ -830,6 +833,15 @@ export class Circuit extends EventEmitter {
         // the circuit's 'relay' event.
         return;
       }
+      case RelayCell.RESOLVED: {
+        if (!stream) {
+          throw new Error(`Got RESOLVED for unknown streamId=${streamId}`);
+        }
+        // Defer parsing to the caller's listener so we don't wrap parse
+        // errors here — the resolve() helper installs that listener.
+        stream.emit('resolved', data);
+        return;
+      }
       case RelayCell.DATA: {
         if (!stream) {
           throw new Error(`Got DATA for unknown streamId=${streamId}`);
@@ -1083,6 +1095,71 @@ export class Circuit extends EventEmitter {
     const stream = this.createStream('(dir)');
     await this.performDirectoryStreamHandshake(stream);
     return stream;
+  }
+
+  /**
+   * Issue an anonymous DNS lookup over this circuit (tor-spec 6.4 /
+   * proposal 100). The exit performs the actual DNS query and returns a
+   * RELAY_RESOLVED list of records — typically one or more A/AAAA records
+   * for forward queries, or PTR hostnames for reverse queries.
+   *
+   * The query format is what RELAY_RESOLVE expects: a bare hostname for
+   * forward lookups (e.g. `example.com`), or the canonical `in-addr.arpa`
+   * / `ip6.arpa` form for reverse PTR lookups. Helpers
+   * {@link ipv4ToInAddrArpa} and {@link ipv6ToIp6Arpa} build the latter.
+   *
+   * Resolves with the parsed record list. Rejects with the underlying
+   * {@link RelayEndError} if the exit returns RELAY_END (e.g. with
+   * REASON_RESOLVEFAILED), or with a generic Error if the stream is torn
+   * down before any RESOLVED arrives.
+   */
+  async resolve(query: string): Promise<RelayResolvedRecord[]> {
+    if (this.isDestroyed) {
+      throw new Error('Circuit is destroyed');
+    }
+    const stream = this.createStream(query);
+    const { streamId } = stream;
+    return new Promise<RelayResolvedRecord[]>((resolve, reject) => {
+      const cleanup = () => {
+        stream.off('resolved', onResolved);
+        stream.off('end', onEnd);
+        stream.off('error', onError);
+      };
+      const onResolved = (data: Buffer) => {
+        try {
+          const records = parseRelayResolvedPayload(data);
+          cleanup();
+          resolve(records);
+        } catch (err) {
+          cleanup();
+          reject(err as Error);
+        }
+      };
+      const onEnd = () => {
+        cleanup();
+        // If the exit closed the stream cleanly (REASON_DONE) without ever
+        // sending a RESOLVED cell, surface that as a typed failure rather
+        // than letting the caller hang.
+        reject(new Error(`stream ${streamId} ended before RELAY_RESOLVED arrived`));
+      };
+      const onError = (err: Error) => {
+        cleanup();
+        reject(err);
+      };
+      stream.on('resolved', onResolved);
+      stream.once('end', onEnd);
+      stream.once('error', onError);
+
+      this.sendRelayMessage({
+        streamId,
+        relayCommand: RelayCell.RESOLVE,
+        data: buildRelayResolvePayload(query),
+      }).catch((err: Error) => {
+        cleanup();
+        if (!stream.destroyed) stream.destroy(err);
+        reject(err);
+      });
+    });
   }
 
   openStream(destination: string): CircuitStream {

@@ -146,6 +146,19 @@ export {
   type StreamRetryBehavior,
 } from './relay-cell.ts';
 
+// Anonymous DNS over a circuit (RELAY_RESOLVE / RELAY_RESOLVED, prop100)
+export {
+  RelayResolvedType,
+  parseRelayResolvedPayload,
+  buildRelayResolvePayload,
+  ipv4ToInAddrArpa,
+  ipv6ToIp6Arpa,
+  ipv6StringToBytes,
+  formatResolvedIPv4,
+  formatResolvedIPv6,
+  type RelayResolvedRecord,
+} from './relay-cell.ts';
+
 // Directory request retry constants
 export { MAX_DIRECTORY_REQUEST_RETRIES } from './directory-client.ts';
 
@@ -194,6 +207,9 @@ export {
   buildSocksReply,
   parseSocksUserPass,
   buildSocksUserPassResponse,
+  buildSocksTypedReply,
+  buildResolveQuery,
+  buildResolveReply,
   socksGreetingFrameLength,
   socksRequestFrameLength,
   socksUserPassFrameLength,
