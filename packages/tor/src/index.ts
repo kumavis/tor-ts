@@ -138,6 +138,7 @@ export {
 
 // Stream retry logic
 export {
+  RelayEndError,
   RelayEndReasons,
   RelayEndReasonNames,
   getStreamRetryBehavior,
@@ -182,6 +183,7 @@ export {
   SocksProxyServer,
   createSocksProxy,
   SOCKS_VERSION,
+  SOCKS_USERPASS_VERSION,
   SocksAuthMethod,
   SocksCommand,
   SocksAddressType,
@@ -190,11 +192,18 @@ export {
   buildSocksGreetingResponse,
   parseSocksRequest,
   buildSocksReply,
+  parseSocksUserPass,
+  buildSocksUserPassResponse,
   socksGreetingFrameLength,
   socksRequestFrameLength,
+  socksUserPassFrameLength,
   socksReplyForOpenError,
+  socksReplyForRelayEndReason,
   formatTorDestination,
   type SocksGreeting,
   type SocksRequest,
+  type SocksAuth,
+  type SocksConnectionContext,
+  type SocksCircuitFactory,
   type SocksServerOptions,
 } from './socks.ts';
