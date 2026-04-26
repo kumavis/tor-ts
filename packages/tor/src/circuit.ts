@@ -84,7 +84,7 @@ import {
   serializeExtend2,
   getRelayCellName,
 } from './relay-cell.ts';
-import { BytesReader } from './util.ts';
+import { BytesReader, PromiseLatch } from './util.ts';
 import EventEmitter from 'node:events';
 import { ReadableStream, WritableStream } from 'stream/web';
 
@@ -161,20 +161,15 @@ export type PeerInfo = {
 class Hop {
   isConnected = false;
   peerInfo!: PeerInfo;
-  handshakePromiseKit = Promise.withResolvers<void>();
+  /**
+   * Settles when the EXTEND2/CREATE_FAST handshake for this hop completes
+   * (or fails). Uses {@link PromiseLatch} rather than a Promise so that a
+   * rejection arriving before any caller has called `.wait()` is harmless —
+   * the DESTROY-cell handler iterates every unconnected hop, but the loop
+   * in `Circuit.connect()` only awaits one hop at a time.
+   */
+  handshakeLatch = new PromiseLatch<void>();
   cipherPair!: CipherPair;
-
-  constructor() {
-    // Circuit.connect() awaits handshakePromiseKit one hop at a time; the
-    // DESTROY-cell handler in Circuit.receiveMessage rejects every unconnected
-    // hop's kit, including the ones whose EXTEND2 hasn't been issued yet.
-    // Those orphan rejections have no awaiter — attach an inert .then handler
-    // so they don't crash Node. The real EXTEND2 awaiter still observes the
-    // rejection through its own .then chain.
-    this.handshakePromiseKit.promise.catch(() => {
-      // intentional: see comment above
-    });
-  }
 
   ntorEphemeralKeyPrivate!: Buffer;
   ntorEphemeralKeyPublic!: Buffer;
@@ -285,7 +280,7 @@ class Hop {
     const keyMaterial = k.subarray(HASH_LEN);
     this.cipherPair = makeTor1CipherPairFromKeyMaterial(keyMaterial);
     this.isConnected = true;
-    this.handshakePromiseKit.resolve();
+    this.handshakeLatch.resolve();
   }
   async receiveCreated2Handshake(handshake: NtorServerHandshake) {
     const { serverNtorEphemeralKeyPublic, serverNtorAuth } = handshake;
@@ -301,7 +296,7 @@ class Hop {
     const keyMaterial = KDF_RFC5869(keySeed, 2 * HASH_LEN + 2 * KEY_LEN);
     this.cipherPair = makeTor1CipherPairFromKeyMaterial(keyMaterial);
     this.isConnected = true;
-    this.handshakePromiseKit.resolve();
+    this.handshakeLatch.resolve();
   }
   toString() {
     const firstLinkSpecifier = this.peerInfo.linkSpecifiers[0];
@@ -318,7 +313,7 @@ class VirtualHop extends Hop {
     super();
     this.cipherPair = cipherPair;
     this.isConnected = true;
-    this.handshakePromiseKit.resolve();
+    this.handshakeLatch.resolve();
   }
   toString() {
     return 'hop:virtual';
@@ -342,7 +337,15 @@ export class CircuitStream extends EventEmitter {
   streamId!: number;
   destination!: string;
   destroyed = false;
-  connectionPromiseKit = Promise.withResolvers<void>();
+  /**
+   * Settles when RELAY_CONNECTED arrives (resolved) or when the stream is
+   * destroyed before connecting (rejected). Uses {@link PromiseLatch} rather
+   * than a Promise so a DESTROY arriving in the brief window between
+   * `circuit.open()` returning and the caller's first `await` is harmless —
+   * if no one is waiting, `reject()` is a no-op rather than an unhandled
+   * rejection. Late waiters get a Promise already in the right state.
+   */
+  connectionLatch = new PromiseLatch<void>();
   source: ReadableStream;
   sink: WritableStream;
 
@@ -363,18 +366,11 @@ export class CircuitStream extends EventEmitter {
     const { source, sink } = createSourceAndSinkForCircuit(this);
     this.source = source;
     this.sink = sink;
-    // Prevent unhandled error events - errors are also reported via connectionPromiseKit
+    // Stream-level errors are also surfaced via connectionLatch (for the
+    // open() awaiter) and via 'end' (for readers); this listener exists so
+    // EventEmitter doesn't crash when nobody else handles 'error'.
     this.on('error', (err) => {
       console.warn(`[CircuitStream ${this.streamId}] error:`, err.message);
-    });
-    // The stream's owner awaits connectionPromiseKit.promise via circuit.open(),
-    // but a DESTROY cell can land between stream construction and that await
-    // (or after the caller has stopped caring). Attach an inert catch so an
-    // unawaited rejection doesn't crash Node; the real awaiter still observes
-    // the rejection through its own .then chain, and the 'error' event handler
-    // above logs it.
-    this.connectionPromiseKit.promise.catch(() => {
-      // intentional: see comment above
     });
   }
   write!: (data: Buffer) => Promise<void>;
@@ -503,7 +499,7 @@ export class CircuitStream extends EventEmitter {
     if (this.destroyed) return;
     this.destroyed = true;
     if (err) {
-      this.connectionPromiseKit.reject(err);
+      this.connectionLatch.reject(err);
       this.emit('error', err);
     }
     // Wake up any package window waiters with rejection
@@ -666,7 +662,7 @@ export class Circuit extends EventEmitter {
       );
     }
     // wait until handshake response has been received
-    await hop.handshakePromiseKit.promise;
+    await hop.handshakeLatch.wait();
   }
 
   async sendRelayMessage(relayCell: CellRelay, targetHop: Hop = this.lastHop) {
@@ -722,7 +718,7 @@ export class Circuit extends EventEmitter {
         // Reject any in-flight hop handshakes so circuit.connect() cannot hang.
         for (const hop of this.hops) {
           if (!hop.isConnected) {
-            hop.handshakePromiseKit.reject(err);
+            hop.handshakeLatch.reject(err);
           }
         }
         this.streams.forEach((stream) => {
@@ -787,7 +783,7 @@ export class Circuit extends EventEmitter {
         if (!stream) {
           throw new Error(`Got CONNECTED for unknown streamId=${streamId}`);
         }
-        stream.connectionPromiseKit.resolve();
+        stream.connectionLatch.resolve();
         return;
       }
       case RelayCell.RENDEZVOUS_ESTABLISHED:
@@ -1059,11 +1055,11 @@ export class Circuit extends EventEmitter {
     const stream = this.createStream(destination);
     // kick off handshake, but dont wait for it
     // Note: we intentionally don't await here. Errors are handled via:
-    // 1. The connectionPromiseKit.promise rejection (for callers who await it)
+    // 1. The connectionLatch.wait() rejection (for callers who await it)
     // 2. The 'error' event on the stream
     // We catch here to prevent unhandled promise rejection from performStreamHandshake.
     this.performStreamHandshake(stream).catch(() => {
-      // Errors are already emitted via stream 'error' event and connectionPromiseKit rejection
+      // Errors are already emitted via stream 'error' event and connectionLatch rejection
     });
     return stream;
   }
@@ -1080,7 +1076,7 @@ export class Circuit extends EventEmitter {
     stream.destination = destination;
     // TODO better to use event emitter so its self-contained?
     stream.write = async (data: Buffer) => {
-      await stream.connectionPromiseKit.promise;
+      await stream.connectionLatch.wait();
       await this.writeToStream(stream, data);
     };
     this.streams.push(stream);
@@ -1129,7 +1125,7 @@ export class Circuit extends EventEmitter {
       relayCommand: RelayCell.BEGIN,
       data,
     });
-    await stream.connectionPromiseKit.promise;
+    await stream.connectionLatch.wait();
   }
 
   async performDirectoryStreamHandshake(stream: CircuitStream): Promise<void> {
@@ -1140,7 +1136,7 @@ export class Circuit extends EventEmitter {
       relayCommand: RelayCell.BEGIN_DIR,
       data: Buffer.alloc(0),
     });
-    await stream.connectionPromiseKit.promise;
+    await stream.connectionLatch.wait();
   }
 
   /**

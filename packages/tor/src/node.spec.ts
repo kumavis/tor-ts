@@ -13,9 +13,6 @@ test('circuitStreamToNodeDuplex: forwards error event from CircuitStream', async
   const circuitStream = new CircuitStream();
   const duplex = circuitStreamToNodeDuplex(circuitStream);
 
-  // Catch the connectionPromiseKit rejection to prevent unhandled rejection
-  circuitStream.connectionPromiseKit.promise.catch(() => {});
-
   const errorPromise = new Promise<Error>((resolve) => {
     duplex.on('error', (err) => resolve(err));
   });
@@ -44,9 +41,6 @@ test('circuitStreamToNodeDuplex: destroys duplex when CircuitStream ends', async
 test('circuitStreamToNodeDuplex: propagates read errors from source', async (t) => {
   const circuitStream = new CircuitStream();
   const duplex = circuitStreamToNodeDuplex(circuitStream);
-
-  // Catch the connectionPromiseKit rejection to prevent unhandled rejection
-  circuitStream.connectionPromiseKit.promise.catch(() => {});
 
   const errorPromise = new Promise<Error>((resolve) => {
     duplex.on('error', (err) => resolve(err));
@@ -91,9 +85,6 @@ test('proxyCircuitStream: ends outStream when CircuitStream errors', async (t) =
       callback();
     },
   });
-
-  // Catch the connectionPromiseKit rejection to prevent unhandled rejection
-  circuitStream.connectionPromiseKit.promise.catch(() => {});
 
   proxyCircuitStream(circuitStream, inStream, outStream);
 
