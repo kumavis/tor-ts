@@ -40,7 +40,6 @@
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:dev": "pm2 start --no-daemon scripts/test-dev.config.cjs",
     "update:fallback-dirs": "node --experimental-transform-types scripts/update-fallback-dirs.ts",
-    "socks-proxy": "node --experimental-transform-types scripts/run-socks-proxy.ts",
     "test:live": "echo 'No live tests'"
   },
   "ava": {

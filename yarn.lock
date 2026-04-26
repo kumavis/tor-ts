@@ -7341,6 +7341,16 @@ __metadata:
   languageName: unknown
   linkType: soft
 
+"tor-example-socks-proxy@workspace:examples/socks-proxy":
+  version: 0.0.0-use.local
+  resolution: "tor-example-socks-proxy@workspace:examples/socks-proxy"
+  dependencies:
+    "@types/node": "npm:^22.0.0"
+    tor: "npm:0.1.0"
+    typescript: "npm:^5.9.3"
+  languageName: unknown
+  linkType: soft
+
 "tor-ts-workspace@workspace:.":
   version: 0.0.0-use.local
   resolution: "tor-ts-workspace@workspace:."

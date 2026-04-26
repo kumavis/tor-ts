@@ -1,21 +1,18 @@
 /**
- * Standalone runner for the SOCKS5 proxy over a live-network Tor circuit.
+ * Example: SOCKS5 proxy server over Tor (Node.js).
  *
- * Bootstraps a 3-hop circuit (with retry on transient failures), stands
- * up a SOCKS5 listener on `127.0.0.1:1080`, and bridges accepted SOCKS
- * clients onto the circuit. Stays up until SIGINT/SIGTERM.
+ * Bootstraps a 3-hop circuit on the live network, stands up a SOCKS5
+ * listener on `127.0.0.1:1080`, and bridges accepted SOCKS clients
+ * onto the circuit. Stays up until SIGINT/SIGTERM.
  *
- * Usage from the workspace root:
+ * Run with:
  *
- *   yarn workspace tor socks-proxy
+ *   yarn workspace tor-example-socks-proxy start
  *
- * Or from inside packages/tor:
- *
- *   yarn socks-proxy
- *
- * In another terminal, point a SOCKS5-aware client at it:
+ * Then in another terminal, point any SOCKS5 client at it:
  *
  *   curl --socks5-hostname localhost:1080 https://check.torproject.org
+ *   curl --socks5-hostname localhost:1080 http://example.com
  *
  * Stop with Ctrl-C.
  *
@@ -24,11 +21,8 @@
  *   TOR_TS_SOCKS_HOST  — host to bind (default 127.0.0.1).
  */
 
-import {
-  connectRandomCircuitWithSafeBootstrap,
-  retryTransient,
-} from '../src/build-circuit/mainnet.ts';
-import { SocksProxyServer } from '../src/socks.ts';
+import { connectRandomCircuitWithSafeBootstrap, retryTransient } from 'tor/build-circuit/mainnet';
+import { SocksProxyServer } from 'tor/socks';
 
 async function main() {
   const port = Number.parseInt(process.env.TOR_TS_SOCKS_PORT ?? '1080', 10);
