@@ -14,6 +14,10 @@ export * from './curves.ts';
 // Re-export AES stream ciphers (same implementation for Node.js and browser)
 export * from './aes.ts';
 
+// Re-export rend-spec-v3 hidden-service crypto helpers (same impl for both
+// platforms; consumed by the `tor` package's hidden-service client + host).
+export * from './hs-crypto.ts';
+
 // Import sha1 for use in computeRsaKeyFingerprint
 import { sha1 } from './hashes.ts';
 
