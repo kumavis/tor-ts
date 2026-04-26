@@ -745,6 +745,32 @@ test('SocksProxyServer: rejects non-CONNECT commands with COMMAND_NOT_SUPPORTED'
   }
 });
 
+test('SocksProxyServer: unknown ATYP → ADDRESS_TYPE_NOT_SUPPORTED (per RFC 1928)', async (t) => {
+  // socksRequestFrameLength returns 4 for unknown ATYP so we don't wait
+  // forever for bytes that will never come — but the spec-correct REP is
+  // 0x08 (ADDRESS_TYPE_NOT_SUPPORTED), not the generic 0x01 the parser
+  // would otherwise raise.
+  const fake = new FakeCircuit();
+  const { server, port } = await startServer(fake);
+  try {
+    const socket = net.connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    const reader = makeByteReader(socket);
+    socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.NO_AUTH]));
+    await reader.read(2, 'greeting');
+
+    // CONNECT with ATYP=0x05 (not a real address type).
+    socket.write(Buffer.from([SOCKS_VERSION, SocksCommand.CONNECT, 0x00, 0x05]));
+    const reply = await reader.read(10, 'reply');
+    t.is(reply[0], SOCKS_VERSION);
+    t.is(reply[1], SocksReply.ADDRESS_TYPE_NOT_SUPPORTED);
+    t.is(fake.openCalls, 0);
+    await once(socket, 'close');
+  } finally {
+    await server.stop();
+  }
+});
+
 test('SocksProxyServer: failed circuit.open replies HOST_UNREACHABLE', async (t) => {
   const fake = new FakeCircuit();
   fake.openMode = 'reject';
@@ -1528,6 +1554,55 @@ test('SocksProxyServer: RESOLVE with empty record list → HOST_UNREACHABLE', as
       Buffer.from('example.com', 'ascii')
     );
     t.is(reply[1], SocksReply.HOST_UNREACHABLE);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SocksProxyServer: RESOLVE leaves no socket behind in `connections` after close', async (t) => {
+  // Regression test for the markClosed leak: previously, the success path
+  // set `phase = Closed` *before* the socket's natural `'close'` listener
+  // ran `cleanupConnection()`. cleanupConnection early-returns on
+  // `phase === Closed`, so the socket was never removed from
+  // `this.connections` and the set grew without bound across resolves.
+  const fake = new FakeCircuit();
+  fake.resolveResult = [
+    { type: RelayResolvedType.IPv4, value: Buffer.from([1, 2, 3, 4]), ttl: 60 },
+  ];
+  const server = new SocksProxyServer({
+    circuit: fakeCircuitAsCircuit(fake),
+    port: 0,
+    host: '127.0.0.1',
+  });
+  await server.start();
+  try {
+    const addr = server.address();
+    if (!addr || typeof addr === 'string') throw new Error('not bound');
+    const connections = (server as unknown as { connections: Set<net.Socket> }).connections;
+
+    // Drive 5 sequential RESOLVE connections. For each one, capture the
+    // server-side socket via the underlying `net.Server`'s 'connection'
+    // event and wait for it to actually close before moving on — that
+    // guarantees the server-side `'close'` listener has run
+    // `cleanupConnection()` and removed the socket from the set.
+    const internalServer = (server as unknown as { server: net.Server }).server;
+    for (let i = 0; i < 5; i++) {
+      const serverSocketP = once(internalServer, 'connection') as Promise<[net.Socket]>;
+      const replyP = driveResolveClient(
+        addr.port,
+        SocksCommand.RESOLVE,
+        SocksAddressType.DOMAIN,
+        Buffer.from(`host${i}.example`, 'ascii')
+      );
+      const [serverSocket] = await serverSocketP;
+      const reply = await replyP;
+      t.is(reply[1], SocksReply.SUCCEEDED, `resolve ${i} succeeded`);
+      // Wait for the server-side socket's 'close' so cleanupConnection has run.
+      if (!serverSocket.destroyed) await once(serverSocket, 'close');
+      t.is(connections.size, 0, `connections leaked after resolve ${i}`);
+    }
+
+    t.is(fake.resolveCalls, 5);
   } finally {
     await server.stop();
   }
