@@ -1470,3 +1470,74 @@ test('SocksProxyServer: RESOLVE with empty record list → HOST_UNREACHABLE', as
     await server.stop();
   }
 });
+
+// =============================================================================
+// Regression: failure replies must reach the client via graceful FIN, not
+// be raced by `socket.destroy()`. Before the closeAll-after-end fix, the
+// server emitted the reply but then aborted the socket; clients saw a bare
+// 'close' without 'end' and could lose the reply bytes on real networks.
+// On the client side, 'end' fires iff our FIN arrives before any RST.
+// =============================================================================
+
+test('SocksProxyServer: failed CONNECT reply arrives + socket ends gracefully', async (t) => {
+  const fake = new FakeCircuit();
+  fake.openMode = 'reject';
+  fake.rejectError = Object.assign(new Error('refused'), { code: 'ECONNREFUSED' });
+  const { server, port } = await startServer(fake);
+  try {
+    const socket = net.connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    const reader = makeByteReader(socket);
+    const seenEnd = once(socket, 'end');
+
+    socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.NO_AUTH]));
+    await reader.read(2, 'greeting');
+    socket.write(
+      Buffer.from([SOCKS_VERSION, SocksCommand.CONNECT, 0x00, 0x01, 127, 0, 0, 1, 0x00, 0x50])
+    );
+    const reply = await reader.read(10, 'reply');
+    t.is(reply[1], SocksReply.CONNECTION_REFUSED);
+    // The server must have called socket.end() (not destroy()), so the
+    // client sees an FIN-driven 'end' before 'close'.
+    await seenEnd;
+    await once(socket, 'close');
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SocksProxyServer: failed RESOLVE reply arrives + socket ends gracefully', async (t) => {
+  const fake = new FakeCircuit();
+  fake.resolveMode = 'reject';
+  fake.resolveRejectError = new RelayEndError(RelayEndReasons.REASON_RESOLVEFAILED, '02');
+  const { server, port } = await startServer(fake);
+  try {
+    const socket = net.connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    const reader = makeByteReader(socket);
+    const seenEnd = once(socket, 'end');
+
+    socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.NO_AUTH]));
+    await reader.read(2, 'greeting');
+    const hostBytes = Buffer.from('nope.invalid', 'ascii');
+    socket.write(
+      Buffer.concat([
+        Buffer.from([
+          SOCKS_VERSION,
+          SocksCommand.RESOLVE,
+          0x00,
+          SocksAddressType.DOMAIN,
+          hostBytes.length,
+        ]),
+        hostBytes,
+        Buffer.from([0x00, 0x00]),
+      ])
+    );
+    const reply = await reader.read(10, 'reply');
+    t.is(reply[1], SocksReply.HOST_UNREACHABLE);
+    await seenEnd;
+    await once(socket, 'close');
+  } finally {
+    await server.stop();
+  }
+});
