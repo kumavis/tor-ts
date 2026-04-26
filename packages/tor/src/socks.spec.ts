@@ -1,0 +1,681 @@
+/**
+ * Unit tests for the SOCKS5 protocol pieces in socks.ts.
+ *
+ * Server-level wiring (Tor circuit + socket relay) is exercised by the
+ * Chutney integration test in scripts/chutney-socks-ci.ts; here we test
+ * the pure parser/serializer entry points and the SocksProxyServer with
+ * an in-memory fake circuit so the tests stay hermetic.
+ */
+
+import test from 'ava';
+import net from 'node:net';
+import { EventEmitter, once } from 'node:events';
+import { ReadableStream, WritableStream } from 'node:stream/web';
+
+import {
+  SOCKS_VERSION,
+  SocksAuthMethod,
+  SocksCommand,
+  SocksAddressType,
+  SocksReply,
+  SocksProxyServer,
+  buildSocksGreetingResponse,
+  buildSocksReply,
+  createSocksProxy,
+  formatTorDestination,
+  parseSocksGreeting,
+  parseSocksRequest,
+  socksGreetingFrameLength,
+  socksReplyForOpenError,
+  socksRequestFrameLength,
+} from './socks.ts';
+import { Circuit, CircuitStream } from './circuit.ts';
+
+// =============================================================================
+// Constants
+// =============================================================================
+
+test('SOCKS_VERSION is 5', (t) => {
+  t.is(SOCKS_VERSION, 0x05);
+});
+
+test('SocksAuthMethod values', (t) => {
+  t.is(SocksAuthMethod.NO_AUTH, 0x00);
+  t.is(SocksAuthMethod.GSSAPI, 0x01);
+  t.is(SocksAuthMethod.USERNAME_PASSWORD, 0x02);
+  t.is(SocksAuthMethod.NO_ACCEPTABLE, 0xff);
+});
+
+test('SocksCommand values', (t) => {
+  t.is(SocksCommand.CONNECT, 0x01);
+  t.is(SocksCommand.BIND, 0x02);
+  t.is(SocksCommand.UDP_ASSOCIATE, 0x03);
+});
+
+test('SocksAddressType values', (t) => {
+  t.is(SocksAddressType.IPv4, 0x01);
+  t.is(SocksAddressType.DOMAIN, 0x03);
+  t.is(SocksAddressType.IPv6, 0x04);
+});
+
+test('SocksReply values', (t) => {
+  t.is(SocksReply.SUCCEEDED, 0x00);
+  t.is(SocksReply.GENERAL_FAILURE, 0x01);
+  t.is(SocksReply.CONNECTION_NOT_ALLOWED, 0x02);
+  t.is(SocksReply.NETWORK_UNREACHABLE, 0x03);
+  t.is(SocksReply.HOST_UNREACHABLE, 0x04);
+  t.is(SocksReply.CONNECTION_REFUSED, 0x05);
+  t.is(SocksReply.TTL_EXPIRED, 0x06);
+  t.is(SocksReply.COMMAND_NOT_SUPPORTED, 0x07);
+  t.is(SocksReply.ADDRESS_TYPE_NOT_SUPPORTED, 0x08);
+});
+
+// =============================================================================
+// parseSocksGreeting / buildSocksGreetingResponse
+// =============================================================================
+
+test('parseSocksGreeting: NO_AUTH only', (t) => {
+  const data = Buffer.from([0x05, 0x01, 0x00]);
+  const result = parseSocksGreeting(data);
+  t.is(result.version, 5);
+  t.deepEqual(result.methods, [SocksAuthMethod.NO_AUTH]);
+});
+
+test('parseSocksGreeting: multiple methods', (t) => {
+  const data = Buffer.from([0x05, 0x03, 0x00, 0x01, 0x02]);
+  const result = parseSocksGreeting(data);
+  t.is(result.version, 5);
+  t.deepEqual(result.methods, [
+    SocksAuthMethod.NO_AUTH,
+    SocksAuthMethod.GSSAPI,
+    SocksAuthMethod.USERNAME_PASSWORD,
+  ]);
+});
+
+test('parseSocksGreeting: throws on too short data', (t) => {
+  t.throws(() => parseSocksGreeting(Buffer.from([0x05])), {
+    message: 'SOCKS greeting too short',
+  });
+});
+
+test('parseSocksGreeting: throws on unsupported version', (t) => {
+  t.throws(() => parseSocksGreeting(Buffer.from([0x04, 0x01, 0x00])), {
+    message: 'Unsupported SOCKS version: 4',
+  });
+});
+
+test('parseSocksGreeting: throws on truncated methods', (t) => {
+  t.throws(() => parseSocksGreeting(Buffer.from([0x05, 0x03, 0x00])), {
+    message: 'SOCKS greeting truncated',
+  });
+});
+
+test('socksGreetingFrameLength: returns undefined for partial frame', (t) => {
+  t.is(socksGreetingFrameLength(Buffer.from([0x05])), undefined);
+  t.is(socksGreetingFrameLength(Buffer.from([0x05, 0x03, 0x00])), undefined);
+});
+
+test('socksGreetingFrameLength: returns total bytes when complete', (t) => {
+  t.is(socksGreetingFrameLength(Buffer.from([0x05, 0x01, 0x00])), 3);
+  t.is(socksGreetingFrameLength(Buffer.from([0x05, 0x02, 0x00, 0x02])), 4);
+});
+
+test('buildSocksGreetingResponse: NO_AUTH', (t) => {
+  t.deepEqual(buildSocksGreetingResponse(SocksAuthMethod.NO_AUTH), Buffer.from([0x05, 0x00]));
+});
+
+test('buildSocksGreetingResponse: NO_ACCEPTABLE', (t) => {
+  t.deepEqual(buildSocksGreetingResponse(SocksAuthMethod.NO_ACCEPTABLE), Buffer.from([0x05, 0xff]));
+});
+
+// =============================================================================
+// parseSocksRequest / socksRequestFrameLength
+// =============================================================================
+
+test('parseSocksRequest: CONNECT to IPv4', (t) => {
+  const data = Buffer.from([0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1, 0x00, 0x50]);
+  const r = parseSocksRequest(data);
+  t.is(r.version, 5);
+  t.is(r.command, SocksCommand.CONNECT);
+  t.is(r.addressType, SocksAddressType.IPv4);
+  t.is(r.destinationAddress, '127.0.0.1');
+  t.is(r.destinationPort, 80);
+});
+
+test('parseSocksRequest: CONNECT to domain', (t) => {
+  const domain = 'example.com';
+  const data = Buffer.concat([
+    Buffer.from([0x05, 0x01, 0x00, 0x03, domain.length]),
+    Buffer.from(domain, 'ascii'),
+    Buffer.from([0x01, 0xbb]),
+  ]);
+  const r = parseSocksRequest(data);
+  t.is(r.command, SocksCommand.CONNECT);
+  t.is(r.addressType, SocksAddressType.DOMAIN);
+  t.is(r.destinationAddress, 'example.com');
+  t.is(r.destinationPort, 443);
+});
+
+test('parseSocksRequest: CONNECT to IPv6 ::1', (t) => {
+  const ipv6 = Buffer.alloc(16);
+  ipv6[15] = 1;
+  const data = Buffer.concat([
+    Buffer.from([0x05, 0x01, 0x00, 0x04]),
+    ipv6,
+    Buffer.from([0x1f, 0x90]),
+  ]);
+  const r = parseSocksRequest(data);
+  t.is(r.addressType, SocksAddressType.IPv6);
+  t.is(r.destinationAddress, '0:0:0:0:0:0:0:1');
+  t.is(r.destinationPort, 8080);
+});
+
+test('parseSocksRequest: BIND command', (t) => {
+  const data = Buffer.from([0x05, 0x02, 0x00, 0x01, 192, 168, 1, 1, 0x00, 0x50]);
+  const r = parseSocksRequest(data);
+  t.is(r.command, SocksCommand.BIND);
+  t.is(r.destinationAddress, '192.168.1.1');
+});
+
+test('parseSocksRequest: throws on too short', (t) => {
+  t.throws(() => parseSocksRequest(Buffer.from([0x05, 0x01, 0x00])), {
+    message: 'SOCKS request too short',
+  });
+});
+
+test('parseSocksRequest: throws on unsupported version', (t) => {
+  t.throws(
+    () => parseSocksRequest(Buffer.from([0x04, 0x01, 0x00, 0x01, 127, 0, 0, 1, 0x00, 0x50])),
+    { message: 'Unsupported SOCKS version: 4' }
+  );
+});
+
+test('parseSocksRequest: throws on truncated IPv4', (t) => {
+  t.throws(() => parseSocksRequest(Buffer.from([0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1])), {
+    message: 'SOCKS request too short for IPv4',
+  });
+});
+
+test('parseSocksRequest: throws on truncated domain', (t) => {
+  t.throws(
+    () =>
+      parseSocksRequest(Buffer.from([0x05, 0x01, 0x00, 0x03, 11, 0x65, 0x78, 0x61, 0x6d, 0x70])),
+    { message: 'SOCKS request too short for domain' }
+  );
+});
+
+test('parseSocksRequest: throws on truncated IPv6', (t) => {
+  t.throws(
+    () => parseSocksRequest(Buffer.from([0x05, 0x01, 0x00, 0x04, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0])),
+    { message: 'SOCKS request too short for IPv6' }
+  );
+});
+
+test('parseSocksRequest: throws on unsupported address type', (t) => {
+  t.throws(
+    () => parseSocksRequest(Buffer.from([0x05, 0x01, 0x00, 0x05, 127, 0, 0, 1, 0x00, 0x50])),
+    { message: 'Unsupported address type: 5' }
+  );
+});
+
+test('socksRequestFrameLength: IPv4 needs 10 bytes', (t) => {
+  const partial = Buffer.from([0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1, 0x00]);
+  const full = Buffer.concat([partial, Buffer.from([0x50])]);
+  t.is(socksRequestFrameLength(partial), undefined);
+  t.is(socksRequestFrameLength(full), 10);
+});
+
+test('socksRequestFrameLength: domain needs len + 7 bytes', (t) => {
+  const data = Buffer.concat([
+    Buffer.from([0x05, 0x01, 0x00, 0x03, 11]),
+    Buffer.from('example.com', 'ascii'),
+    Buffer.from([0x01, 0xbb]),
+  ]);
+  t.is(socksRequestFrameLength(data), 18);
+  t.is(socksRequestFrameLength(data.subarray(0, 10)), undefined);
+});
+
+test('socksRequestFrameLength: IPv6 needs 22 bytes', (t) => {
+  const buf = Buffer.alloc(22);
+  buf[0] = 0x05;
+  buf[1] = 0x01;
+  buf[3] = 0x04;
+  t.is(socksRequestFrameLength(buf), 22);
+  t.is(socksRequestFrameLength(buf.subarray(0, 21)), undefined);
+});
+
+test('socksRequestFrameLength: returns header length for unknown ATYP', (t) => {
+  // ATYP=0x05 is unsupported; we still return 4 so the caller stops waiting.
+  t.is(socksRequestFrameLength(Buffer.from([0x05, 0x01, 0x00, 0x05, 0xff, 0xff])), 4);
+});
+
+// =============================================================================
+// buildSocksReply
+// =============================================================================
+
+test('buildSocksReply: SUCCEEDED with default 0.0.0.0:0', (t) => {
+  t.deepEqual(
+    buildSocksReply(SocksReply.SUCCEEDED),
+    Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0x00, 0x00])
+  );
+});
+
+test('buildSocksReply: GENERAL_FAILURE', (t) => {
+  t.deepEqual(
+    buildSocksReply(SocksReply.GENERAL_FAILURE),
+    Buffer.from([0x05, 0x01, 0x00, 0x01, 0, 0, 0, 0, 0x00, 0x00])
+  );
+});
+
+test('buildSocksReply: custom bound address + port', (t) => {
+  t.deepEqual(
+    buildSocksReply(SocksReply.SUCCEEDED, '192.168.1.1', 8080),
+    Buffer.from([0x05, 0x00, 0x00, 0x01, 192, 168, 1, 1, 0x1f, 0x90])
+  );
+});
+
+test('buildSocksReply: invalid address falls back to 0.0.0.0 (port preserved)', (t) => {
+  const reply = buildSocksReply(SocksReply.SUCCEEDED, 'invalid', 80);
+  t.deepEqual(reply, Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0x00, 0x50]));
+});
+
+test('buildSocksReply: high port encodes big-endian', (t) => {
+  const reply = buildSocksReply(SocksReply.SUCCEEDED, '0.0.0.0', 65535);
+  t.is(reply[8], 0xff);
+  t.is(reply[9], 0xff);
+});
+
+// =============================================================================
+// formatTorDestination + socksReplyForOpenError
+// =============================================================================
+
+test('formatTorDestination: IPv4 stays bare', (t) => {
+  t.is(formatTorDestination('127.0.0.1', 80), '127.0.0.1:80');
+});
+
+test('formatTorDestination: domain stays bare', (t) => {
+  t.is(formatTorDestination('example.com', 443), 'example.com:443');
+});
+
+test('formatTorDestination: IPv6 gets bracketed', (t) => {
+  t.is(formatTorDestination('::1', 8080), '[::1]:8080');
+});
+
+test('socksReplyForOpenError: maps net error codes', (t) => {
+  t.is(socksReplyForOpenError({ code: 'ENETUNREACH' }), SocksReply.NETWORK_UNREACHABLE);
+  t.is(socksReplyForOpenError({ code: 'ECONNREFUSED' }), SocksReply.CONNECTION_REFUSED);
+  t.is(socksReplyForOpenError({ code: 'EHOSTUNREACH' }), SocksReply.HOST_UNREACHABLE);
+  t.is(socksReplyForOpenError({}), SocksReply.HOST_UNREACHABLE);
+  t.is(socksReplyForOpenError(null), SocksReply.HOST_UNREACHABLE);
+});
+
+// =============================================================================
+// SocksProxyServer wiring with a fake circuit
+// =============================================================================
+//
+// We build a CircuitStream-shaped object and feed it into a Circuit-shaped
+// fake. The actual Circuit class wires `.write` from inside `createStream`,
+// which is not what we want for tests; here we substitute a stream that
+// loops bytes back to the SOCKS client so we can verify the relay.
+
+class LoopbackStream extends EventEmitter {
+  streamId = 1;
+  destination: string;
+  destroyed = false;
+  // The Circuit class fills these in for real streams; the SOCKS server
+  // never touches them so a no-op is fine.
+  source = new ReadableStream({ start() {} });
+  sink = new WritableStream({ write() {} });
+  constructor(destination: string) {
+    super();
+    this.destination = destination;
+    this.on('error', () => {
+      // suppress unhandled
+    });
+  }
+  // Echo the chunk straight back to the client side via 'data'.
+  write = async (data: Buffer): Promise<void> => {
+    if (this.destroyed) throw new Error('stream destroyed');
+    this.emit('data', data);
+  };
+  close(): void {
+    this.destroy();
+  }
+  destroy(err?: Error): void {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    if (err) this.emit('error', err);
+    this.emit('end');
+  }
+}
+
+class FakeCircuit {
+  public lastDestination: string | undefined;
+  public openCalls = 0;
+  public openMode: 'echo' | 'reject' = 'echo';
+  public rejectError: Error = new Error('open failed');
+
+  async open(destination: string): Promise<CircuitStream> {
+    this.openCalls += 1;
+    this.lastDestination = destination;
+    if (this.openMode === 'reject') {
+      throw this.rejectError;
+    }
+    return new LoopbackStream(destination) as unknown as CircuitStream;
+  }
+}
+
+const fakeCircuitAsCircuit = (fake: FakeCircuit): Circuit => fake as unknown as Circuit;
+
+function chooseEphemeralPort(): number {
+  // Bind to port 0 to get a free port, then close. There's a small race
+  // where another process could grab the port between close and our
+  // re-bind, but in CI that's vanishingly rare and the test is short.
+  return 0;
+}
+
+async function startServer(fake: FakeCircuit): Promise<{
+  server: SocksProxyServer;
+  port: number;
+}> {
+  const server = new SocksProxyServer({
+    circuit: fakeCircuitAsCircuit(fake),
+    port: chooseEphemeralPort(),
+    host: '127.0.0.1',
+  });
+  await server.start();
+  const addr = server.address();
+  if (!addr || typeof addr === 'string') {
+    throw new Error('server address not bound');
+  }
+  return { server, port: addr.port };
+}
+
+/**
+ * Pull bytes off `socket` into a single buffered queue. Each `read(n)`
+ * waits until at least `n` bytes are available across all chunks ever
+ * received, then returns the next `n` bytes and leaves the rest queued
+ * for the next reader. This is more reliable than installing a fresh
+ * 'data' listener per call (which can race with chunk arrival).
+ */
+function makeByteReader(socket: net.Socket): {
+  read: (n: number, label: string) => Promise<Buffer>;
+} {
+  let queued = Buffer.alloc(0);
+  let waiter:
+    | { n: number; label: string; resolve: (b: Buffer) => void; reject: (e: Error) => void }
+    | undefined;
+
+  const tryDeliver = () => {
+    if (!waiter) return;
+    if (queued.length >= waiter.n) {
+      const out = queued.subarray(0, waiter.n);
+      queued = queued.subarray(waiter.n);
+      const w = waiter;
+      waiter = undefined;
+      w.resolve(out);
+    }
+  };
+
+  socket.on('data', (chunk: Buffer) => {
+    queued = Buffer.concat([queued, chunk]);
+    tryDeliver();
+  });
+  socket.on('close', () => {
+    if (waiter) {
+      const w = waiter;
+      waiter = undefined;
+      w.reject(new Error(`${w.label}: socket closed before ${w.n} bytes available`));
+    }
+  });
+  socket.on('error', (err) => {
+    if (waiter) {
+      const w = waiter;
+      waiter = undefined;
+      w.reject(new Error(`${w.label}: ${err.message}`));
+    }
+  });
+
+  return {
+    read: (n: number, label: string) =>
+      new Promise<Buffer>((resolve, reject) => {
+        if (waiter) {
+          reject(new Error('makeByteReader: only one read at a time'));
+          return;
+        }
+        waiter = { n, label, resolve, reject };
+        tryDeliver();
+      }),
+  };
+}
+
+test('SocksProxyServer: createSocksProxy starts listening', async (t) => {
+  const fake = new FakeCircuit();
+  const server = await createSocksProxy({
+    circuit: fakeCircuitAsCircuit(fake),
+    port: 0,
+    host: '127.0.0.1',
+  });
+  const addr = server.address();
+  t.truthy(addr);
+  t.true(typeof addr === 'object' && addr !== null && (addr as net.AddressInfo).port > 0);
+  await server.stop();
+});
+
+test('SocksProxyServer: full handshake + relay echoes data', async (t) => {
+  const fake = new FakeCircuit();
+  const { server, port } = await startServer(fake);
+  try {
+    const socket = net.connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    const reader = makeByteReader(socket);
+
+    // 1. Greeting (NO_AUTH only) → expect 0x05 0x00
+    socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.NO_AUTH]));
+    const greetResp = await reader.read(2, 'greeting');
+    t.deepEqual(greetResp, Buffer.from([SOCKS_VERSION, SocksAuthMethod.NO_AUTH]));
+
+    // 2. CONNECT to example.com:80 (domain ATYP)
+    const domain = 'example.com';
+    const req = Buffer.concat([
+      Buffer.from([
+        SOCKS_VERSION,
+        SocksCommand.CONNECT,
+        0x00,
+        SocksAddressType.DOMAIN,
+        domain.length,
+      ]),
+      Buffer.from(domain, 'ascii'),
+      Buffer.from([0x00, 0x50]),
+    ]);
+    socket.write(req);
+    const reply = await reader.read(10, 'connect');
+    t.is(reply[0], SOCKS_VERSION);
+    t.is(reply[1], SocksReply.SUCCEEDED);
+    t.is(fake.openCalls, 1);
+    t.is(fake.lastDestination, 'example.com:80');
+
+    // 3. Send some payload bytes; the loopback stream echoes them back.
+    const payload = Buffer.from('GET / HTTP/1.0\r\n\r\n');
+    socket.write(payload);
+    const echo = await reader.read(payload.length, 'echo');
+    t.deepEqual(echo, payload);
+
+    socket.destroy();
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SocksProxyServer: rejects unsupported auth methods', async (t) => {
+  const fake = new FakeCircuit();
+  const { server, port } = await startServer(fake);
+  try {
+    const socket = net.connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    const reader = makeByteReader(socket);
+    // Only USERNAME_PASSWORD - we don't support it.
+    socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.USERNAME_PASSWORD]));
+    const resp = await reader.read(2, 'greeting');
+    t.deepEqual(resp, Buffer.from([SOCKS_VERSION, SocksAuthMethod.NO_ACCEPTABLE]));
+    await once(socket, 'close');
+    t.is(fake.openCalls, 0);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SocksProxyServer: rejects non-CONNECT commands with COMMAND_NOT_SUPPORTED', async (t) => {
+  const fake = new FakeCircuit();
+  const { server, port } = await startServer(fake);
+  try {
+    const socket = net.connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    const reader = makeByteReader(socket);
+    socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.NO_AUTH]));
+    await reader.read(2, 'greeting');
+
+    // BIND command
+    socket.write(
+      Buffer.from([SOCKS_VERSION, SocksCommand.BIND, 0x00, 0x01, 1, 2, 3, 4, 0x00, 0x50])
+    );
+    const reply = await reader.read(10, 'reply');
+    t.is(reply[0], SOCKS_VERSION);
+    t.is(reply[1], SocksReply.COMMAND_NOT_SUPPORTED);
+    t.is(fake.openCalls, 0);
+    await once(socket, 'close');
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SocksProxyServer: failed circuit.open replies HOST_UNREACHABLE', async (t) => {
+  const fake = new FakeCircuit();
+  fake.openMode = 'reject';
+  fake.rejectError = Object.assign(new Error('host unreachable'), { code: 'EHOSTUNREACH' });
+
+  const { server, port } = await startServer(fake);
+  try {
+    const socket = net.connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    const reader = makeByteReader(socket);
+    socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.NO_AUTH]));
+    await reader.read(2, 'greeting');
+
+    const req = Buffer.from([
+      SOCKS_VERSION,
+      SocksCommand.CONNECT,
+      0x00,
+      0x01,
+      127,
+      0,
+      0,
+      1,
+      0x00,
+      0x50,
+    ]);
+    socket.write(req);
+    const reply = await reader.read(10, 'reply');
+    t.is(reply[0], SOCKS_VERSION);
+    t.is(reply[1], SocksReply.HOST_UNREACHABLE);
+    await once(socket, 'close');
+    t.is(fake.openCalls, 1);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SocksProxyServer: handles greeting + request arriving in one chunk', async (t) => {
+  const fake = new FakeCircuit();
+  const { server, port } = await startServer(fake);
+  try {
+    const socket = net.connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    const reader = makeByteReader(socket);
+
+    // Stitch the greeting and CONNECT request into a single TCP write so
+    // the server handles them within one 'data' event each.
+    const greeting = Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.NO_AUTH]);
+    const request = Buffer.from([
+      SOCKS_VERSION,
+      SocksCommand.CONNECT,
+      0x00,
+      SocksAddressType.IPv4,
+      127,
+      0,
+      0,
+      1,
+      0x1f,
+      0x90,
+    ]);
+    socket.write(Buffer.concat([greeting, request]));
+
+    const greetResp = await reader.read(2, 'greeting');
+    t.deepEqual(greetResp, Buffer.from([SOCKS_VERSION, SocksAuthMethod.NO_AUTH]));
+    const reply = await reader.read(10, 'connect');
+    t.is(reply[1], SocksReply.SUCCEEDED);
+    t.is(fake.lastDestination, '127.0.0.1:8080');
+
+    socket.destroy();
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SocksProxyServer: replays bytes pipelined after the request', async (t) => {
+  const fake = new FakeCircuit();
+  const { server, port } = await startServer(fake);
+  try {
+    const socket = net.connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    const reader = makeByteReader(socket);
+
+    socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.NO_AUTH]));
+    await reader.read(2, 'greeting');
+
+    // Send the request and a body chunk in a single TCP write. The server
+    // is asynchronously opening the circuit when the body bytes arrive,
+    // so it must buffer and replay them once the relay is wired up.
+    const req = Buffer.from([
+      SOCKS_VERSION,
+      SocksCommand.CONNECT,
+      0x00,
+      0x01,
+      127,
+      0,
+      0,
+      1,
+      0x00,
+      0x50,
+    ]);
+    const body = Buffer.from('hello-pipelined');
+    socket.write(Buffer.concat([req, body]));
+
+    const reply = await reader.read(10, 'reply');
+    t.is(reply[1], SocksReply.SUCCEEDED);
+
+    // The loopback stream echoes whatever it receives, so the pipelined
+    // body should come back to us verbatim.
+    const echo = await reader.read(body.length, 'echo');
+    t.deepEqual(echo, body);
+
+    socket.destroy();
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SocksProxyServer: stop() closes active client sockets', async (t) => {
+  const fake = new FakeCircuit();
+  const { server, port } = await startServer(fake);
+  const socket = net.connect(port, '127.0.0.1');
+  await once(socket, 'connect');
+  const reader = makeByteReader(socket);
+  socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.NO_AUTH]));
+  await reader.read(2, 'greeting');
+
+  const closed = once(socket, 'close');
+  await server.stop();
+  await closed;
+  t.pass();
+});

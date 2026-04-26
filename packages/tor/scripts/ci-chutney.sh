@@ -223,7 +223,7 @@ cd "${ROOT_DIR}"
 # on the rendezvous point in microDescNodeInfoToPeerInfo (fixed in the
 # same PR, with spec-vector and unit tests in hidden-service-test-vector
 # .spec.ts + directory.spec.ts).
-TOR_TS_CHUTNEY_TESTS="${TOR_TS_CHUTNEY_TESTS:-exit,hidden-service,hidden-service-host}"
+TOR_TS_CHUTNEY_TESTS="${TOR_TS_CHUTNEY_TESTS:-exit,hidden-service,hidden-service-host,socks}"
 IFS=',' read -ra TESTS <<< "${TOR_TS_CHUTNEY_TESTS}"
 for t in "${TESTS[@]}"; do
   case "${t}" in
@@ -248,6 +248,12 @@ for t in "${TESTS[@]}"; do
       echo "=== running chutney integration test: hidden-service-host ==="
       timeout 12m node --experimental-transform-types "${ROOT_DIR}/scripts/chutney-hidden-service-host-ci.ts"
       echo "=== chutney integration test: hidden-service-host finished at $(date -Is) ==="
+      ;;
+    socks)
+      echo ""
+      echo "=== running chutney integration test: socks ==="
+      timeout 2m node --experimental-transform-types "${ROOT_DIR}/scripts/chutney-socks-ci.ts"
+      echo "=== chutney integration test: socks finished at $(date -Is) ==="
       ;;
     *)
       echo "Unknown TOR_TS_CHUTNEY_TESTS entry: ${t}"
