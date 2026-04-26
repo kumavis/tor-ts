@@ -141,10 +141,7 @@ async function main(): Promise<void> {
 
     log('sending HTTP GET');
     const requestText =
-      `GET / HTTP/1.1\r\n` +
-      `Host: ${host.onion}\r\n` +
-      `Connection: close\r\n` +
-      `\r\n`;
+      `GET / HTTP/1.1\r\n` + `Host: ${host.onion}\r\n` + `Connection: close\r\n` + `\r\n`;
     await withTimeout(
       'write request',
       perStepTimeoutMs,

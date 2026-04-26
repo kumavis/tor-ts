@@ -141,10 +141,9 @@ test('signWithBlindedKey: rejects 32-byte blinded private key (must be expanded 
     periodNum: 1n,
     periodLengthMinutes: 1440n,
   });
-  t.throws(
-    () => signWithBlindedKey(Buffer.from('msg'), blindedPrivateKey, blindedPublicKey),
-    { message: /64 bytes/ }
-  );
+  t.throws(() => signWithBlindedKey(Buffer.from('msg'), blindedPrivateKey, blindedPublicKey), {
+    message: /64 bytes/,
+  });
 });
 
 test('deriveTimePeriodKeys: subcredential matches client deriveSubcredential', (t) => {
@@ -317,7 +316,10 @@ test('encryptDescriptorLayer: pads to multiple of 10000 bytes + emits MAC tail',
 test('generateDescriptor: produces a parseable v3 descriptor with required fields', async (t) => {
   const keys = generateHiddenServiceKeys();
   const tp = deriveTimePeriodKeys({ keys, validAfter: new Date() });
-  const intro: IntroductionPoint = generateIntroPointKeys(makePeerInfo(), Buffer.from(randomBytes(32)));
+  const intro: IntroductionPoint = generateIntroPointKeys(
+    makePeerInfo(),
+    Buffer.from(randomBytes(32))
+  );
 
   const descriptor = await generateDescriptor({
     keys,

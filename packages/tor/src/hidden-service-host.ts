@@ -45,12 +45,7 @@ import { sha512 } from '@noble/hashes/sha512';
 
 import { BytesReader, bufferFromUint } from './util.ts';
 import { RelayCell } from './relay-cell.ts';
-import {
-  Circuit,
-  CircuitStream,
-  type CircuitCipherPair,
-  type PeerInfo,
-} from './circuit.ts';
+import { Circuit, CircuitStream, type CircuitCipherPair, type PeerInfo } from './circuit.ts';
 import { type LinkSpecifier, LinkSpecifierTypes } from './messaging.ts';
 import { pickRelayWithFlags } from './build-circuit/util.ts';
 import {
@@ -293,9 +288,7 @@ export function deriveBlindedPrivateKey(params: {
   // signatures. RH' = SHA-512("Derive temporary signing key hash input" || RH).
   const RH = expanded.subarray(32, 64);
   const RHPrime = Buffer.from(
-    sha512(
-      Buffer.concat([Buffer.from('Derive temporary signing key hash input', 'ascii'), RH])
-    )
+    sha512(Buffer.concat([Buffer.from('Derive temporary signing key hash input', 'ascii'), RH]))
   ).subarray(0, 32);
   const blindedSigningKey = Buffer.concat([blindedPrivateKey, RHPrime]);
 
@@ -375,9 +368,7 @@ export function deriveTimePeriodKeys(params: {
   });
 
   const descriptorSigningPrivateKey = Buffer.from(ed25519.utils.randomPrivateKey());
-  const descriptorSigningPublicKey = Buffer.from(
-    ed25519.getPublicKey(descriptorSigningPrivateKey)
-  );
+  const descriptorSigningPublicKey = Buffer.from(ed25519.getPublicKey(descriptorSigningPrivateKey));
 
   return {
     periodNum,
@@ -951,10 +942,7 @@ export function completeHsNtorServer(params: {
 
   // KDF for rendezvous circuit cipher pair. Same shape as the client's
   // makeHsRendezvousCipherPairFromKeySeed but with the directions swapped.
-  const K = kdfShake256(
-    Buffer.concat([NTOR_KEY_SEED, m_hsexpand]),
-    HASH_LEN * 2 + S_KEY_LEN * 2
-  );
+  const K = kdfShake256(Buffer.concat([NTOR_KEY_SEED, m_hsexpand]), HASH_LEN * 2 + S_KEY_LEN * 2);
   const reader = new BytesReader(K);
   const fSeed = reader.readBytes(HASH_LEN);
   const bSeed = reader.readBytes(HASH_LEN);
@@ -1200,10 +1188,7 @@ export class HiddenServiceHost extends EventEmitter {
    * Build a 3-hop circuit terminating at `intro`, send ESTABLISH_INTRO using
    * the last hop's ntor KH as MAC_KEY, and arm an INTRODUCE2 listener.
    */
-  private async establishIntroPoint(
-    intro: IntroductionPoint,
-    timeoutMs: number
-  ): Promise<void> {
+  private async establishIntroPoint(intro: IntroductionPoint, timeoutMs: number): Promise<void> {
     if (!this.torClient) {
       throw new Error('Hidden service not bootstrapped (torClient missing)');
     }
@@ -1530,7 +1515,6 @@ export class HiddenServiceHost extends EventEmitter {
     this.torClient = undefined;
     this.emit('stopped');
   }
-
 }
 
 // ============================================================================
@@ -1540,11 +1524,7 @@ export class HiddenServiceHost extends EventEmitter {
 // base32EncodeLowerNoPad — live in `./hs-crypto.ts` and the spec imports
 // them from there directly.)
 
-export {
-  curve25519PubkeyToEd25519,
-  encryptDescriptorLayer,
-  createEd25519Certificate,
-};
+export { curve25519PubkeyToEd25519, encryptDescriptorLayer, createEd25519Certificate };
 
 // ============================================================================
 // publishHiddenService — high-level factory matching HS-HOST-API.md
@@ -1600,9 +1580,7 @@ export interface HsHost {
  * The returned `unpublish()` is idempotent and never rejects. The injected
  * `torClient` is not destroyed; the caller owns it.
  */
-export async function publishHiddenService(
-  opts: PublishHiddenServiceOptions
-): Promise<HsHost> {
+export async function publishHiddenService(opts: PublishHiddenServiceOptions): Promise<HsHost> {
   const { torClient, port, onConnection, identityKey, log } = opts;
   if (port <= 0 || port > 0xffff) {
     throw new Error(`Invalid port ${port}`);
@@ -1622,7 +1600,8 @@ export async function publishHiddenService(
 
   const startOpts: Parameters<HiddenServiceHost['start']>[1] = {};
   if (opts.numIntroPoints !== undefined) startOpts.numIntroPoints = opts.numIntroPoints;
-  if (opts.descriptorRefreshMs !== undefined) startOpts.descriptorRefreshMs = opts.descriptorRefreshMs;
+  if (opts.descriptorRefreshMs !== undefined)
+    startOpts.descriptorRefreshMs = opts.descriptorRefreshMs;
   if (opts.perStepTimeoutMs !== undefined) startOpts.perStepTimeoutMs = opts.perStepTimeoutMs;
 
   await host.start(torClient, startOpts);
