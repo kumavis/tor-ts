@@ -1209,7 +1209,10 @@ export class HiddenServiceHost extends EventEmitter {
         // established (their event listeners would otherwise hold `this`).
         for (const intro of this.introPoints) {
           try {
-            intro.circuit?.destroy();
+            // preserveChannel: TorClient's channelManager may be sharing this
+            // channel with other circuits (incl. the user's bootstrap circuit).
+            // Destroying the channel here would kill those too.
+            intro.circuit?.destroy({ preserveChannel: true });
           } catch {
             // best-effort
           }
@@ -1448,7 +1451,14 @@ export class HiddenServiceHost extends EventEmitter {
         );
       } finally {
         try {
-          circuit?.destroy();
+          // preserveChannel: chutney's small Guard pool means the HSDir
+          // circuit's channel is very likely shared with our intro circuits
+          // (and with the visitor's bootstrap circuit). Destroying the
+          // channel here would tear those down — and the intro circuit
+          // dying makes the IP relay drop our auth-key registration, so
+          // every subsequent INTRODUCE1 NACKs with status=1. This was
+          // exactly the failure on commit 711df09 in chutney.
+          circuit?.destroy({ preserveChannel: true });
         } catch {
           // best-effort
         }
@@ -1515,7 +1525,10 @@ export class HiddenServiceHost extends EventEmitter {
     } finally {
       if (!handedOff) {
         try {
-          rendCircuit.destroy();
+          // preserveChannel: same reasoning as the HSDir-upload teardown —
+          // the rendezvous circuit's channel may be shared with our intro
+          // circuits via the channelManager.
+          rendCircuit.destroy({ preserveChannel: true });
         } catch {
           // best-effort
         }
@@ -1639,7 +1652,10 @@ export class HiddenServiceHost extends EventEmitter {
     }
     for (const intro of this.introPoints) {
       try {
-        intro.circuit?.destroy();
+        // preserveChannel: TorClient's channelManager owns the channels,
+        // not the host. unpublish() shouldn't tear down the user's
+        // bootstrap circuit or any other circuits sharing the same Guard.
+        intro.circuit?.destroy({ preserveChannel: true });
       } catch {
         // best-effort
       }
