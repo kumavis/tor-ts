@@ -1065,6 +1065,17 @@ export class HiddenServiceHost extends EventEmitter {
   private starting = false;
   private torClient: TorClient<any> | undefined;
   private refreshInterval: ReturnType<typeof setInterval> | undefined;
+  /** Target intro-point count, captured from start()'s options for use by
+   *  the churn watchdog (which has to know how many to keep alive). */
+  private targetIntroPoints = 3;
+  /** Per-step timeout for circuit / handshake operations during start() and
+   *  during churn replacement. */
+  private perStepTimeoutMs = 120_000;
+  /** RSA-id-hex strings that the watchdog should NOT reselect when picking
+   *  a replacement intro point — covers both currently-live and recently-dead
+   *  candidates so we don't immediately re-pick a flaky relay. Trimmed to the
+   *  most recent ~20 entries to bound memory across long churn loops. */
+  private recentIntroRelays: string[] = [];
   private log: (msg: string) => void;
 
   constructor(keys?: HiddenServiceKeys, options: { log?: (msg: string) => void } = {}) {
@@ -1106,6 +1117,8 @@ export class HiddenServiceHost extends EventEmitter {
     }
     this.starting = true;
     this.torClient = torClient;
+    this.targetIntroPoints = numIntroPoints;
+    this.perStepTimeoutMs = perStepTimeoutMs;
     this.log(`starting hidden service ${this.keys.onionAddress}`);
 
     // Wrap the entire body so any failure clears the start-in-progress
@@ -1145,6 +1158,7 @@ export class HiddenServiceHost extends EventEmitter {
       for (let i = 0; i < numIntroPoints && used.length < introCandidates.length; i++) {
         const relay = pickRelayWithFlags(introCandidates, [], used);
         used.push(relay);
+        this.rememberIntroRelay(relay.rsaIdDigest);
         try {
           const { peerInfo, ed25519IdentityKey } = await lookupPeerInfoWithEd25519IdentityKey(
             torClient.dirClient,
@@ -1252,7 +1266,88 @@ export class HiddenServiceHost extends EventEmitter {
     introCircuit.once('destroyed', () => {
       introCircuit.off('relay', onIntroduce2);
       intro.established = false;
+      // Churn watchdog: only kick off a replacement once the host is fully
+      // running. Don't trigger during start()'s rollback path (running===false,
+      // starting===true) or during unpublish() teardown (running===false).
+      if (this.running) {
+        this.replaceIntroPoint(intro).catch((err) => {
+          this.log(`intro replacement failed: ${err instanceof Error ? err.message : err}`);
+        });
+      }
     });
+  }
+
+  /** Track this RSA-id as recently-used so the watchdog won't immediately
+   *  re-pick the same relay (which is what would happen with a naive call to
+   *  pickRelayWithFlags on a small consensus). Bounded to ~20 entries. */
+  private rememberIntroRelay(rsaIdDigest: Buffer): void {
+    const hex = rsaIdDigest.toString('hex');
+    const idx = this.recentIntroRelays.indexOf(hex);
+    if (idx !== -1) this.recentIntroRelays.splice(idx, 1);
+    this.recentIntroRelays.push(hex);
+    if (this.recentIntroRelays.length > 20) this.recentIntroRelays.shift();
+  }
+
+  /**
+   * Pick a fresh relay, establish a new intro point on it, and republish
+   * the descriptor. Idempotent against concurrent calls (skips if we've
+   * already recovered to `targetIntroPoints`). Best-effort: on failure,
+   * logs and leaves the host with a degraded intro-point count.
+   */
+  private async replaceIntroPoint(failed: IntroductionPoint): Promise<void> {
+    if (!this.running || !this.torClient) return;
+
+    // Drop the failed entry from the list so numActiveIntroPoints() is
+    // accurate before we start picking a replacement.
+    const idx = this.introPoints.indexOf(failed);
+    if (idx !== -1) this.introPoints.splice(idx, 1);
+
+    if (this.numActiveIntroPoints() >= this.targetIntroPoints) {
+      this.log('intro-point churn: target already met, no replacement needed');
+      return;
+    }
+
+    const consensus = this.torClient.consensus;
+    const used = consensus.relays.filter((r) =>
+      this.recentIntroRelays.includes(r.rsaIdDigest.toString('hex'))
+    );
+    const candidates = consensus.relays.filter((r) => {
+      const flags = r.flags ?? [];
+      if (flags.includes('BadExit')) return false;
+      if (flags.includes('Authority')) return false;
+      return flags.includes('Stable') && flags.includes('Running');
+    });
+    if (candidates.length === 0) {
+      this.log('intro-point churn: no replacement candidates in consensus');
+      return;
+    }
+
+    let relay: MicroDescNodeInfo;
+    try {
+      relay = pickRelayWithFlags(candidates, [], used);
+    } catch {
+      // All candidates are in our recent set — fall back to allowing reuse.
+      relay = pickRelayWithFlags(candidates, [], []);
+    }
+    this.rememberIntroRelay(relay.rsaIdDigest);
+    this.log(`intro-point churn: rebuilding on ${relay.nickname}`);
+
+    try {
+      const { peerInfo, ed25519IdentityKey } = await lookupPeerInfoWithEd25519IdentityKey(
+        this.torClient.dirClient,
+        relay
+      );
+      const intro = generateIntroPointKeys(peerInfo, ed25519IdentityKey);
+      await this.establishIntroPoint(intro, this.perStepTimeoutMs);
+      this.introPoints.push(intro);
+      // Republish so the new IP shows up before clients rotate to a stale
+      // descriptor. Errors are logged inside uploadDescriptor.
+      await this.uploadDescriptor();
+    } catch (err) {
+      this.log(
+        `intro-point churn: replacement failed: ${err instanceof Error ? err.message : err}`
+      );
+    }
   }
 
   /**
@@ -1546,6 +1641,7 @@ export class HiddenServiceHost extends EventEmitter {
       }
     }
     this.introPoints = [];
+    this.recentIntroRelays = [];
     this.torClient = undefined;
     this.emit('stopped');
   }
@@ -1574,8 +1670,20 @@ export interface PublishHiddenServiceOptions {
    * (`consensus`, `dirClient`, `buildCircuitToTarget`).
    */
   torClient: TorClient<any>;
-  /** Virtual port the onion service will accept BEGIN cells for. */
-  port: number;
+  /**
+   * Virtual port(s) the onion service will accept BEGIN cells for. Pass a
+   * single number for a single-port service or an array for multi-port
+   * (real services routinely advertise more than one HiddenServicePort).
+   * Ignored when {@link acceptPort} is set.
+   */
+  port: number | number[];
+  /**
+   * Optional callback that overrides the default `port` membership check.
+   * Receives each BEGIN cell's destination port and must return true to
+   * accept. Use this when the set of acceptable ports is dynamic, or when
+   * you want a wildcard service.
+   */
+  acceptPort?: (port: number) => boolean;
   /** Called once per accepted incoming stream (one per BEGIN). */
   onConnection: (stream: CircuitStream) => void;
   /**
@@ -1614,10 +1722,32 @@ export interface HsHost {
  * `torClient` is not destroyed; the caller owns it.
  */
 export async function publishHiddenService(opts: PublishHiddenServiceOptions): Promise<HsHost> {
-  const { torClient, port, onConnection, identityKey, log } = opts;
-  if (port <= 0 || port > 0xffff) {
-    throw new Error(`Invalid port ${port}`);
+  const { torClient, port, acceptPort, onConnection, identityKey, log } = opts;
+
+  // Resolve the effective accept-port policy. When `acceptPort` is given it
+  // wins; otherwise we build a closure over the (single or array) `port`
+  // value. Validate every port in the static set so a typo fails fast rather
+  // than silently producing an unreachable service.
+  let acceptPortFn: (p: number) => boolean;
+  if (acceptPort) {
+    if (typeof acceptPort !== 'function') {
+      throw new Error('acceptPort must be a function');
+    }
+    acceptPortFn = acceptPort;
+  } else {
+    const portList = Array.isArray(port) ? port : [port];
+    if (portList.length === 0) {
+      throw new Error('port: at least one port required');
+    }
+    for (const p of portList) {
+      if (!Number.isInteger(p) || p <= 0 || p > 0xffff) {
+        throw new Error(`Invalid port ${p}`);
+      }
+    }
+    const portSet = new Set(portList);
+    acceptPortFn = (p) => portSet.has(p);
   }
+
   if (typeof onConnection !== 'function') {
     throw new Error('onConnection must be a function');
   }
@@ -1628,7 +1758,7 @@ export async function publishHiddenService(opts: PublishHiddenServiceOptions): P
 
   const constructorOpts = log ? { log } : {};
   const host = new HiddenServiceHost(keys, constructorOpts);
-  host.setAcceptPort((p) => p === port);
+  host.setAcceptPort(acceptPortFn);
   host.setOnConnection(onConnection);
 
   const startOpts: Parameters<HiddenServiceHost['start']>[1] = {};
