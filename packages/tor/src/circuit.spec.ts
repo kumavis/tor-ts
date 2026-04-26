@@ -176,3 +176,17 @@ test('CircuitStream: late wait() after destroy(err) still observes the rejection
   stream.destroy(new Error('observed-late'));
   await t.throwsAsync(stream.connectionLatch.wait(), { message: 'observed-late' });
 });
+
+test('CircuitStream: destroy(err) after connection succeeded does not throw', async (t) => {
+  const stream = new CircuitStream();
+  stream.connectionLatch.resolve();
+
+  // PromiseLatch.reject() on an already-resolved latch would throw; destroy()
+  // must guard the call so a late RELAY_END after a successful RELAY_CONNECTED
+  // doesn't crash the destroy path.
+  t.notThrows(() => stream.destroy(new Error('late RELAY_END')));
+
+  // Original resolution is preserved — the connection was successful.
+  await stream.connectionLatch.wait();
+  t.true(stream.destroyed);
+});

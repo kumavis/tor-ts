@@ -499,7 +499,14 @@ export class CircuitStream extends EventEmitter {
     if (this.destroyed) return;
     this.destroyed = true;
     if (err) {
-      this.connectionLatch.reject(err);
+      // Guard the latch settlement: if RELAY_CONNECTED already arrived we've
+      // resolved it, and a second settle attempt would throw. A late destroy
+      // after a successful connect is legitimate (e.g. exit-policy
+      // RELAY_END) — just emit the error and leave the connection latch
+      // alone, since the caller already saw the successful resolve.
+      if (this.connectionLatch.isPending()) {
+        this.connectionLatch.reject(err);
+      }
       this.emit('error', err);
     }
     // Wake up any package window waiters with rejection
