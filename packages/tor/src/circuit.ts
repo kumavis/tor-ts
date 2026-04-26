@@ -175,6 +175,13 @@ class Hop {
   ntorEphemeralKeyPublic!: Buffer;
   createFastX?: Buffer;
 
+  /**
+   * The ntor KH for this hop — the 20-byte DIGEST_LEN nonce derived from the
+   * ntor handshake KDF, used as the MAC_KEY for ESTABLISH_INTRO HANDSHAKE_AUTH
+   * (rend-spec-v3 §3.1.1.2 / tor-spec.txt §5.2.2). Only set for ntor hops.
+   */
+  ntorKh?: Buffer;
+
   async encryptForward(data: Buffer) {
     return Buffer.from(await this.cipherPair.forward.key.encrypt(data));
   }
@@ -293,8 +300,13 @@ class Hop {
       serverNtorEphemeralKeyPublic,
       serverNtorAuth,
     });
-    const keyMaterial = KDF_RFC5869(keySeed, 2 * HASH_LEN + 2 * KEY_LEN);
+    // Per tor-spec.txt §5.2.2 the ntor KDF emits Df, Db, Kf, Kb followed by a
+    // DIGEST_LEN trailing nonce that takes the place of KH for the hidden
+    // service protocol. We always derive it so HiddenServiceHost can use it
+    // as the MAC_KEY for ESTABLISH_INTRO HANDSHAKE_AUTH.
+    const keyMaterial = KDF_RFC5869(keySeed, 2 * HASH_LEN + 2 * KEY_LEN + HASH_LEN);
     this.cipherPair = makeTor1CipherPairFromKeyMaterial(keyMaterial);
+    this.ntorKh = Buffer.from(keyMaterial.subarray(2 * HASH_LEN + 2 * KEY_LEN));
     this.isConnected = true;
     this.handshakeLatch.resolve();
   }
@@ -598,6 +610,22 @@ export class Circuit extends EventEmitter {
       throw new Error('Circuit has no hops');
     }
     return hop;
+  }
+
+  /**
+   * Return the last hop's ntor KH — the 20-byte trailing nonce from the
+   * ntor KDF, used as the MAC_KEY for the ESTABLISH_INTRO HANDSHAKE_AUTH
+   * field (rend-spec-v3 §3.1.1.2). Throws if the last hop was built with
+   * CREATE_FAST or hasn't completed an ntor handshake yet.
+   */
+  getLastHopNtorKh(): Buffer {
+    const kh = this.lastHop.ntorKh;
+    if (!kh) {
+      throw new Error(
+        'Last hop has no ntorKh — circuit was built with CREATE_FAST or handshake incomplete'
+      );
+    }
+    return kh;
   }
 
   /**
