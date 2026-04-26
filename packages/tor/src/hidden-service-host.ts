@@ -197,6 +197,11 @@ export interface Introduce2Decrypted {
  * where checksum = SHA3-256(".onion checksum" || pubkey || version)[:2].
  */
 export function computeOnionAddress(identityPublicKey: Buffer): string {
+  if (identityPublicKey.length !== 32) {
+    throw new Error(
+      `identityPublicKey must be 32 bytes (ed25519 public key), got ${identityPublicKey.length}`
+    );
+  }
   const version = Buffer.from([0x03]);
   const checksum = sha3(
     Buffer.from('.onion checksum', 'ascii'),
@@ -1068,7 +1073,10 @@ export class HiddenServiceHost extends EventEmitter {
    *  `if (this.running)` check. */
   private starting = false;
   private torClient: TorClient<any> | undefined;
-  private refreshInterval: ReturnType<typeof setInterval> | undefined;
+  /** Pending self-scheduled descriptor-refresh timer (see scheduleDescriptorRefresh). */
+  private refreshTimer: ReturnType<typeof setTimeout> | undefined;
+  /** When the timer was armed and for how long, so unpublish() can clear it. */
+  private descriptorRefreshMs = 30 * 60 * 1000;
   /** Target intro-point count, captured from start()'s options for use by
    *  the churn watchdog (which has to know how many to keep alive). */
   private targetIntroPoints = 3;
@@ -1192,12 +1200,13 @@ export class HiddenServiceHost extends EventEmitter {
       }
 
       this.running = true;
-      this.refreshInterval = setInterval(() => {
-        this.uploadDescriptor().catch((err) =>
-          this.log(`descriptor refresh failed: ${err instanceof Error ? err.message : err}`)
-        );
-      }, descriptorRefreshMs);
-      this.refreshInterval.unref?.();
+      // Self-scheduling setTimeout loop instead of setInterval. Per
+      // HS-HOST-API.md §7 the host runs in a service worker; setInterval
+      // gets aggressively throttled on hidden tabs and the queued ticks
+      // can either pile up or never fire after the tab resumes. A
+      // setTimeout that re-arms after each upload lands ensures we
+      // republish ASAP after a long pause, and never queues a backlog.
+      this.scheduleDescriptorRefresh(descriptorRefreshMs);
 
       this.log(`running at ${this.keys.onionAddress}`);
       succeeded = true;
@@ -1296,6 +1305,30 @@ export class HiddenServiceHost extends EventEmitter {
   }
 
   /**
+   * Schedule the next descriptor refresh `delayMs` from now. After the
+   * upload completes (success or failure), re-arm the same timer with the
+   * same delay. Replaces a setInterval so a long pause (service worker
+   * sleeping a hidden tab) doesn't queue a backlog or skew the cadence —
+   * we just publish ASAP after the wakeup and continue.
+   */
+  private scheduleDescriptorRefresh(delayMs: number): void {
+    this.descriptorRefreshMs = delayMs;
+    this.refreshTimer = setTimeout(() => {
+      // If unpublish() ran between scheduling and firing, bail out.
+      if (!this.running) return;
+      this.uploadDescriptor()
+        .catch((err) =>
+          this.log(`descriptor refresh failed: ${err instanceof Error ? err.message : err}`)
+        )
+        .finally(() => {
+          if (this.running) this.scheduleDescriptorRefresh(this.descriptorRefreshMs);
+        });
+    }, delayMs);
+    // Don't hold the event loop open just for this timer.
+    this.refreshTimer.unref?.();
+  }
+
+  /**
    * Pick a fresh relay, establish a new intro point on it, and republish
    * the descriptor. Idempotent against concurrent calls (skips if we've
    * already recovered to `targetIntroPoints`). Best-effort: on failure,
@@ -1360,10 +1393,6 @@ export class HiddenServiceHost extends EventEmitter {
   /**
    * Build, sign, and POST the descriptor to the first ~6 HSDirs in the
    * consensus. Increments `revisionCounter` so refreshes look fresh.
-   */
-  /**
-   * Build, sign, and POST the descriptor to the first ~6 HSDirs in the
-   * consensus. Increments `revisionCounter` so refreshes look fresh.
    *
    * Returns the number of HSDirs that returned a 2xx. The initial publish
    * in {@link start} treats `0` as fatal so the host doesn't claim to be
@@ -1422,18 +1451,32 @@ export class HiddenServiceHost extends EventEmitter {
 
         const responseChunks: Buffer[] = [];
         await new Promise<void>((resolve, reject) => {
-          const timer = setTimeout(() => {
+          // CircuitStream.destroy(err) emits 'error' (circuit.ts) — if we
+          // don't attach a listener Node throws "Unhandled 'error' event"
+          // and tears down the process. Listen + propagate as a rejection
+          // so the surrounding try/catch logs and skips this HSDir cleanly.
+          const cleanup = () => {
+            clearTimeout(timer);
             stream.off('data', onData);
             stream.off('end', onEnd);
+            stream.off('error', onError);
+          };
+          const timer = setTimeout(() => {
+            cleanup();
             reject(new Error('descriptor upload timeout'));
           }, 30_000);
           const onData = (d: Buffer) => responseChunks.push(Buffer.from(d));
           const onEnd = () => {
-            clearTimeout(timer);
+            cleanup();
             resolve();
+          };
+          const onError = (err: Error) => {
+            cleanup();
+            reject(err);
           };
           stream.on('data', onData);
           stream.once('end', onEnd);
+          stream.once('error', onError);
         });
 
         const responseText = Buffer.concat(responseChunks).toString('utf8');
@@ -1579,6 +1622,25 @@ export class HiddenServiceHost extends EventEmitter {
       const portStr = lastColon >= 0 ? addrPort.slice(lastColon + 1) : addrPort;
       const port = Number.parseInt(portStr, 10);
 
+      // Validate port is a real integer in the IANA range BEFORE consulting
+      // the user's acceptPort callback. Otherwise a malformed BEGIN like
+      // "host:abc" would yield port=NaN, which: (a) might bypass naive
+      // user-supplied acceptPort closures (`p === 80` is false for NaN —
+      // safe — but `p > 0` is false too — also safe — but `ports.has(p)`
+      // could behave unexpectedly), and (b) might throw inside a
+      // user-supplied acceptPort that doesn't expect non-finite input.
+      if (!Number.isInteger(port) || port < 1 || port > 65535) {
+        this.log(`refusing BEGIN streamId=${evt.streamId} for invalid port=${portStr}`);
+        circuit
+          .sendRelayMessage({
+            streamId: evt.streamId,
+            relayCommand: RelayCell.END,
+            data: Buffer.from([6]), // REASON_NOTDIRECTORY
+          })
+          .catch(() => undefined);
+        return;
+      }
+
       if (!this.acceptPort(port)) {
         this.log(`refusing BEGIN streamId=${evt.streamId} for port=${port} (filtered)`);
         // Reject with REASON_NOTDIRECTORY (6) — generic "we don't want this".
@@ -1643,12 +1705,16 @@ export class HiddenServiceHost extends EventEmitter {
    * rejects. The injected TorClient is NOT destroyed — the caller owns it.
    */
   async unpublish(): Promise<void> {
-    if (!this.running && this.introPoints.length === 0 && !this.refreshInterval) return;
+    if (!this.running && this.introPoints.length === 0 && !this.refreshTimer) return;
     this.log('stopping hidden service');
+    // Order matters: flip running BEFORE clearing the timer so the
+    // self-scheduling refresh callback (if it fires concurrently with
+    // unpublish) sees `running===false` and bails out rather than
+    // re-arming itself.
     this.running = false;
-    if (this.refreshInterval) {
-      clearInterval(this.refreshInterval);
-      this.refreshInterval = undefined;
+    if (this.refreshTimer) {
+      clearTimeout(this.refreshTimer);
+      this.refreshTimer = undefined;
     }
     for (const intro of this.introPoints) {
       try {
