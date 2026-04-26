@@ -329,28 +329,24 @@ export function buildSocksReply(
 
   // Always reply with an IPv4 bound-address; that matches the upstream
   // tor SocksPort behaviour and is sufficient for CONNECT.
-  const parts = boundAddress.split('.').map((p) => parseInt(p, 10));
-  const [p0, p1, p2, p3] = parts;
-  const isValidIPv4 =
-    parts.length === 4 &&
-    p0 !== undefined &&
-    p1 !== undefined &&
-    p2 !== undefined &&
-    p3 !== undefined &&
-    !isNaN(p0) &&
-    !isNaN(p1) &&
-    !isNaN(p2) &&
-    !isNaN(p3);
+  //
+  // We delegate the validity check to `net.isIPv4` so anything outside
+  // the dotted-quad form — including out-of-range octets like 999.0.0.1
+  // — collapses to the 0.0.0.0 fallback rather than being silently
+  // truncated mod-256 by `Buffer.from([..., 999, ...])`.
+  const [p0, p1, p2, p3] = isIPv4(boundAddress)
+    ? boundAddress.split('.').map((p) => parseInt(p, 10))
+    : [0, 0, 0, 0];
 
   return Buffer.from([
     SOCKS_VERSION,
     reply,
     0x00, // reserved
     SocksAddressType.IPv4,
-    isValidIPv4 ? (p0 as number) : 0,
-    isValidIPv4 ? (p1 as number) : 0,
-    isValidIPv4 ? (p2 as number) : 0,
-    isValidIPv4 ? (p3 as number) : 0,
+    p0!,
+    p1!,
+    p2!,
+    p3!,
     portHi,
     portLo,
   ]);
@@ -523,7 +519,11 @@ export function formatTorDestination(addr: string, port: number): string {
   return `${addr}:${port}`;
 }
 
-const enum ConnectionPhase {
+// Plain enum (not `const enum`) so the symbol survives type-erasure transforms
+// like Node's `--experimental-transform-types`, esbuild, and swc — `const enum`
+// requires the consumer's toolchain to inline references at compile time, which
+// not every consumer does.
+enum ConnectionPhase {
   Greeting,
   Auth,
   Request,
@@ -531,6 +531,15 @@ const enum ConnectionPhase {
   Relaying,
   Closed,
 }
+
+/**
+ * Maximum total bytes the SOCKS handshake buffer is allowed to hold. Real
+ * SOCKS5 handshakes are bounded above at ~1 KiB (greeting ≤ 257, user/pass
+ * sub-negotiation ≤ 513, request ≤ 262). 4 KiB is generous slack while still
+ * giving us a hard cap against a misbehaving client that streams unbounded
+ * data without ever completing a frame.
+ */
+const HANDSHAKE_BUFFER_LIMIT = 4 * 1024;
 
 /**
  * SOCKS5 proxy server that routes accepted connections through a Tor
@@ -618,16 +627,33 @@ export class SocksProxyServer extends EventEmitter {
     // applies as a single chain rather than per-event.
     let writeChain: Promise<void> = Promise.resolve();
 
-    const closeAll = (err?: Error) => {
-      if (phase === ConnectionPhase.Closed) return;
+    // State cleanup is split from socket cleanup so the `'close'` listener
+    // can run the state half *without* re-entering `socket.destroy()` (the
+    // socket is already closing) — and so callers can safely invoke
+    // `closeAll()` after a graceful `socket.end()` without racing the FIN
+    // with a `destroy()`. `cleanupConnection` is one-shot: it returns true
+    // the first time, false on every subsequent call.
+    const cleanupConnection = (): boolean => {
+      if (phase === ConnectionPhase.Closed) return false;
       phase = ConnectionPhase.Closed;
       this.connections.delete(socket);
-      if (!socket.destroyed) {
-        if (err) socket.destroy(err);
-        else socket.destroy();
-      }
       if (circuitStream && !circuitStream.destroyed) {
         circuitStream.destroy();
+      }
+      return true;
+    };
+
+    const closeAll = (err?: Error) => {
+      if (!cleanupConnection()) return;
+      if (socket.destroyed) return;
+      if (err) {
+        socket.destroy(err);
+      } else if (!socket.writableEnded) {
+        // Either nothing's been written yet or the catch path hasn't
+        // half-closed; emit a graceful FIN. If `socket.end()` was already
+        // called by the catch path, leave it alone — destroying after end
+        // races the FIN off the wire.
+        socket.end();
       }
     };
 
@@ -635,13 +661,36 @@ export class SocksProxyServer extends EventEmitter {
       this.emit('connectionError', err);
       closeAll(err);
     });
-    socket.on('close', () => closeAll());
+    socket.on('close', () => {
+      // Socket already closed; just run the state half and skip any
+      // further socket I/O.
+      cleanupConnection();
+    });
 
     const replyFatal = (reply: SocksReply) => {
       if (!socket.destroyed) {
         socket.write(buildSocksReply(reply));
         socket.end();
       }
+    };
+
+    /**
+     * Append `chunk` to the handshake `buffer`, with a hard cap so a
+     * misbehaving client can't grow it without bound (no complete frame =
+     * no opportunity to drain). On overflow we close with a generic
+     * failure REP — same shape as any other parse-time failure.
+     */
+    const appendToHandshakeBuffer = (chunk: Buffer): boolean => {
+      if (buffer.length + chunk.length > HANDSHAKE_BUFFER_LIMIT) {
+        this.emit(
+          'connectionError',
+          new Error(`SOCKS handshake buffer overflow (>${HANDSHAKE_BUFFER_LIMIT} bytes); closing`)
+        );
+        replyFatal(SocksReply.GENERAL_FAILURE);
+        return false;
+      }
+      buffer = Buffer.concat([buffer, chunk]);
+      return true;
     };
 
     socket.on('data', (chunk: Buffer) => {
@@ -676,7 +725,7 @@ export class SocksProxyServer extends EventEmitter {
         return;
       }
 
-      buffer = Buffer.concat([buffer, chunk]);
+      if (!appendToHandshakeBuffer(chunk)) return;
 
       try {
         if (phase === ConnectionPhase.Greeting) {

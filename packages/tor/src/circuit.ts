@@ -1127,6 +1127,16 @@ export class Circuit extends EventEmitter {
     stream.write = async () => {
       throw new Error(`Cannot write to RESOLVE stream ${streamId}`);
     };
+    // RESOLVE streams are one-shot: the exit sends RESOLVED + END and is
+    // done with us. Drop the stream from `this.streams[]` once it ends so
+    // a long-lived circuit doing many resolves doesn't accumulate dead
+    // entries. (CONNECT-style streams keep the existing behaviour of
+    // staying in the array until `circuit.destroy()`; their `streamId`s
+    // are unique so the leak is harmless.)
+    stream.once('end', () => {
+      const i = this.streams.indexOf(stream);
+      if (i >= 0) this.streams.splice(i, 1);
+    });
     return new Promise<RelayResolvedRecord[]>((resolve, reject) => {
       const cleanup = () => {
         stream.off('resolved', onResolved);

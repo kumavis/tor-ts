@@ -198,71 +198,119 @@ async function main() {
  * Minimal SOCKS5 client: greeting → CONNECT → HTTP request → buffer body
  * → return as text. Kept self-contained on purpose so this test does not
  * depend on the in-tree SOCKS implementation for the client side.
+ *
+ * Frame-by-frame reading: rather than assuming the 2-byte greeting and
+ * 10-byte CONNECT replies each arrive in their own `'data'` event, we
+ * accumulate inbound bytes into a queue and pull off exactly the number
+ * we need at each step. TCP doesn't preserve write boundaries, and a
+ * fragmented or merged reply would otherwise misclassify reply bytes as
+ * HTTP body bytes.
  */
 async function makeRequestThroughSocks(
   socksPort: number,
   targetHost: string,
   targetPort: number
 ): Promise<string> {
-  return new Promise((resolve, reject) => {
-    const socket = net.connect(socksPort, '127.0.0.1', () => {
-      socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.NO_AUTH]));
-    });
+  const socket = net.connect(socksPort, '127.0.0.1');
+  socket.setTimeout(60_000);
 
-    let state: 'greeting' | 'request' | 'connected' = 'greeting';
-    let responseData = Buffer.alloc(0);
+  let queued: Buffer = Buffer.alloc(0);
+  let waiter: { n: number; resolve: (b: Buffer) => void; reject: (e: Error) => void } | undefined;
+  let endError: Error | undefined;
+  let ended = false;
 
-    socket.setTimeout(60_000);
-    socket.on('timeout', () => {
-      socket.destroy();
-      reject(new Error('SOCKS client socket timeout'));
-    });
+  const tryDeliver = () => {
+    if (!waiter) return;
+    if (queued.length >= waiter.n) {
+      const out = queued.subarray(0, waiter.n);
+      queued = queued.subarray(waiter.n);
+      const w = waiter;
+      waiter = undefined;
+      w.resolve(out);
+    } else if (ended) {
+      const w = waiter;
+      waiter = undefined;
+      w.reject(endError ?? new Error('SOCKS client socket closed before frame complete'));
+    }
+  };
 
-    socket.on('data', (data: Buffer) => {
-      if (state === 'greeting') {
-        if (data.length < 2 || data[0] !== SOCKS_VERSION || data[1] !== SocksAuthMethod.NO_AUTH) {
-          socket.destroy();
-          reject(new Error(`SOCKS greeting failed: ${data.toString('hex')}`));
-          return;
-        }
-        const hostBytes = Buffer.from(targetHost, 'ascii');
-        const request = Buffer.concat([
-          Buffer.from([
-            SOCKS_VERSION,
-            SocksCommand.CONNECT,
-            0x00,
-            SocksAddressType.DOMAIN,
-            hostBytes.length,
-          ]),
-          hostBytes,
-          Buffer.from([(targetPort >> 8) & 0xff, targetPort & 0xff]),
-        ]);
-        socket.write(request);
-        state = 'request';
-      } else if (state === 'request') {
-        if (data.length < 2 || data[0] !== SOCKS_VERSION || data[1] !== SocksReply.SUCCEEDED) {
-          socket.destroy();
-          reject(new Error(`SOCKS CONNECT failed: ${data.toString('hex')}`));
-          return;
-        }
-        const httpRequest =
-          `GET / HTTP/1.1\r\n` +
-          `Host: ${targetHost}:${targetPort}\r\n` +
-          `Connection: close\r\n` +
-          `\r\n`;
-        socket.write(httpRequest);
-        state = 'connected';
-      } else {
-        responseData = Buffer.concat([responseData, data]);
+  const readN = (n: number): Promise<Buffer> =>
+    new Promise<Buffer>((resolve, reject) => {
+      if (waiter) {
+        reject(new Error('readN: only one outstanding read at a time'));
+        return;
       }
+      waiter = { n, resolve, reject };
+      tryDeliver();
     });
 
-    socket.on('end', () => {
-      resolve(responseData.toString('utf8'));
-    });
-
-    socket.on('error', reject);
+  socket.on('data', (chunk: Buffer) => {
+    queued = Buffer.concat([queued, chunk]);
+    tryDeliver();
   });
+  socket.on('end', () => {
+    ended = true;
+    tryDeliver();
+  });
+  socket.on('timeout', () => {
+    endError = new Error('SOCKS client socket timeout');
+    socket.destroy();
+  });
+  socket.on('error', (err) => {
+    endError = err;
+    if (waiter) {
+      const w = waiter;
+      waiter = undefined;
+      w.reject(err);
+    }
+  });
+
+  await once(socket, 'connect');
+  socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.NO_AUTH]));
+
+  const greetingResp = await readN(2);
+  if (greetingResp[0] !== SOCKS_VERSION || greetingResp[1] !== SocksAuthMethod.NO_AUTH) {
+    socket.destroy();
+    throw new Error(`SOCKS greeting failed: ${greetingResp.toString('hex')}`);
+  }
+
+  const hostBytes = Buffer.from(targetHost, 'ascii');
+  socket.write(
+    Buffer.concat([
+      Buffer.from([
+        SOCKS_VERSION,
+        SocksCommand.CONNECT,
+        0x00,
+        SocksAddressType.DOMAIN,
+        hostBytes.length,
+      ]),
+      hostBytes,
+      Buffer.from([(targetPort >> 8) & 0xff, targetPort & 0xff]),
+    ])
+  );
+
+  // SOCKS reply with IPv4 ATYP is exactly 10 bytes (ver, rep, rsv, atyp,
+  // 4-byte BND.ADDR, 2-byte BND.PORT). The server always replies with
+  // ATYP=IPv4 for CONNECT, so this length is fixed.
+  const connectResp = await readN(10);
+  if (connectResp[0] !== SOCKS_VERSION || connectResp[1] !== SocksReply.SUCCEEDED) {
+    socket.destroy();
+    throw new Error(`SOCKS CONNECT failed: ${connectResp.toString('hex')}`);
+  }
+
+  socket.write(
+    `GET / HTTP/1.1\r\n` +
+      `Host: ${targetHost}:${targetPort}\r\n` +
+      `Connection: close\r\n` +
+      `\r\n`
+  );
+
+  // Drain everything until the server closes — this is the HTTP body.
+  await new Promise<void>((resolve, reject) => {
+    socket.once('end', resolve);
+    socket.once('error', reject);
+  });
+  return Buffer.concat([queued]).toString('utf8');
 }
 
 main().then(

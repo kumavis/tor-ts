@@ -300,6 +300,23 @@ test('buildSocksReply: high port encodes big-endian', (t) => {
   t.is(reply[9], 0xff);
 });
 
+test('buildSocksReply: out-of-range octets fall back to 0.0.0.0 (no mod-256 truncation)', (t) => {
+  // 999 mod 256 = 231 — the old code would have silently emitted that;
+  // the validating version falls back cleanly to 0.0.0.0.
+  const reply = buildSocksReply(SocksReply.SUCCEEDED, '999.0.0.1', 80);
+  t.deepEqual(reply, Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0x00, 0x50]));
+});
+
+test('buildSocksReply: negative octets fall back to 0.0.0.0', (t) => {
+  const reply = buildSocksReply(SocksReply.SUCCEEDED, '-1.0.0.0', 80);
+  t.deepEqual(reply, Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0x00, 0x50]));
+});
+
+test('buildSocksReply: empty string falls back to 0.0.0.0', (t) => {
+  const reply = buildSocksReply(SocksReply.SUCCEEDED, '', 80);
+  t.deepEqual(reply, Buffer.from([0x05, 0x00, 0x00, 0x01, 0, 0, 0, 0, 0x00, 0x50]));
+});
+
 // =============================================================================
 // formatTorDestination + socksReplyForOpenError
 // =============================================================================
@@ -857,6 +874,51 @@ test('SocksProxyServer: stop() closes active client sockets', async (t) => {
   await server.stop();
   await closed;
   t.pass();
+});
+
+test('SocksProxyServer: handshake buffer overflow → GENERAL_FAILURE + close', async (t) => {
+  const fake = new FakeCircuit();
+  const { server, port } = await startServer(fake);
+  try {
+    const socket = net.connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    socket.on('error', () => {
+      // Expected once the server ends — keep the test from crashing on EPIPE.
+    });
+
+    const errs: Error[] = [];
+    server.on('connectionError', (e: Error) => errs.push(e));
+
+    // Send a single chunk that's well over the 4 KiB handshake buffer cap.
+    // Byte 0 (= 0x05) is a valid SOCKS5 version, byte 1 (= 0xff) promises
+    // 255 methods, so the greeting frame won't be complete until we've
+    // received 257 bytes. Before that point, appending 5 KiB at once
+    // pushes the buffer past 4 KiB and the overflow guard fires —
+    // appendToHandshakeBuffer emits a typed `connectionError` and writes
+    // GENERAL_FAILURE.
+    const blob = Buffer.concat([Buffer.from([SOCKS_VERSION, 0xff]), Buffer.alloc(5000, 0xfe)]);
+    socket.write(blob);
+
+    // Drain whatever the server writes, then wait for the close.
+    let received = Buffer.alloc(0);
+    socket.on('data', (chunk: Buffer) => {
+      received = Buffer.concat([received, chunk]);
+    });
+    await once(socket, 'close');
+
+    // The server must reply with GENERAL_FAILURE (10 bytes, IPv4 ATYP, all-zero
+    // bound address). On TCP loopback our single 5 KiB write arrives in one
+    // chunk, so the overflow guard is what fires; but even if the kernel were
+    // to split it differently, the server still must surface a failure REP.
+    t.is(received[0], SOCKS_VERSION);
+    t.is(received[1], SocksReply.GENERAL_FAILURE);
+    t.true(
+      errs.some((e) => /handshake buffer overflow/.test(e.message)),
+      `expected at least one connectionError matching /handshake buffer overflow/, got: ${errs.map((e) => e.message).join(', ')}`
+    );
+  } finally {
+    await server.stop();
+  }
 });
 
 // =============================================================================
