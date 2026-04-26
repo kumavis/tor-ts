@@ -318,7 +318,7 @@ async function fetchViaTorInternal(
   const stream = circuit.openStream(target);
 
   // Wait for connection
-  await stream.connectionPromiseKit.promise;
+  await stream.connectionLatch.wait();
 
   // For HTTPS, wrap with TLS. For HTTP, use raw stream.
   let transport: Transport;
