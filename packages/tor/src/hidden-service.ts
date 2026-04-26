@@ -1,18 +1,24 @@
 import {
   x25519,
   ed25519,
-  sha3_256,
-  shake256,
   makeAes256CtrKey,
   randomBytes,
   aes256CtrXor,
   ed25519VerifySync,
+  // rend-spec-v3 helpers (same impl shared by hidden-service-host.ts):
+  sha3,
+  kdfShake256,
+  u64be,
+  mac,
+  dMac,
+  bytesToBigIntLE,
+  createSha3_256Hash,
 } from 'tor-crypto';
 import { BytesReader, shuffleInPlace } from './util.ts';
 import { type LinkSpecifier, LinkSpecifierTypes, RELAY_PAYLOAD_LEN } from './messaging.ts';
 import { RelayCell } from './relay-cell.ts';
 import { parseEd25519Certificate, CertTypes } from './cert.ts';
-import { Circuit, type CircuitCipherPair, type PeerInfo, type CopyableHash } from './circuit.ts';
+import { Circuit, type CircuitCipherPair, type PeerInfo } from './circuit.ts';
 import { pickRelayWithFlags } from './build-circuit/util.ts';
 import { DirectoryClient, lookupPeerInfo } from './directory-client.ts';
 import {
@@ -568,76 +574,6 @@ export function getFetchSrv(
     return consensus.sharedRandCurrentValue ?? disasterSrv;
   }
   return consensus.sharedRandPreviousValue ?? disasterSrv;
-}
-
-function sha3(...parts: Buffer[]): Buffer {
-  return Buffer.from(sha3_256(Buffer.concat(parts)));
-}
-
-/**
- * Browser-compatible SHA3-256 hash wrapper that provides Node.js-like interface.
- * Uses tor-crypto internally, which works in both Node.js and browsers.
- */
-class Sha3_256Hash implements CopyableHash {
-  private accumulated: Uint8Array[] = [];
-
-  update(data: Buffer | Uint8Array): this {
-    // IMPORTANT: Copy the data to avoid issues if the caller mutates the buffer later.
-    // This is critical for relay cell digest computation where the integrity field
-    // is set after the digest is updated.
-    this.accumulated.push(Uint8Array.from(data));
-    return this;
-  }
-
-  copy(): Sha3_256Hash {
-    const cloned = new Sha3_256Hash();
-    cloned.accumulated = [...this.accumulated];
-    return cloned;
-  }
-
-  digest(): Buffer {
-    const totalLength = this.accumulated.reduce((sum, arr) => sum + arr.length, 0);
-    const combined = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const arr of this.accumulated) {
-      combined.set(arr, offset);
-      offset += arr.length;
-    }
-    return Buffer.from(sha3_256(combined));
-  }
-}
-
-function createSha3_256Hash(): Sha3_256Hash {
-  return new Sha3_256Hash();
-}
-
-function bytesToBigIntLE(bytes: Uint8Array): bigint {
-  let n = 0n;
-  for (let i = bytes.length - 1; i >= 0; i--) {
-    n = (n << 8n) | BigInt(bytes[i] ?? 0);
-  }
-  return n;
-}
-
-function kdfShake256(input: Buffer, length: number): Buffer {
-  return Buffer.from(shake256(input, { dkLen: length }));
-}
-
-function u64be(n: bigint): Buffer {
-  const b = Buffer.alloc(8);
-  b.writeBigUInt64BE(n);
-  return b;
-}
-
-function mac(key: Buffer, message: Buffer): Buffer {
-  const keyLen = u64be(BigInt(key.length));
-  return sha3(keyLen, key, message);
-}
-
-function dMac(macKey: Buffer, salt: Buffer, encrypted: Buffer): Buffer {
-  const macKeyLen = u64be(BigInt(macKey.length));
-  const saltLen = u64be(BigInt(salt.length));
-  return sha3(macKeyLen, macKey, saltLen, salt, encrypted);
 }
 
 export function toBase64UrlNoPad(buf: Buffer): string {

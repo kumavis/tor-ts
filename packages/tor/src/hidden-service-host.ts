@@ -24,12 +24,21 @@ import { EventEmitter } from 'events';
 import {
   x25519,
   ed25519,
-  sha3_256,
-  shake256,
   randomBytes,
   ed25519VerifySync,
   makeAes256CtrKey,
   aes256CtrXor,
+  // rend-spec-v3 helpers (same impl shared with the client in hidden-service.ts):
+  sha3,
+  kdfShake256,
+  u64be,
+  mac,
+  dMac,
+  bytesToBigIntLE,
+  bigIntToBytesLE,
+  modInverse,
+  createSha3_256Hash,
+  base32EncodeLowerNoPad,
 } from 'tor-crypto';
 import * as ed from '@noble/ed25519';
 import { sha512 } from '@noble/hashes/sha512';
@@ -41,7 +50,6 @@ import {
   CircuitStream,
   type CircuitCipherPair,
   type PeerInfo,
-  type CopyableHash,
 } from './circuit.ts';
 import { type LinkSpecifier, LinkSpecifierTypes } from './messaging.ts';
 import { pickRelayWithFlags } from './build-circuit/util.ts';
@@ -80,98 +88,6 @@ const EXT_TYPE_SIGNED_WITH_ED25519_KEY = 0x04;
 
 // hs-ntor protocol id (rend-spec-v3 §3.3)
 const HS_NTOR_PROTOID = Buffer.from('tor-hs-ntor-curve25519-sha3-256-1', 'ascii');
-
-// ============================================================================
-// Small crypto helpers (mirror hidden-service.ts; intentionally duplicated to
-// avoid widening that file's public surface)
-// ============================================================================
-
-function sha3(...parts: Buffer[]): Buffer {
-  return Buffer.from(sha3_256(Buffer.concat(parts)));
-}
-
-function kdfShake256(input: Buffer, length: number): Buffer {
-  return Buffer.from(shake256(input, { dkLen: length }));
-}
-
-function u64be(n: bigint): Buffer {
-  const b = Buffer.alloc(8);
-  b.writeBigUInt64BE(n);
-  return b;
-}
-
-/** SHA3-256 MAC per rend-spec-v3 §0.3: SHA3_256(htonll(len(k)) | k | m). */
-function mac(key: Buffer, message: Buffer): Buffer {
-  return sha3(u64be(BigInt(key.length)), key, message);
-}
-
-/**
- * Domain-separated MAC for descriptor layers (rend-spec-v3 §2.5.1.1):
- * SHA3_256(htonll(len(macKey)) | macKey | htonll(len(salt)) | salt | encrypted).
- */
-function dMac(macKey: Buffer, salt: Buffer, encrypted: Buffer): Buffer {
-  return sha3(u64be(BigInt(macKey.length)), macKey, u64be(BigInt(salt.length)), salt, encrypted);
-}
-
-function bytesToBigIntLE(bytes: Uint8Array): bigint {
-  let n = 0n;
-  for (let i = bytes.length - 1; i >= 0; i--) {
-    n = (n << 8n) | BigInt(bytes[i] ?? 0);
-  }
-  return n;
-}
-
-function bigIntToBytesLE(n: bigint, length: number): Buffer {
-  const out = Buffer.alloc(length);
-  let temp = n;
-  for (let i = 0; i < length; i++) {
-    out[i] = Number(temp & 0xffn);
-    temp >>= 8n;
-  }
-  return out;
-}
-
-/** Modular inverse via Fermat's little theorem; p must be prime. */
-function modInverse(a: bigint, p: bigint): bigint {
-  // a^(p-2) mod p
-  let result = 1n;
-  let base = ((a % p) + p) % p;
-  let exp = p - 2n;
-  while (exp > 0n) {
-    if (exp & 1n) result = (result * base) % p;
-    base = (base * base) % p;
-    exp >>= 1n;
-  }
-  return result;
-}
-
-/** Browser-compatible CopyableHash backed by SHA3-256. */
-class Sha3_256Hash implements CopyableHash {
-  private accumulated: Uint8Array[] = [];
-  update(data: Buffer | Uint8Array): this {
-    this.accumulated.push(Uint8Array.from(data));
-    return this;
-  }
-  copy(): Sha3_256Hash {
-    const cloned = new Sha3_256Hash();
-    cloned.accumulated = [...this.accumulated];
-    return cloned;
-  }
-  digest(): Buffer {
-    const totalLength = this.accumulated.reduce((s, a) => s + a.length, 0);
-    const combined = new Uint8Array(totalLength);
-    let offset = 0;
-    for (const a of this.accumulated) {
-      combined.set(a, offset);
-      offset += a.length;
-    }
-    return Buffer.from(sha3_256(combined));
-  }
-}
-
-function createSha3_256Hash(): Sha3_256Hash {
-  return new Sha3_256Hash();
-}
 
 /**
  * Convert a curve25519 (Montgomery) public key to its ed25519 (Edwards)
@@ -271,24 +187,6 @@ export interface Introduce2Decrypted {
   onionKeyType: number;
   onionKey: Buffer;
   linkSpecifiers: LinkSpecifier[];
-}
-
-/** RFC4648 base32 alphabet, lowercase, unpadded. */
-function base32EncodeLowerNoPad(buf: Buffer): string {
-  const alphabet = 'abcdefghijklmnopqrstuvwxyz234567';
-  let bits = 0;
-  let value = 0;
-  let out = '';
-  for (let i = 0; i < buf.length; i++) {
-    value = (value << 8) | (buf[i] ?? 0);
-    bits += 8;
-    while (bits >= 5) {
-      out += alphabet[(value >>> (bits - 5)) & 31];
-      bits -= 5;
-    }
-  }
-  if (bits > 0) out += alphabet[(value << (5 - bits)) & 31];
-  return out;
 }
 
 // ============================================================================
@@ -1172,6 +1070,10 @@ export class HiddenServiceHost extends EventEmitter {
   private introPoints: IntroductionPoint[] = [];
   private revisionCounter: bigint = 0n;
   private running = false;
+  /** Set synchronously at the top of start(); cleared when start() resolves
+   *  or rejects. Prevents concurrent start() calls from racing past the
+   *  `if (this.running)` check. */
+  private starting = false;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private torClient: TorClient<any> | undefined;
   private refreshInterval: ReturnType<typeof setInterval> | undefined;
@@ -1209,7 +1111,13 @@ export class HiddenServiceHost extends EventEmitter {
     const perStepTimeoutMs = options.perStepTimeoutMs ?? 120_000;
     const descriptorRefreshMs = options.descriptorRefreshMs ?? 30 * 60 * 1000;
 
-    if (this.running) throw new Error('Hidden service is already running');
+    // `running` only flips true at the very end of start(); guard against
+    // concurrent start() calls racing past `if (this.running)` by also
+    // checking `starting` (set synchronously before the first await).
+    if (this.running || this.starting) {
+      throw new Error('Hidden service is already running');
+    }
+    this.starting = true;
 
     this.torClient = torClient;
     this.log(`starting hidden service ${this.keys.onionAddress}`);
@@ -1264,17 +1172,23 @@ export class HiddenServiceHost extends EventEmitter {
     this.log(`established ${this.introPoints.length} introduction points`);
 
     // 3. Upload the descriptor.
-    await this.uploadDescriptor();
+    try {
+      await this.uploadDescriptor();
 
-    this.running = true;
-    this.refreshInterval = setInterval(() => {
-      this.uploadDescriptor().catch((err) =>
-        this.log(`descriptor refresh failed: ${err instanceof Error ? err.message : err}`)
-      );
-    }, descriptorRefreshMs);
-    this.refreshInterval.unref?.();
+      this.running = true;
+      this.refreshInterval = setInterval(() => {
+        this.uploadDescriptor().catch((err) =>
+          this.log(`descriptor refresh failed: ${err instanceof Error ? err.message : err}`)
+        );
+      }, descriptorRefreshMs);
+      this.refreshInterval.unref?.();
 
-    this.log(`running at ${this.keys.onionAddress}`);
+      this.log(`running at ${this.keys.onionAddress}`);
+    } finally {
+      // Always clear the start-in-progress latch — both on success (running
+      // is now true) and on failure (caller may want to retry start()).
+      this.starting = false;
+    }
   }
 
   /** Number of intro points whose ESTABLISH_INTRO is currently acknowledged. */
@@ -1315,13 +1229,20 @@ export class HiddenServiceHost extends EventEmitter {
 
     // Wire up the INTRODUCE2 handler. We don't await — INTRODUCE2 cells are
     // unsolicited from our POV. Errors are logged but don't tear down the IP.
-    introCircuit.on('relay', (evt) => {
+    // The listener is detached on circuit 'destroyed' so a torn-down intro
+    // circuit doesn't keep `intro` + `this` alive in a closure indefinitely.
+    const onIntroduce2 = (evt: { streamId: number; relayCommand: number; data: Buffer }) => {
       if (evt.relayCommand === RelayCell.INTRODUCE2) {
         this.handleIntroduce2(intro, evt.data).catch((err) => {
           this.log(`INTRODUCE2 handling failed: ${err instanceof Error ? err.message : err}`);
           this.emit('introduce2-error', err);
         });
       }
+    };
+    introCircuit.on('relay', onIntroduce2);
+    introCircuit.once('destroyed', () => {
+      introCircuit.off('relay', onIntroduce2);
+      intro.established = false;
     });
   }
 
@@ -1358,9 +1279,14 @@ export class HiddenServiceHost extends EventEmitter {
 
     let uploads = 0;
     for (const hsdir of hsdirNodes.slice(0, 6)) {
+      // The circuit is allocated inside the try and torn down in the finally
+      // so an exception anywhere between buildCircuitToTarget() and the
+      // success path doesn't leak it (was the bug — circuit.destroy() was
+      // only on the success branch).
+      let circuit: Circuit | undefined;
       try {
         const peerInfo = await lookupPeerInfo(this.torClient.dirClient, hsdir);
-        const circuit = await this.torClient.buildCircuitToTarget(peerInfo);
+        circuit = await this.torClient.buildCircuitToTarget(peerInfo);
 
         const stream = await circuit.openDirectoryStream();
         const body = Buffer.from(descriptor, 'utf8');
@@ -1395,13 +1321,20 @@ export class HiddenServiceHost extends EventEmitter {
           uploads++;
           this.log(`uploaded to HSDir ${hsdir.nickname}`);
         } else {
-          this.log(`HSDir ${hsdir.nickname} rejected: ${responseText.split('\r\n')[0] ?? '(no response)'}`);
+          this.log(
+            `HSDir ${hsdir.nickname} rejected: ${responseText.split('\r\n')[0] ?? '(no response)'}`
+          );
         }
-        circuit.destroy();
       } catch (err) {
         this.log(
           `HSDir ${hsdir.nickname} upload failed: ${err instanceof Error ? err.message : err}`
         );
+      } finally {
+        try {
+          circuit?.destroy();
+        } catch {
+          // best-effort
+        }
       }
     }
     this.log(`descriptor uploaded to ${uploads}/${Math.min(6, hsdirNodes.length)} HSDirs`);
@@ -1438,22 +1371,38 @@ export class HiddenServiceHost extends EventEmitter {
 
     const rendCircuit = await this.torClient.buildCircuitToTarget(rendPeer);
 
-    const { rendezvous1Data, cipherPair } = completeHsNtorServer({
-      clientPk: parsed.clientPk,
-      introPoint: intro,
-      subcredential: this.timePeriodKeys.subcredential,
-    });
+    // Once the circuit is built, ANY failure between here and emitting
+    // 'rendezvous' must destroy it — otherwise we leak a 3-hop circuit per
+    // failed handshake. The success path skips the destroy and hands the
+    // circuit to the application.
+    let handedOff = false;
+    try {
+      const { rendezvous1Data, cipherPair } = completeHsNtorServer({
+        clientPk: parsed.clientPk,
+        introPoint: intro,
+        subcredential: this.timePeriodKeys.subcredential,
+      });
 
-    await rendCircuit.sendRelayMessage({
-      streamId: 0,
-      relayCommand: RelayCell.RENDEZVOUS1,
-      data: Buffer.concat([decrypted.rendezvousCookie, rendezvous1Data]),
-    });
-    rendCircuit.addVirtualHop(cipherPair);
+      await rendCircuit.sendRelayMessage({
+        streamId: 0,
+        relayCommand: RelayCell.RENDEZVOUS1,
+        data: Buffer.concat([decrypted.rendezvousCookie, rendezvous1Data]),
+      });
+      rendCircuit.addVirtualHop(cipherPair);
 
-    this.log('rendezvous complete; arming BEGIN handler');
-    this.attachServerSideStreamHandler(rendCircuit);
-    this.emit('rendezvous', { circuit: rendCircuit });
+      this.log('rendezvous complete; arming BEGIN handler');
+      this.attachServerSideStreamHandler(rendCircuit);
+      handedOff = true;
+      this.emit('rendezvous', { circuit: rendCircuit });
+    } finally {
+      if (!handedOff) {
+        try {
+          rendCircuit.destroy();
+        } catch {
+          // best-effort
+        }
+      }
+    }
   }
 
   /**
@@ -1486,56 +1435,56 @@ export class HiddenServiceHost extends EventEmitter {
       return stream;
     };
 
-    circuit.on(
-      'relay',
-      (evt: { streamId: number; relayCommand: number; data: Buffer }) => {
-        if (evt.relayCommand !== RelayCell.BEGIN) return;
-        // BEGIN body: <addr:port>\0<flags 4 bytes>
-        const nul = evt.data.indexOf(0);
-        if (nul < 0) {
-          this.log(`BEGIN streamId=${evt.streamId} missing NUL terminator`);
-          return;
-        }
-        const addrPort = evt.data.subarray(0, nul).toString('ascii');
-        const lastColon = addrPort.lastIndexOf(':');
-        const portStr = lastColon >= 0 ? addrPort.slice(lastColon + 1) : addrPort;
-        const port = Number.parseInt(portStr, 10);
+    const onBegin = (evt: { streamId: number; relayCommand: number; data: Buffer }) => {
+      if (evt.relayCommand !== RelayCell.BEGIN) return;
+      // BEGIN body: <addr:port>\0<flags 4 bytes>
+      const nul = evt.data.indexOf(0);
+      if (nul < 0) {
+        this.log(`BEGIN streamId=${evt.streamId} missing NUL terminator`);
+        return;
+      }
+      const addrPort = evt.data.subarray(0, nul).toString('ascii');
+      const lastColon = addrPort.lastIndexOf(':');
+      const portStr = lastColon >= 0 ? addrPort.slice(lastColon + 1) : addrPort;
+      const port = Number.parseInt(portStr, 10);
 
-        if (!this.acceptPort(port)) {
-          this.log(`refusing BEGIN streamId=${evt.streamId} for port=${port} (filtered)`);
-          // Reject with REASON_NOTDIRECTORY (6) — generic "we don't want this".
-          circuit.sendRelayMessage({
-            streamId: evt.streamId,
-            relayCommand: RelayCell.END,
-            data: Buffer.from([6]),
-          }).catch(() => undefined);
-          return;
-        }
-
-        const stream = acceptStreamId(evt.streamId, addrPort);
-        if (!stream) return;
-
-        // Send CONNECTED (8 zero bytes = no IPv4 + ttl=0) to accept.
+      if (!this.acceptPort(port)) {
+        this.log(`refusing BEGIN streamId=${evt.streamId} for port=${port} (filtered)`);
+        // Reject with REASON_NOTDIRECTORY (6) — generic "we don't want this".
         circuit
           .sendRelayMessage({
             streamId: evt.streamId,
-            relayCommand: RelayCell.CONNECTED,
-            data: Buffer.alloc(8),
+            relayCommand: RelayCell.END,
+            data: Buffer.from([6]),
           })
-          .then(() => {
-            // Hand the accepted stream to the application.
-            this.emit('connection', stream);
-            // Also forward to the per-host onConnection callback if set.
-            this.onConnectionCallback?.(stream);
-          })
-          .catch((err) => {
-            this.log(
-              `failed to send CONNECTED for stream ${evt.streamId}: ${err instanceof Error ? err.message : err}`
-            );
-            stream.destroy(err instanceof Error ? err : new Error(String(err)));
-          });
+          .catch(() => undefined);
+        return;
       }
-    );
+
+      const stream = acceptStreamId(evt.streamId, addrPort);
+      if (!stream) return;
+
+      // Send CONNECTED (8 zero bytes = no IPv4 + ttl=0) to accept.
+      circuit
+        .sendRelayMessage({
+          streamId: evt.streamId,
+          relayCommand: RelayCell.CONNECTED,
+          data: Buffer.alloc(8),
+        })
+        .then(() => {
+          this.emit('connection', stream);
+          this.onConnectionCallback?.(stream);
+        })
+        .catch((err) => {
+          this.log(
+            `failed to send CONNECTED for stream ${evt.streamId}: ${err instanceof Error ? err.message : err}`
+          );
+          stream.destroy(err instanceof Error ? err : new Error(String(err)));
+        });
+    };
+    circuit.on('relay', onBegin);
+    // Detach when the circuit goes away so the closure doesn't pin `this`.
+    circuit.once('destroyed', () => circuit.off('relay', onBegin));
   }
 
   /**
@@ -1582,25 +1531,16 @@ export class HiddenServiceHost extends EventEmitter {
     this.emit('stopped');
   }
 
-  /** Synchronous alias for {@link unpublish} (kept for backward-compat). */
-  stop(): void {
-    void this.unpublish();
-  }
 }
 
 // ============================================================================
-// Test helpers (re-exports)
+// Internal helpers exposed only for the spec test
 // ============================================================================
-//
-// These are private to the module but exposed for the spec tests so we can
-// assert on the small primitives (matching the surface PR #21 had).
+// (Generic crypto helpers — sha3, mac, dMac, kdfShake256,
+// base32EncodeLowerNoPad — live in `./hs-crypto.ts` and the spec imports
+// them from there directly.)
 
 export {
-  sha3,
-  mac,
-  dMac,
-  kdfShake256,
-  base32EncodeLowerNoPad,
   curve25519PubkeyToEd25519,
   encryptDescriptorLayer,
   createEd25519Certificate,

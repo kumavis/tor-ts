@@ -15,17 +15,12 @@ import {
   decryptIntroduce2,
   completeHsNtorServer,
   generateDescriptor,
-  // private re-exports for primitive tests
-  sha3,
-  mac,
-  dMac,
-  kdfShake256,
-  base32EncodeLowerNoPad,
   curve25519PubkeyToEd25519,
   encryptDescriptorLayer,
   createEd25519Certificate,
   type IntroductionPoint,
 } from './hidden-service-host.ts';
+import { sha3, mac, dMac, kdfShake256, base32EncodeLowerNoPad } from 'tor-crypto';
 import {
   parseOnionV3Address,
   deriveBlindedPublicKey,
