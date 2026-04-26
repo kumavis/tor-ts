@@ -238,6 +238,17 @@ for t in "${TESTS[@]}"; do
       timeout 10m node --experimental-transform-types "${ROOT_DIR}/scripts/chutney-hidden-service-ci.ts"
       echo "=== chutney integration test: hidden-service finished at $(date -Is) ==="
       ;;
+    hidden-service-host)
+      # Opt-in: hosts a v3 HS via our HiddenServiceHost and connects to it
+      # with our client. Exercises the entire HS protocol stack end-to-end
+      # (descriptor publish + INTRODUCE2 + RENDEZVOUS1 + virtual hop) so it
+      # is the most fragile test in the suite. Set TOR_TS_CHUTNEY_TESTS to
+      # include "hidden-service-host" to enable.
+      echo ""
+      echo "=== running chutney integration test: hidden-service-host (opt-in) ==="
+      timeout 12m node --experimental-transform-types "${ROOT_DIR}/scripts/chutney-hidden-service-host-ci.ts"
+      echo "=== chutney integration test: hidden-service-host finished at $(date -Is) ==="
+      ;;
     *)
       echo "Unknown TOR_TS_CHUTNEY_TESTS entry: ${t}"
       exit 1

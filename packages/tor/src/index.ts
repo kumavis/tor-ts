@@ -15,6 +15,30 @@ export {
 } from './channel.ts';
 export { shuffleInPlace } from './util.ts';
 export * as hiddenService from './hidden-service.ts';
+export * as hiddenServiceHost from './hidden-service-host.ts';
+export {
+  publishHiddenService,
+  HiddenServiceHost,
+  generateHiddenServiceKeys,
+  loadHiddenServiceKeys,
+  computeOnionAddress,
+  deriveBlindedPrivateKey,
+  signWithBlindedKey,
+  deriveTimePeriodKeys,
+  generateIntroPointKeys,
+  generateDescriptor,
+  buildEstablishIntroPayload,
+  parseIntroduce2,
+  decryptIntroduce2,
+  completeHsNtorServer,
+  type PublishHiddenServiceOptions,
+  type HsHost,
+  type HiddenServiceKeys,
+  type TimePeriodKeys,
+  type IntroductionPoint,
+  type Introduce2Parsed,
+  type Introduce2Decrypted,
+} from './hidden-service-host.ts';
 // Consensus parsing (from build-circuit/directory)
 export {
   parseMicroDescConsensus,

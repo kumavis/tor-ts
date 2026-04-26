@@ -5,7 +5,7 @@
  * Platform-specific factories create instances with appropriate dependencies.
  */
 
-import { Circuit } from './circuit.ts';
+import { Circuit, type PeerInfo } from './circuit.ts';
 import type { VerifiedMicroDescConsensus } from './build-circuit/directory.ts';
 import type { IntroPoint, BuildCircuitFn } from './hidden-service.ts';
 import { connectToHiddenServiceCore } from './hidden-service.ts';
@@ -205,6 +205,26 @@ export class TorClient<TChannel extends ChannelConnection = ChannelConnection> {
   async buildCircuit(options: { targetPorts?: number[] } = {}): Promise<CircuitResult> {
     this.checkDestroyed();
     return this.buildCircuitFn(options);
+  }
+
+  /**
+   * Build a 3-hop circuit terminating at `target`. Used by the hidden-service
+   * host for intro/RP/HSDir circuits, and reachable from anywhere a
+   * platform-specific {@link TorClient} has been wired (mainnet, chutney, or
+   * Snowflake-backed browser client).
+   */
+  async buildCircuitToTarget(
+    target: PeerInfo,
+    options: { avoid?: PeerInfo[] } = {}
+  ): Promise<Circuit> {
+    this.checkDestroyed();
+    return this.buildCircuitToTargetFn(target, options);
+  }
+
+  /** Public read-only access for HS-host descriptor publishing. */
+  get bootstrapDirCircuit(): Circuit {
+    this.checkDestroyed();
+    return this.bootstrapCircuit;
   }
 
   async refreshConsensus(): Promise<VerifiedMicroDescConsensus> {
