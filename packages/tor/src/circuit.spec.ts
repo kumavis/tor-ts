@@ -39,7 +39,7 @@ test('circuitIdLengthForProtocolVersion: returns 4 for version 5', (t) => {
 //
 // PromiseLatch on connectionLatch means orphan rejections (destroy() with no
 // awaiter) are inert by construction; these tests no longer need a manual
-// `connectionPromiseKit.promise.catch(() => {})` around each call.
+// `connectionLatch.wait().catch(() => {})` around each call.
 
 test('CircuitStream: destroy with error emits error event', async (t) => {
   const stream = new CircuitStream();
