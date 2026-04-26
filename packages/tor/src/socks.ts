@@ -25,7 +25,17 @@ import net, { isIPv4, isIPv6 } from 'node:net';
 import { EventEmitter } from 'node:events';
 
 import type { Circuit, CircuitStream } from './circuit.ts';
-import { RelayEndError, RelayEndReasons } from './relay-cell.ts';
+import {
+  RelayEndError,
+  RelayEndReasons,
+  RelayResolvedType,
+  formatResolvedIPv4,
+  formatResolvedIPv6,
+  ipv4ToInAddrArpa,
+  ipv6StringToBytes,
+  ipv6ToIp6Arpa,
+  type RelayResolvedRecord,
+} from './relay-cell.ts';
 
 export const SOCKS_VERSION = 0x05;
 
@@ -39,10 +49,18 @@ export enum SocksAuthMethod {
   NO_ACCEPTABLE = 0xff,
 }
 
+/**
+ * SOCKS5 command bytes. CONNECT/BIND/UDP_ASSOCIATE are RFC 1928; RESOLVE
+ * and RESOLVE_PTR are Tor's proposal-100 extension that exposes anonymous
+ * DNS over a circuit. c-tor and Arti both implement the same three:
+ * CONNECT, RESOLVE, RESOLVE_PTR.
+ */
 export enum SocksCommand {
   CONNECT = 0x01,
   BIND = 0x02,
   UDP_ASSOCIATE = 0x03,
+  RESOLVE = 0xf0,
+  RESOLVE_PTR = 0xf1,
 }
 
 export enum SocksAddressType {
@@ -329,6 +347,67 @@ export function buildSocksReply(
     portHi,
     portLo,
   ]);
+}
+
+/**
+ * Build a SOCKS5 reply with an explicit bound-address type. Required when
+ * answering RESOLVE (returns IPv4/IPv6) or RESOLVE_PTR (returns DOMAIN);
+ * for plain CONNECT the simpler {@link buildSocksReply} (always IPv4) is
+ * sufficient.
+ */
+export function buildSocksTypedReply(
+  reply: SocksReply,
+  bound:
+    | { type: SocksAddressType.IPv4; address: string }
+    | { type: SocksAddressType.IPv6; address: string }
+    | { type: SocksAddressType.DOMAIN; address: string },
+  boundPort: number = 0
+): Buffer {
+  const portHi = (boundPort >> 8) & 0xff;
+  const portLo = boundPort & 0xff;
+
+  switch (bound.type) {
+    case SocksAddressType.IPv4: {
+      const parts = bound.address.split('.').map((p) => parseInt(p, 10));
+      if (parts.length !== 4 || parts.some((p) => !Number.isFinite(p) || p < 0 || p > 255)) {
+        throw new Error(`Not a valid IPv4 address: ${bound.address}`);
+      }
+      return Buffer.from([
+        SOCKS_VERSION,
+        reply,
+        0x00,
+        SocksAddressType.IPv4,
+        parts[0]!,
+        parts[1]!,
+        parts[2]!,
+        parts[3]!,
+        portHi,
+        portLo,
+      ]);
+    }
+    case SocksAddressType.IPv6: {
+      const bytes = ipv6StringToBytes(bound.address);
+      const out = Buffer.alloc(4 + 16 + 2);
+      out[0] = SOCKS_VERSION;
+      out[1] = reply;
+      out[2] = 0x00;
+      out[3] = SocksAddressType.IPv6;
+      bytes.copy(out, 4);
+      out.writeUInt16BE(boundPort, 20);
+      return out;
+    }
+    case SocksAddressType.DOMAIN: {
+      const addr = Buffer.from(bound.address, 'ascii');
+      if (addr.length > 255) {
+        throw new Error(`Domain address too long: ${addr.length} bytes`);
+      }
+      return Buffer.concat([
+        Buffer.from([SOCKS_VERSION, reply, 0x00, SocksAddressType.DOMAIN, addr.length]),
+        addr,
+        Buffer.from([portHi, portLo]),
+      ]);
+    }
+  }
 }
 
 /**
@@ -635,10 +714,6 @@ export class SocksProxyServer extends EventEmitter {
           const request = parseSocksRequest(buffer.subarray(0, total));
           buffer = buffer.subarray(total);
 
-          if (request.command !== SocksCommand.CONNECT) {
-            replyFatal(SocksReply.COMMAND_NOT_SUPPORTED);
-            return;
-          }
           if (
             request.addressType === SocksAddressType.IPv4 &&
             !isIPv4(request.destinationAddress)
@@ -654,35 +729,17 @@ export class SocksProxyServer extends EventEmitter {
             return;
           }
 
-          const destination = formatTorDestination(
-            request.destinationAddress,
-            request.destinationPort
-          );
           const ctx: SocksConnectionContext = auth ? { request, auth } : { request };
-          this.emit('connect', { destination, request, auth, socket });
-          phase = ConnectionPhase.Connecting;
 
-          // Pause the socket while we open a Tor stream so any extra bytes
-          // the client speculatively sends don't show up as 'data' events
-          // on a half-built circuit stream.
-          socket.pause();
-          this.openStreamForConnection(ctx, destination)
-            .then((stream) => {
-              if (phase === ConnectionPhase.Closed) {
-                stream.destroy();
-                return;
-              }
-              circuitStream = stream;
-              this.setupRelay(socket, stream, closeAll);
-              if (!socket.destroyed) {
-                socket.write(buildSocksReply(SocksReply.SUCCEEDED));
-              }
-              phase = ConnectionPhase.Relaying;
-              if (!socket.destroyed) socket.resume();
-
-              // If the client speculatively pipelined bytes after the
-              // request, replay them through the relay path now.
-              if (buffer.length > 0) {
+          if (request.command === SocksCommand.CONNECT) {
+            this.handleConnect(socket, request, auth, ctx, closeAll, {
+              setRelayingPhase: (cs) => {
+                circuitStream = cs;
+                phase = ConnectionPhase.Relaying;
+              },
+              isClosed: () => phase === ConnectionPhase.Closed,
+              flushPipelined: (stream) => {
+                if (buffer.length === 0) return;
                 const pipelined = buffer;
                 buffer = Buffer.alloc(0);
                 writeChain = writeChain.then(
@@ -693,16 +750,28 @@ export class SocksProxyServer extends EventEmitter {
                     }),
                   () => {}
                 );
-              }
-            })
-            .catch((err: Error) => {
-              this.emit('connectionError', err);
-              if (!socket.destroyed) {
-                socket.write(buildSocksReply(socksReplyForOpenError(err)));
-                socket.end();
-              }
-              closeAll();
+              },
             });
+            phase = ConnectionPhase.Connecting;
+            return;
+          }
+
+          if (
+            request.command === SocksCommand.RESOLVE ||
+            request.command === SocksCommand.RESOLVE_PTR
+          ) {
+            this.handleResolve(socket, request, ctx, closeAll, {
+              isClosed: () => phase === ConnectionPhase.Closed,
+              markClosed: () => {
+                phase = ConnectionPhase.Closed;
+              },
+            });
+            phase = ConnectionPhase.Connecting;
+            return;
+          }
+
+          replyFatal(SocksReply.COMMAND_NOT_SUPPORTED);
+          return;
         }
       } catch (err) {
         this.emit('connectionError', err as Error);
@@ -726,6 +795,106 @@ export class SocksProxyServer extends EventEmitter {
     return circuit.open(destination);
   }
 
+  /**
+   * Run an anonymous DNS lookup over the connection's circuit. Used by both
+   * the SOCKS RESOLVE and RESOLVE_PTR command paths — pulled out so tests
+   * can stub the DNS step without going through the full Tor BEGIN cell.
+   */
+  protected async runResolveForConnection(
+    ctx: SocksConnectionContext,
+    query: string
+  ): Promise<RelayResolvedRecord[]> {
+    const circuit = await this.circuitProvider(ctx);
+    return circuit.resolve(query);
+  }
+
+  private handleConnect(
+    socket: net.Socket,
+    request: SocksRequest,
+    auth: SocksAuth | undefined,
+    ctx: SocksConnectionContext,
+    closeAll: (err?: Error) => void,
+    hooks: {
+      setRelayingPhase: (cs: CircuitStream) => void;
+      isClosed: () => boolean;
+      flushPipelined: (stream: CircuitStream) => void;
+    }
+  ): void {
+    const destination = formatTorDestination(request.destinationAddress, request.destinationPort);
+    this.emit('connect', { destination, request, auth, socket });
+
+    // Pause the socket while we open a Tor stream so any extra bytes the
+    // client speculatively sends don't show up as 'data' events on a
+    // half-built circuit stream.
+    socket.pause();
+    this.openStreamForConnection(ctx, destination)
+      .then((stream) => {
+        if (hooks.isClosed()) {
+          stream.destroy();
+          return;
+        }
+        this.setupRelay(socket, stream, closeAll);
+        if (!socket.destroyed) {
+          socket.write(buildSocksReply(SocksReply.SUCCEEDED));
+        }
+        hooks.setRelayingPhase(stream);
+        if (!socket.destroyed) socket.resume();
+        hooks.flushPipelined(stream);
+      })
+      .catch((err: Error) => {
+        this.emit('connectionError', err);
+        if (!socket.destroyed) {
+          socket.write(buildSocksReply(socksReplyForOpenError(err)));
+          socket.end();
+        }
+        closeAll();
+      });
+  }
+
+  private handleResolve(
+    socket: net.Socket,
+    request: SocksRequest,
+    ctx: SocksConnectionContext,
+    closeAll: (err?: Error) => void,
+    hooks: {
+      isClosed: () => boolean;
+      markClosed: () => void;
+    }
+  ): void {
+    let query: string;
+    try {
+      query = buildResolveQuery(request);
+    } catch (err) {
+      this.emit('connectionError', err as Error);
+      if (!socket.destroyed) {
+        socket.write(buildSocksReply(SocksReply.ADDRESS_TYPE_NOT_SUPPORTED));
+        socket.end();
+      }
+      closeAll();
+      return;
+    }
+    this.emit('resolve', { request, query, socket });
+
+    this.runResolveForConnection(ctx, query)
+      .then((records) => {
+        if (hooks.isClosed() || socket.destroyed) return;
+        const reply = buildResolveReply(request.command, records);
+        socket.write(reply);
+        socket.end();
+        // RESOLVE / RESOLVE_PTR are one-shot: after the reply we're done.
+        hooks.markClosed();
+        this.connections.delete(socket);
+      })
+      .catch((err: Error) => {
+        this.emit('connectionError', err);
+        if (!socket.destroyed) {
+          socket.write(buildSocksReply(socksReplyForOpenError(err)));
+          socket.end();
+        }
+        closeAll();
+      });
+  }
+
   private setupRelay(
     socket: net.Socket,
     circuitStream: CircuitStream,
@@ -743,6 +912,88 @@ export class SocksProxyServer extends EventEmitter {
       closeAll(err);
     });
   }
+}
+
+/**
+ * Convert a SOCKS RESOLVE / RESOLVE_PTR request into the query string that
+ * RELAY_RESOLVE expects. For forward queries the hostname goes through as
+ * is; for reverse queries the IP is rewritten into its `in-addr.arpa` /
+ * `ip6.arpa` form (same as c-tor and Arti).
+ */
+export function buildResolveQuery(request: SocksRequest): string {
+  if (request.command === SocksCommand.RESOLVE) {
+    if (request.addressType === SocksAddressType.DOMAIN) {
+      return request.destinationAddress;
+    }
+    // Forward-resolving an IP literal is well-defined (it's a no-op): just
+    // pass it through as a name, the exit will return whatever it has.
+    return request.destinationAddress;
+  }
+  if (request.command === SocksCommand.RESOLVE_PTR) {
+    if (request.addressType === SocksAddressType.IPv4) {
+      return ipv4ToInAddrArpa(request.destinationAddress);
+    }
+    if (request.addressType === SocksAddressType.IPv6) {
+      return ipv6ToIp6Arpa(request.destinationAddress);
+    }
+    throw new Error('RESOLVE_PTR requires an IPv4 or IPv6 address');
+  }
+  throw new Error(`Not a RESOLVE/RESOLVE_PTR command: ${request.command}`);
+}
+
+/**
+ * Build the SOCKS5 reply for a RESOLVE / RESOLVE_PTR command from the list
+ * of records the exit returned. Picks the first usable record:
+ *
+ *  - RESOLVE: first IPv4 (or IPv6 if no v4 was returned)
+ *  - RESOLVE_PTR: first Hostname record
+ *
+ * If only error records are present, returns `HOST_UNREACHABLE` for
+ * permanent errors (Type 0xF1) and `TTL_EXPIRED` for transient ones
+ * (Type 0xF0); empty record lists become `HOST_UNREACHABLE`.
+ */
+export function buildResolveReply(command: SocksCommand, records: RelayResolvedRecord[]): Buffer {
+  if (command === SocksCommand.RESOLVE) {
+    const v4 = records.find((r) => r.type === RelayResolvedType.IPv4 && r.value.length === 4);
+    if (v4) {
+      return buildSocksTypedReply(
+        SocksReply.SUCCEEDED,
+        { type: SocksAddressType.IPv4, address: formatResolvedIPv4(v4.value) },
+        0
+      );
+    }
+    const v6 = records.find((r) => r.type === RelayResolvedType.IPv6 && r.value.length === 16);
+    if (v6) {
+      return buildSocksTypedReply(
+        SocksReply.SUCCEEDED,
+        { type: SocksAddressType.IPv6, address: formatResolvedIPv6(v6.value) },
+        0
+      );
+    }
+    return buildSocksReply(replyForResolveErrorRecords(records));
+  }
+  if (command === SocksCommand.RESOLVE_PTR) {
+    const host = records.find((r) => r.type === RelayResolvedType.Hostname);
+    if (host) {
+      return buildSocksTypedReply(
+        SocksReply.SUCCEEDED,
+        { type: SocksAddressType.DOMAIN, address: host.value.toString('ascii') },
+        0
+      );
+    }
+    return buildSocksReply(replyForResolveErrorRecords(records));
+  }
+  throw new Error(`Not a RESOLVE/RESOLVE_PTR command: ${command}`);
+}
+
+function replyForResolveErrorRecords(records: RelayResolvedRecord[]): SocksReply {
+  if (records.some((r) => r.type === RelayResolvedType.ErrorPermanent)) {
+    return SocksReply.HOST_UNREACHABLE;
+  }
+  if (records.some((r) => r.type === RelayResolvedType.ErrorTransient)) {
+    return SocksReply.TTL_EXPIRED;
+  }
+  return SocksReply.HOST_UNREACHABLE;
 }
 
 /** Construct and start a {@link SocksProxyServer} in one call. */

@@ -20,8 +20,11 @@ import {
   SocksAddressType,
   SocksReply,
   SocksProxyServer,
+  buildResolveQuery,
+  buildResolveReply,
   buildSocksGreetingResponse,
   buildSocksReply,
+  buildSocksTypedReply,
   buildSocksUserPassResponse,
   createSocksProxy,
   formatTorDestination,
@@ -36,7 +39,12 @@ import {
   type SocksConnectionContext,
 } from './socks.ts';
 import { Circuit, CircuitStream } from './circuit.ts';
-import { RelayEndError, RelayEndReasons } from './relay-cell.ts';
+import {
+  RelayEndError,
+  RelayEndReasons,
+  RelayResolvedType,
+  type RelayResolvedRecord,
+} from './relay-cell.ts';
 
 // =============================================================================
 // Constants
@@ -510,6 +518,13 @@ class FakeCircuit {
   public openMode: 'echo' | 'reject' = 'echo';
   public rejectError: Error = new Error('open failed');
 
+  // Resolve hooks
+  public lastResolveQuery: string | undefined;
+  public resolveCalls = 0;
+  public resolveMode: 'records' | 'reject' = 'records';
+  public resolveResult: RelayResolvedRecord[] = [];
+  public resolveRejectError: Error = new Error('resolve failed');
+
   async open(destination: string): Promise<CircuitStream> {
     this.openCalls += 1;
     this.lastDestination = destination;
@@ -517,6 +532,15 @@ class FakeCircuit {
       throw this.rejectError;
     }
     return new LoopbackStream(destination) as unknown as CircuitStream;
+  }
+
+  async resolve(query: string): Promise<RelayResolvedRecord[]> {
+    this.resolveCalls += 1;
+    this.lastResolveQuery = query;
+    if (this.resolveMode === 'reject') {
+      throw this.resolveRejectError;
+    }
+    return this.resolveResult;
   }
 }
 
@@ -1109,6 +1133,339 @@ test('SocksProxyServer: RELAY_END TIMEOUT surfaces as TTL_EXPIRED', async (t) =>
     const reply = await reader.read(10, 'reply');
     t.is(reply[1], SocksReply.TTL_EXPIRED);
     await once(socket, 'close');
+  } finally {
+    await server.stop();
+  }
+});
+
+// =============================================================================
+// SocksCommand: RESOLVE / RESOLVE_PTR enum values
+// =============================================================================
+
+test('SocksCommand: RESOLVE/RESOLVE_PTR are Tor proposal-100 extensions', (t) => {
+  t.is(SocksCommand.RESOLVE, 0xf0);
+  t.is(SocksCommand.RESOLVE_PTR, 0xf1);
+});
+
+// =============================================================================
+// buildSocksTypedReply
+// =============================================================================
+
+test('buildSocksTypedReply: IPv4 bound address', (t) => {
+  const out = buildSocksTypedReply(
+    SocksReply.SUCCEEDED,
+    { type: SocksAddressType.IPv4, address: '93.184.216.34' },
+    0
+  );
+  t.deepEqual(out, Buffer.from([0x05, 0x00, 0x00, 0x01, 93, 184, 216, 34, 0x00, 0x00]));
+});
+
+test('buildSocksTypedReply: IPv6 bound address', (t) => {
+  const out = buildSocksTypedReply(
+    SocksReply.SUCCEEDED,
+    { type: SocksAddressType.IPv6, address: '::1' },
+    0
+  );
+  t.is(out.length, 4 + 16 + 2);
+  t.is(out[0], 0x05);
+  t.is(out[1], 0x00);
+  t.is(out[3], SocksAddressType.IPv6);
+  // ::1 → 15 zero bytes followed by 0x01
+  t.is(out[19], 0x01);
+});
+
+test('buildSocksTypedReply: DOMAIN bound address (length-prefixed)', (t) => {
+  const out = buildSocksTypedReply(
+    SocksReply.SUCCEEDED,
+    { type: SocksAddressType.DOMAIN, address: 'host.example.com' },
+    0
+  );
+  t.is(out[0], 0x05);
+  t.is(out[3], SocksAddressType.DOMAIN);
+  t.is(out[4], 'host.example.com'.length);
+  t.is(out.subarray(5, 5 + 16).toString('ascii'), 'host.example.com');
+});
+
+test('buildSocksTypedReply: rejects oversized domain (>255)', (t) => {
+  const tooBig = 'a'.repeat(256);
+  t.throws(
+    () =>
+      buildSocksTypedReply(
+        SocksReply.SUCCEEDED,
+        { type: SocksAddressType.DOMAIN, address: tooBig },
+        0
+      ),
+    { message: /Domain address too long/ }
+  );
+});
+
+test('buildSocksTypedReply: rejects malformed IPv4', (t) => {
+  t.throws(
+    () =>
+      buildSocksTypedReply(
+        SocksReply.SUCCEEDED,
+        { type: SocksAddressType.IPv4, address: '256.0.0.0' },
+        0
+      ),
+    { message: /Not a valid IPv4/ }
+  );
+});
+
+// =============================================================================
+// buildResolveQuery / buildResolveReply
+// =============================================================================
+
+test('buildResolveQuery: forward DOMAIN passes through verbatim', (t) => {
+  const req = {
+    version: 5,
+    command: SocksCommand.RESOLVE,
+    addressType: SocksAddressType.DOMAIN,
+    destinationAddress: 'example.com',
+    destinationPort: 0,
+  };
+  t.is(buildResolveQuery(req), 'example.com');
+});
+
+test('buildResolveQuery: PTR IPv4 → in-addr.arpa', (t) => {
+  const req = {
+    version: 5,
+    command: SocksCommand.RESOLVE_PTR,
+    addressType: SocksAddressType.IPv4,
+    destinationAddress: '8.8.8.8',
+    destinationPort: 0,
+  };
+  t.is(buildResolveQuery(req), '8.8.8.8.in-addr.arpa');
+});
+
+test('buildResolveQuery: PTR IPv6 → ip6.arpa', (t) => {
+  const req = {
+    version: 5,
+    command: SocksCommand.RESOLVE_PTR,
+    addressType: SocksAddressType.IPv6,
+    destinationAddress: '0:0:0:0:0:0:0:1',
+    destinationPort: 0,
+  };
+  t.true(buildResolveQuery(req).endsWith('.ip6.arpa'));
+});
+
+test('buildResolveQuery: rejects PTR with non-IP address', (t) => {
+  t.throws(
+    () =>
+      buildResolveQuery({
+        version: 5,
+        command: SocksCommand.RESOLVE_PTR,
+        addressType: SocksAddressType.DOMAIN,
+        destinationAddress: 'example.com',
+        destinationPort: 0,
+      }),
+    { message: /requires an IPv4 or IPv6/ }
+  );
+});
+
+test('buildResolveQuery: rejects non-RESOLVE command', (t) => {
+  t.throws(
+    () =>
+      buildResolveQuery({
+        version: 5,
+        command: SocksCommand.CONNECT,
+        addressType: SocksAddressType.IPv4,
+        destinationAddress: '1.2.3.4',
+        destinationPort: 80,
+      }),
+    { message: /Not a RESOLVE/ }
+  );
+});
+
+test('buildResolveReply: RESOLVE picks the first IPv4 record', (t) => {
+  const records: RelayResolvedRecord[] = [
+    { type: RelayResolvedType.IPv4, value: Buffer.from([93, 184, 216, 34]), ttl: 60 },
+    { type: RelayResolvedType.IPv6, value: Buffer.alloc(16), ttl: 60 },
+  ];
+  const out = buildResolveReply(SocksCommand.RESOLVE, records);
+  t.is(out[0], 0x05);
+  t.is(out[1], SocksReply.SUCCEEDED);
+  t.is(out[3], SocksAddressType.IPv4);
+  t.deepEqual(out.subarray(4, 8), Buffer.from([93, 184, 216, 34]));
+});
+
+test('buildResolveReply: RESOLVE falls back to IPv6 when no IPv4 present', (t) => {
+  const v6 = Buffer.alloc(16);
+  v6[15] = 1; // ::1
+  const records: RelayResolvedRecord[] = [{ type: RelayResolvedType.IPv6, value: v6, ttl: 60 }];
+  const out = buildResolveReply(SocksCommand.RESOLVE, records);
+  t.is(out[1], SocksReply.SUCCEEDED);
+  t.is(out[3], SocksAddressType.IPv6);
+  t.is(out[4 + 15], 1);
+});
+
+test('buildResolveReply: RESOLVE with only permanent error → HOST_UNREACHABLE', (t) => {
+  const records: RelayResolvedRecord[] = [
+    { type: RelayResolvedType.ErrorPermanent, value: Buffer.from('nope'), ttl: 0 },
+  ];
+  const out = buildResolveReply(SocksCommand.RESOLVE, records);
+  t.is(out[1], SocksReply.HOST_UNREACHABLE);
+});
+
+test('buildResolveReply: RESOLVE with transient error → TTL_EXPIRED', (t) => {
+  const records: RelayResolvedRecord[] = [
+    { type: RelayResolvedType.ErrorTransient, value: Buffer.from('temp'), ttl: 0 },
+  ];
+  const out = buildResolveReply(SocksCommand.RESOLVE, records);
+  t.is(out[1], SocksReply.TTL_EXPIRED);
+});
+
+test('buildResolveReply: RESOLVE with no records → HOST_UNREACHABLE', (t) => {
+  const out = buildResolveReply(SocksCommand.RESOLVE, []);
+  t.is(out[1], SocksReply.HOST_UNREACHABLE);
+});
+
+test('buildResolveReply: RESOLVE_PTR picks first Hostname record', (t) => {
+  const name = 'host.example.com';
+  const records: RelayResolvedRecord[] = [
+    { type: RelayResolvedType.Hostname, value: Buffer.from(name, 'ascii'), ttl: 60 },
+  ];
+  const out = buildResolveReply(SocksCommand.RESOLVE_PTR, records);
+  t.is(out[1], SocksReply.SUCCEEDED);
+  t.is(out[3], SocksAddressType.DOMAIN);
+  t.is(out[4], name.length);
+  t.is(out.subarray(5, 5 + name.length).toString('ascii'), name);
+});
+
+test('buildResolveReply: RESOLVE_PTR with only error records → HOST_UNREACHABLE', (t) => {
+  const records: RelayResolvedRecord[] = [
+    { type: RelayResolvedType.ErrorPermanent, value: Buffer.from('nope'), ttl: 0 },
+  ];
+  const out = buildResolveReply(SocksCommand.RESOLVE_PTR, records);
+  t.is(out[1], SocksReply.HOST_UNREACHABLE);
+});
+
+// =============================================================================
+// SocksProxyServer: RESOLVE / RESOLVE_PTR end-to-end
+// =============================================================================
+
+async function driveResolveClient(
+  port: number,
+  command: SocksCommand,
+  atyp: SocksAddressType,
+  addrBytes: Buffer
+): Promise<Buffer> {
+  const socket = net.connect(port, '127.0.0.1');
+  await once(socket, 'connect');
+  const reader = makeByteReader(socket);
+  socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.NO_AUTH]));
+  await reader.read(2, 'greeting');
+
+  const reqHead = Buffer.from([SOCKS_VERSION, command, 0x00, atyp]);
+  const port0 = Buffer.from([0x00, 0x00]);
+  const req =
+    atyp === SocksAddressType.DOMAIN
+      ? Buffer.concat([reqHead, Buffer.from([addrBytes.length]), addrBytes, port0])
+      : Buffer.concat([reqHead, addrBytes, port0]);
+  socket.write(req);
+
+  // Read enough bytes to learn the bound-ATYP, then read the appropriate body length.
+  const head = await reader.read(4, 'reply-head');
+  switch (head[3]) {
+    case SocksAddressType.IPv4: {
+      const body = await reader.read(4 + 2, 'reply-body-v4');
+      socket.destroy();
+      return Buffer.concat([head, body]);
+    }
+    case SocksAddressType.IPv6: {
+      const body = await reader.read(16 + 2, 'reply-body-v6');
+      socket.destroy();
+      return Buffer.concat([head, body]);
+    }
+    case SocksAddressType.DOMAIN: {
+      const len = await reader.read(1, 'domain-len');
+      const dom = await reader.read(len[0]!, 'domain-value');
+      const portBytes = await reader.read(2, 'port');
+      socket.destroy();
+      return Buffer.concat([head, len, dom, portBytes]);
+    }
+    default:
+      socket.destroy();
+      return head;
+  }
+}
+
+test('SocksProxyServer: RESOLVE forward returns IPv4 reply', async (t) => {
+  const fake = new FakeCircuit();
+  fake.resolveResult = [
+    { type: RelayResolvedType.IPv4, value: Buffer.from([93, 184, 216, 34]), ttl: 300 },
+  ];
+  const { server, port } = await startServer(fake);
+  try {
+    const reply = await driveResolveClient(
+      port,
+      SocksCommand.RESOLVE,
+      SocksAddressType.DOMAIN,
+      Buffer.from('example.com', 'ascii')
+    );
+    t.is(reply[1], SocksReply.SUCCEEDED);
+    t.is(reply[3], SocksAddressType.IPv4);
+    t.deepEqual(reply.subarray(4, 8), Buffer.from([93, 184, 216, 34]));
+    t.is(fake.resolveCalls, 1);
+    t.is(fake.lastResolveQuery, 'example.com');
+    t.is(fake.openCalls, 0); // RESOLVE never opens a TCP-style stream
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SocksProxyServer: RESOLVE_PTR returns DOMAIN reply with hostname', async (t) => {
+  const fake = new FakeCircuit();
+  fake.resolveResult = [
+    { type: RelayResolvedType.Hostname, value: Buffer.from('dns.google', 'ascii'), ttl: 60 },
+  ];
+  const { server, port } = await startServer(fake);
+  try {
+    const reply = await driveResolveClient(
+      port,
+      SocksCommand.RESOLVE_PTR,
+      SocksAddressType.IPv4,
+      Buffer.from([8, 8, 8, 8])
+    );
+    t.is(reply[1], SocksReply.SUCCEEDED);
+    t.is(reply[3], SocksAddressType.DOMAIN);
+    t.is(reply[4], 'dns.google'.length);
+    t.is(reply.subarray(5, 5 + 'dns.google'.length).toString('ascii'), 'dns.google');
+    t.is(fake.lastResolveQuery, '8.8.8.8.in-addr.arpa');
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SocksProxyServer: RESOLVE with REASON_RESOLVEFAILED → HOST_UNREACHABLE', async (t) => {
+  const fake = new FakeCircuit();
+  fake.resolveMode = 'reject';
+  fake.resolveRejectError = new RelayEndError(RelayEndReasons.REASON_RESOLVEFAILED, '02');
+  const { server, port } = await startServer(fake);
+  try {
+    const reply = await driveResolveClient(
+      port,
+      SocksCommand.RESOLVE,
+      SocksAddressType.DOMAIN,
+      Buffer.from('nope.invalid', 'ascii')
+    );
+    t.is(reply[1], SocksReply.HOST_UNREACHABLE);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SocksProxyServer: RESOLVE with empty record list → HOST_UNREACHABLE', async (t) => {
+  const fake = new FakeCircuit();
+  fake.resolveResult = [];
+  const { server, port } = await startServer(fake);
+  try {
+    const reply = await driveResolveClient(
+      port,
+      SocksCommand.RESOLVE,
+      SocksAddressType.DOMAIN,
+      Buffer.from('example.com', 'ascii')
+    );
+    t.is(reply[1], SocksReply.HOST_UNREACHABLE);
   } finally {
     await server.stop();
   }

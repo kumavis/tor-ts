@@ -274,3 +274,180 @@ export class RelayEndError extends Error {
     this.payloadHex = payloadHex;
   }
 }
+
+// =============================================================================
+// RELAY_RESOLVE / RELAY_RESOLVED  (tor-spec 6.4)
+// =============================================================================
+//
+// The exit's response to RELAY_RESOLVE is a sequence of records:
+//
+//   Type   [1 octet]
+//   Length [1 octet]
+//   Value  [Length octets]
+//   TTL    [4 octets]
+//
+// Type values: 0x00 hostname, 0x04 IPv4, 0x06 IPv6, 0xF0 transient error,
+// 0xF1 permanent error.
+
+/** Type byte values inside a RELAY_RESOLVED record (tor-spec 6.4). */
+export const RelayResolvedType = {
+  Hostname: 0x00,
+  IPv4: 0x04,
+  IPv6: 0x06,
+  ErrorTransient: 0xf0,
+  ErrorPermanent: 0xf1,
+} as const;
+// eslint-disable-next-line no-redeclare
+export type RelayResolvedType = (typeof RelayResolvedType)[keyof typeof RelayResolvedType];
+
+/** A single record from a RELAY_RESOLVED payload. */
+export interface RelayResolvedRecord {
+  /** Record type byte. May be one of {@link RelayResolvedType}, or unknown. */
+  type: number;
+  /**
+   * Record value. For IPv4: 4 bytes; for IPv6: 16 bytes; for Hostname/Error:
+   * the raw bytes (caller decodes as needed).
+   */
+  value: Buffer;
+  /** TTL in seconds (32-bit big-endian on the wire). */
+  ttl: number;
+}
+
+/**
+ * Parse a RELAY_RESOLVED payload into its record list. Records that don't
+ * have all of {Type, Length, Value, TTL} bytes are dropped silently; that's
+ * what c-tor does too (`connection_edge.c::connection_edge_process_resolved_cell`)
+ * since a partial cell is the spec's signal that no more records follow.
+ */
+export function parseRelayResolvedPayload(data: Buffer): RelayResolvedRecord[] {
+  const records: RelayResolvedRecord[] = [];
+  let offset = 0;
+  while (offset + 2 <= data.length) {
+    const type = data.readUInt8(offset);
+    const length = data.readUInt8(offset + 1);
+    // Need {Type, Length, Value, TTL=4} = length + 6 bytes total.
+    if (offset + 2 + length + 4 > data.length) break;
+    const value = Buffer.from(data.subarray(offset + 2, offset + 2 + length));
+    const ttl = data.readUInt32BE(offset + 2 + length);
+    records.push({ type, value, ttl });
+    offset += 2 + length + 4;
+  }
+  return records;
+}
+
+/** Convenience: format a hostname for forward DNS over RELAY_RESOLVE. */
+export function buildRelayResolvePayload(hostname: string): Buffer {
+  // tor-spec: ADDRPORT is a NUL-terminated ASCII string, but RESOLVE has no
+  // port — just the NUL-terminated hostname.
+  return Buffer.concat([Buffer.from(hostname, 'ascii'), Buffer.from([0x00])]);
+}
+
+/**
+ * Convert an IPv4 dotted-quad to its `in-addr.arpa` reverse-DNS form, which
+ * is what c-tor and Arti also send on RELAY_RESOLVE for PTR queries.
+ */
+export function ipv4ToInAddrArpa(addr: string): string {
+  const parts = addr.split('.').map((p) => parseInt(p, 10));
+  if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) {
+    throw new Error(`Not a dotted-quad IPv4 address: ${addr}`);
+  }
+  return `${parts[3]}.${parts[2]}.${parts[1]}.${parts[0]}.in-addr.arpa`;
+}
+
+/**
+ * Parse any RFC 4291 IPv6 string (with optional brackets, `::`
+ * zero-compression, or a dotted-quad tail) into its 16-byte network
+ * representation. Useful both for building `ip6.arpa` reverse names and
+ * for putting an IPv6 bound-address on the SOCKS5 reply wire.
+ */
+export function ipv6StringToBytes(addr: string): Buffer {
+  // Strip optional brackets and a zone-id suffix (`%eth0`); zone-ids
+  // don't have routing meaning over Tor.
+  const stripped = addr.replace(/^\[/, '').replace(/\]$/, '').split('%')[0] ?? addr;
+
+  let head = stripped;
+  let tail4: [number, number, number, number] | undefined;
+  if (head.includes('.')) {
+    const lastColon = head.lastIndexOf(':');
+    const v4 = head.slice(lastColon + 1);
+    const parts = v4.split('.').map((p) => parseInt(p, 10));
+    if (parts.length !== 4 || parts.some((p) => !Number.isInteger(p) || p < 0 || p > 255)) {
+      throw new Error(`Not a valid IPv6 address: ${addr}`);
+    }
+    tail4 = parts as [number, number, number, number];
+    head = head.slice(0, lastColon);
+  }
+  const sides = head.split('::');
+  if (sides.length > 2) throw new Error(`Not a valid IPv6 address: ${addr}`);
+  const left = sides[0] ? sides[0].split(':') : [];
+  const right = sides.length === 2 && sides[1] ? sides[1].split(':') : [];
+  const groupsAvailable = 8 - (tail4 ? 2 : 0);
+  const fillCount = groupsAvailable - left.length - right.length;
+  if (sides.length === 2) {
+    if (fillCount < 0) throw new Error(`Not a valid IPv6 address: ${addr}`);
+  } else {
+    if (left.length !== groupsAvailable) {
+      throw new Error(`Not a valid IPv6 address: ${addr}`);
+    }
+  }
+  const groups: number[] = [];
+  for (const g of left) groups.push(parseInt(g || '0', 16));
+  for (let i = 0; i < fillCount; i++) groups.push(0);
+  for (const g of right) groups.push(parseInt(g || '0', 16));
+  if (tail4) {
+    groups.push((tail4[0] << 8) | tail4[1]);
+    groups.push((tail4[2] << 8) | tail4[3]);
+  }
+  if (groups.length !== 8 || groups.some((g) => !Number.isFinite(g) || g < 0 || g > 0xffff)) {
+    throw new Error(`Not a valid IPv6 address: ${addr}`);
+  }
+  const buf = Buffer.alloc(16);
+  for (let i = 0; i < 8; i++) {
+    buf.writeUInt16BE(groups[i]!, i * 2);
+  }
+  return buf;
+}
+
+/**
+ * Convert an IPv6 address (any RFC 4291 form Node accepts) to its
+ * `ip6.arpa` reverse-DNS form. Colons/zero-compression/brackets are
+ * normalized via the standard parsing rules.
+ */
+export function ipv6ToIp6Arpa(addr: string): string {
+  const bytes = ipv6StringToBytes(addr);
+  const nibbles: string[] = [];
+  for (let i = 0; i < 16; i++) {
+    const b = bytes.readUInt8(i);
+    nibbles.push(((b >> 4) & 0xf).toString(16));
+    nibbles.push((b & 0xf).toString(16));
+  }
+  return nibbles.reverse().join('.') + '.ip6.arpa';
+}
+
+/**
+ * Format the bytes inside a RELAY_RESOLVED `IPv4` record as the customary
+ * dotted-quad string. Throws if the value isn't exactly 4 bytes.
+ */
+export function formatResolvedIPv4(value: Buffer): string {
+  if (value.length !== 4) {
+    throw new Error(`RELAY_RESOLVED IPv4 record must be 4 bytes, got ${value.length}`);
+  }
+  return `${value.readUInt8(0)}.${value.readUInt8(1)}.${value.readUInt8(2)}.${value.readUInt8(3)}`;
+}
+
+/**
+ * Format the bytes inside a RELAY_RESOLVED `IPv6` record as the customary
+ * colon-delimited 8-group string. Zero-compression is intentionally NOT
+ * applied — keeping the canonical 8-group form lines up with what the
+ * SOCKS layer puts on the wire as a bound address.
+ */
+export function formatResolvedIPv6(value: Buffer): string {
+  if (value.length !== 16) {
+    throw new Error(`RELAY_RESOLVED IPv6 record must be 16 bytes, got ${value.length}`);
+  }
+  const parts: string[] = [];
+  for (let i = 0; i < 16; i += 2) {
+    parts.push(value.readUInt16BE(i).toString(16));
+  }
+  return parts.join(':');
+}
