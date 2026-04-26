@@ -1,14 +1,22 @@
 /**
  * SOCKS5 proxy server that routes connections through a Tor circuit.
  *
- * RFC 1928 (SOCKS Protocol Version 5). Only the CONNECT command and
- * the NO_AUTH method are implemented; that's the same subset the
- * upstream Tor client exposes on its SocksPort and is enough to plug
- * existing tooling (curl, browsers, etc.) into the in-process stack.
+ * RFC 1928 (SOCKS Protocol Version 5) + RFC 1929 (Username/Password
+ * sub-negotiation). Only the CONNECT command is implemented; that's the
+ * same subset c-tor's SocksPort and Arti both expose for plain proxying.
+ *
+ * SOCKS5 username/password is **not** treated as authentication — c-tor
+ * and Arti both repurpose it as a stream-isolation key, and that's how
+ * we surface it here too: the parsed `SocksAuth` is handed to the
+ * caller-supplied {@link SocksCircuitFactory} (or to the `'connect'`
+ * event), and the caller decides whether to map it onto a fresh circuit,
+ * a circuit-pool slot, or just ignore it.
  *
  * Flow per accepted client connection:
- *   1. Wait for the SOCKS5 greeting; reply with NO_AUTH or NO_ACCEPTABLE.
- *   2. Wait for the CONNECT request; open a stream on the supplied circuit.
+ *   1. Wait for the SOCKS5 greeting; pick NO_AUTH if offered, else fall
+ *      back to USERNAME_PASSWORD (RFC 1929) and parse the credentials.
+ *   2. Wait for the CONNECT request; ask the configured circuit provider
+ *      for a circuit, then open a stream on it.
  *   3. Reply with SUCCEEDED and bidirectionally relay bytes between the
  *      TCP socket and the {@link CircuitStream} until either side closes.
  */
@@ -17,8 +25,12 @@ import net, { isIPv4, isIPv6 } from 'node:net';
 import { EventEmitter } from 'node:events';
 
 import type { Circuit, CircuitStream } from './circuit.ts';
+import { RelayEndError, RelayEndReasons } from './relay-cell.ts';
 
 export const SOCKS_VERSION = 0x05;
+
+/** RFC 1929 username/password sub-negotiation version byte. */
+export const SOCKS_USERPASS_VERSION = 0x01;
 
 export enum SocksAuthMethod {
   NO_AUTH = 0x00,
@@ -67,6 +79,18 @@ export interface SocksGreeting {
 }
 
 /**
+ * Parsed RFC 1929 credentials. Tor never authenticates these — they're
+ * the SOCKS-level isolation key, equivalent to c-tor's `ISO_SOCKSAUTH`
+ * and Arti's `SocksAuth::Username` field. Exposed as raw bytes so we
+ * don't accidentally mangle non-UTF-8 bytes that a tooling-side
+ * isolation hash relies on.
+ */
+export interface SocksAuth {
+  username: Buffer;
+  password: Buffer;
+}
+
+/**
  * Parse a SOCKS5 client greeting:
  *
  *   +----+----------+----------+
@@ -109,6 +133,63 @@ export function socksGreetingFrameLength(data: Buffer): number | undefined {
 /** Build the server's reply to the greeting (single chosen method). */
 export function buildSocksGreetingResponse(method: SocksAuthMethod): Buffer {
   return Buffer.from([SOCKS_VERSION, method]);
+}
+
+/**
+ * Parse an RFC 1929 username/password sub-negotiation message:
+ *
+ *   +----+------+----------+------+----------+
+ *   |VER | ULEN |  UNAME   | PLEN |  PASSWD  |
+ *   +----+------+----------+------+----------+
+ *   | 1  |  1   | 1 to 255 |  1   | 1 to 255 |
+ *   +----+------+----------+------+----------+
+ *
+ * `VER` is the sub-negotiation version (0x01), distinct from the SOCKS5
+ * protocol version (0x05) — clients that get this wrong are common
+ * enough that we error explicitly.
+ */
+export function parseSocksUserPass(data: Buffer): SocksAuth {
+  if (data.length < 2) {
+    throw new Error('SOCKS user/pass too short');
+  }
+  const version = data.readUInt8(0);
+  if (version !== SOCKS_USERPASS_VERSION) {
+    throw new Error(`Unsupported SOCKS user/pass version: ${version}`);
+  }
+  const ulen = data.readUInt8(1);
+  if (data.length < 2 + ulen + 1) {
+    throw new Error('SOCKS user/pass truncated (UNAME/PLEN)');
+  }
+  const username = Buffer.from(data.subarray(2, 2 + ulen));
+  const plen = data.readUInt8(2 + ulen);
+  if (data.length < 2 + ulen + 1 + plen) {
+    throw new Error('SOCKS user/pass truncated (PASSWD)');
+  }
+  const password = Buffer.from(data.subarray(2 + ulen + 1, 2 + ulen + 1 + plen));
+  return { username, password };
+}
+
+/**
+ * Total byte length of an RFC 1929 user/pass frame given a buffer that
+ * contains the prefix; returns `undefined` if the frame isn't complete yet.
+ */
+export function socksUserPassFrameLength(data: Buffer): number | undefined {
+  if (data.length < 2) return undefined;
+  const ulen = data.readUInt8(1);
+  const plenOffset = 2 + ulen;
+  if (data.length < plenOffset + 1) return undefined;
+  const plen = data.readUInt8(plenOffset);
+  const total = plenOffset + 1 + plen;
+  return data.length >= total ? total : undefined;
+}
+
+/**
+ * Build an RFC 1929 sub-negotiation reply. Tor always returns success here
+ * (`status = 0`), even with empty username/password — these are isolation
+ * keys, not credentials.
+ */
+export function buildSocksUserPassResponse(status: number = 0): Buffer {
+  return Buffer.from([SOCKS_USERPASS_VERSION, status & 0xff]);
 }
 
 /**
@@ -251,26 +332,95 @@ export function buildSocksReply(
 }
 
 /**
- * Translate a Node `net.connect`-style error code into the closest
- * matching SOCKS5 reply code. Used so that downstream tooling can
- * distinguish "host doesn't exist" from "exit relay refused".
+ * Translate a Tor RELAY_END `reason` byte into the closest matching SOCKS5
+ * reply code. Mirrors c-tor's `reasons.c::stream_end_reason_to_socks5_response`
+ * (see https://gitlab.torproject.org/tpo/core/tor/-/blob/main/src/core/or/reasons.c).
+ *
+ * Reasons not listed map to `GENERAL_FAILURE` so tooling never sees a bare
+ * number it can't display.
+ */
+export function socksReplyForRelayEndReason(reason: number): SocksReply {
+  switch (reason) {
+    case RelayEndReasons.REASON_RESOLVEFAILED:
+      return SocksReply.HOST_UNREACHABLE;
+    case RelayEndReasons.REASON_CONNECTREFUSED:
+      return SocksReply.CONNECTION_REFUSED;
+    case RelayEndReasons.REASON_EXITPOLICY:
+      return SocksReply.CONNECTION_NOT_ALLOWED;
+    case RelayEndReasons.REASON_TIMEOUT:
+      return SocksReply.TTL_EXPIRED;
+    case RelayEndReasons.REASON_NOROUTE:
+      return SocksReply.NETWORK_UNREACHABLE;
+    case RelayEndReasons.REASON_MISC:
+    case RelayEndReasons.REASON_DESTROY:
+    case RelayEndReasons.REASON_DONE:
+    case RelayEndReasons.REASON_HIBERNATING:
+    case RelayEndReasons.REASON_INTERNAL:
+    case RelayEndReasons.REASON_RESOURCELIMIT:
+    case RelayEndReasons.REASON_CONNRESET:
+    case RelayEndReasons.REASON_TORPROTOCOL:
+    case RelayEndReasons.REASON_NOTDIRECTORY:
+      return SocksReply.GENERAL_FAILURE;
+    default:
+      return SocksReply.GENERAL_FAILURE;
+  }
+}
+
+/**
+ * Map an error from `circuit.open()` (or any failure during the SOCKS-side
+ * stream-establishment path) onto a SOCKS5 reply code. Checks for
+ * {@link RelayEndError} first (Tor-side failures, the most specific
+ * signal), then falls back to Node-style network error codes
+ * (`ECONNREFUSED`, `EHOSTUNREACH`, `ENETUNREACH`, `ETIMEDOUT`).
  */
 export function socksReplyForOpenError(err: unknown): SocksReply {
+  if (err instanceof RelayEndError) {
+    return socksReplyForRelayEndReason(err.reason);
+  }
   const code = (err as { code?: string } | null)?.code;
   if (code === 'ENETUNREACH') return SocksReply.NETWORK_UNREACHABLE;
   if (code === 'ECONNREFUSED') return SocksReply.CONNECTION_REFUSED;
   if (code === 'EHOSTUNREACH') return SocksReply.HOST_UNREACHABLE;
+  if (code === 'ETIMEDOUT') return SocksReply.TTL_EXPIRED;
   return SocksReply.HOST_UNREACHABLE;
 }
+
+/**
+ * Context passed to a {@link SocksCircuitFactory}. Includes the parsed
+ * CONNECT request and any RFC 1929 credentials the client sent. The
+ * factory is the canonical place to implement stream isolation: derive
+ * a key from `auth` (and/or `request.destinationAddress`) and pick or
+ * build a circuit accordingly.
+ */
+export interface SocksConnectionContext {
+  request: SocksRequest;
+  auth?: SocksAuth;
+}
+
+/**
+ * Per-connection circuit provider. Called once per accepted SOCKS
+ * connection, after the request has been parsed but before the BEGIN
+ * cell is sent. The returned circuit is used for that one connection;
+ * its lifetime stays with the caller — {@link SocksProxyServer} never
+ * destroys circuits it didn't create.
+ */
+export type SocksCircuitFactory = (ctx: SocksConnectionContext) => Promise<Circuit>;
 
 /** Options for {@link SocksProxyServer}. */
 export interface SocksServerOptions {
   /**
-   * The Tor circuit to use for outbound connections. Each accepted SOCKS
-   * client opens its own {@link CircuitStream} on this circuit; the caller
-   * owns the circuit's lifetime.
+   * A single shared Tor circuit. Every accepted SOCKS connection opens
+   * its own {@link CircuitStream} on this circuit. Mutually exclusive
+   * with {@link SocksServerOptions.circuitFactory}.
    */
-  circuit: Circuit;
+  circuit?: Circuit;
+  /**
+   * Per-connection circuit factory — equivalent to c-tor's stream
+   * isolation knob. Receives the parsed request and the client's RFC
+   * 1929 credentials (if any) and returns the circuit to use.
+   * Mutually exclusive with {@link SocksServerOptions.circuit}.
+   */
+  circuitFactory?: SocksCircuitFactory;
   /** Port to listen on. Default: 1080. */
   port?: number;
   /** Host to bind to. Default: '127.0.0.1'. */
@@ -289,6 +439,7 @@ export function formatTorDestination(addr: string, port: number): string {
 
 const enum ConnectionPhase {
   Greeting,
+  Auth,
   Request,
   Connecting,
   Relaying,
@@ -296,24 +447,37 @@ const enum ConnectionPhase {
 }
 
 /**
- * SOCKS5 proxy server that routes accepted connections through a single
- * shared Tor {@link Circuit}.
+ * SOCKS5 proxy server that routes accepted connections through a Tor
+ * {@link Circuit}. The circuit can be a single shared one (passed via
+ * `options.circuit`) or supplied per connection by a factory
+ * (`options.circuitFactory`) — the latter is how callers implement
+ * stream isolation.
  *
- * Lifecycle: caller constructs with a connected circuit, awaits
- * {@link start}, and {@link stop}s when finished. The circuit itself is
- * owned by the caller; the server only opens streams on it and never
- * destroys it.
+ * Lifecycle: caller constructs, awaits {@link start}, and {@link stop}s
+ * when finished. Circuits handed to or returned by the server are owned
+ * by the caller; the server only opens streams on them and never
+ * destroys them itself.
  */
 export class SocksProxyServer extends EventEmitter {
   private readonly server: net.Server;
-  private readonly circuit: Circuit;
+  private readonly circuitProvider: SocksCircuitFactory;
   private readonly port: number;
   private readonly host: string;
   private readonly connections = new Set<net.Socket>();
 
   constructor(options: SocksServerOptions) {
     super();
-    this.circuit = options.circuit;
+    if (options.circuit && options.circuitFactory) {
+      throw new Error('SocksServerOptions: pass either `circuit` or `circuitFactory`, not both');
+    }
+    if (options.circuit) {
+      const circuit = options.circuit;
+      this.circuitProvider = async () => circuit;
+    } else if (options.circuitFactory) {
+      this.circuitProvider = options.circuitFactory;
+    } else {
+      throw new Error('SocksServerOptions: either `circuit` or `circuitFactory` is required');
+    }
     this.port = options.port ?? 1080;
     this.host = options.host ?? '127.0.0.1';
     this.server = net.createServer((socket) => this.handleConnection(socket));
@@ -361,6 +525,7 @@ export class SocksProxyServer extends EventEmitter {
 
     let phase: ConnectionPhase = ConnectionPhase.Greeting;
     let buffer = Buffer.alloc(0);
+    let auth: SocksAuth | undefined;
     let circuitStream: CircuitStream | undefined;
     // Serialize writes from the socket onto the (async) circuit stream so
     // chunks aren't reordered by interleaved awaits, and so backpressure
@@ -434,14 +599,34 @@ export class SocksProxyServer extends EventEmitter {
           const greeting = parseSocksGreeting(buffer.subarray(0, total));
           buffer = buffer.subarray(total);
 
-          if (!greeting.methods.includes(SocksAuthMethod.NO_AUTH)) {
+          // Prefer NO_AUTH (matches c-tor's `socks_prefer_no_auth`).
+          // Fall back to USERNAME_PASSWORD so clients that always
+          // advertise it for stream isolation (Tor Browser, torsocks
+          // with isolation flags) don't get rejected.
+          if (greeting.methods.includes(SocksAuthMethod.NO_AUTH)) {
+            socket.write(buildSocksGreetingResponse(SocksAuthMethod.NO_AUTH));
+            phase = ConnectionPhase.Request;
+          } else if (greeting.methods.includes(SocksAuthMethod.USERNAME_PASSWORD)) {
+            socket.write(buildSocksGreetingResponse(SocksAuthMethod.USERNAME_PASSWORD));
+            phase = ConnectionPhase.Auth;
+          } else {
             socket.write(buildSocksGreetingResponse(SocksAuthMethod.NO_ACCEPTABLE));
             socket.end();
             return;
           }
-          socket.write(buildSocksGreetingResponse(SocksAuthMethod.NO_AUTH));
+          // fall through: the request (or sub-negotiation) bytes may
+          // already be in `buffer`
+        }
+
+        if (phase === ConnectionPhase.Auth) {
+          const total = socksUserPassFrameLength(buffer);
+          if (total === undefined) return; // wait for more
+          auth = parseSocksUserPass(buffer.subarray(0, total));
+          buffer = buffer.subarray(total);
+          // Tor never authenticates these — always succeed.
+          socket.write(buildSocksUserPassResponse(0));
           phase = ConnectionPhase.Request;
-          // fall through: there may already be request bytes in `buffer`
+          // fall through
         }
 
         if (phase === ConnectionPhase.Request) {
@@ -473,14 +658,15 @@ export class SocksProxyServer extends EventEmitter {
             request.destinationAddress,
             request.destinationPort
           );
-          this.emit('connect', { destination, request, socket });
+          const ctx: SocksConnectionContext = auth ? { request, auth } : { request };
+          this.emit('connect', { destination, request, auth, socket });
           phase = ConnectionPhase.Connecting;
 
           // Pause the socket while we open a Tor stream so any extra bytes
           // the client speculatively sends don't show up as 'data' events
           // on a half-built circuit stream.
           socket.pause();
-          this.openCircuitStream(socket, destination)
+          this.openStreamForConnection(ctx, destination)
             .then((stream) => {
               if (phase === ConnectionPhase.Closed) {
                 stream.destroy();
@@ -527,11 +713,17 @@ export class SocksProxyServer extends EventEmitter {
   }
 
   /**
-   * Open a Tor stream for the destination requested by a SOCKS client.
-   * Pulled out so tests can substitute a fake circuit without monkey-patching.
+   * Resolve the circuit for this connection (via the configured shared
+   * circuit or factory) and open a stream to `destination`. Pulled out as
+   * a single async step so the `'data'`-handler caller doesn't have to
+   * thread two failure paths.
    */
-  protected openCircuitStream(_socket: net.Socket, destination: string): Promise<CircuitStream> {
-    return this.circuit.open(destination);
+  protected async openStreamForConnection(
+    ctx: SocksConnectionContext,
+    destination: string
+  ): Promise<CircuitStream> {
+    const circuit = await this.circuitProvider(ctx);
+    return circuit.open(destination);
   }
 
   private setupRelay(

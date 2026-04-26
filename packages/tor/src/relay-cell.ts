@@ -250,3 +250,27 @@ export function getStreamRetryBehavior(reason: number): StreamRetryBehavior {
 export function isRetryableEndReason(reason: number): boolean {
   return getStreamRetryBehavior(reason) !== 'no_retry';
 }
+
+/**
+ * Error thrown / surfaced when the exit returns RELAY_END with a non-DONE
+ * reason. The numeric `reason` and human-readable `reasonName` are exposed
+ * as own properties so callers can map them to a higher-level status (e.g.
+ * SOCKS reply codes) without having to pattern-match the message string.
+ *
+ * The message format is preserved across releases so any
+ * existing log/scrape consumers stay working.
+ */
+export class RelayEndError extends Error {
+  readonly reason: number;
+  readonly reasonName: string;
+  readonly payloadHex: string;
+
+  constructor(reason: number, payloadHex: string) {
+    const reasonName = RelayEndReasonNames[reason] ?? `UNKNOWN_REASON_${reason}`;
+    super(`stream ended: ${reasonName} (${reason}) payload=0x${payloadHex}`);
+    this.name = 'RelayEndError';
+    this.reason = reason;
+    this.reasonName = reasonName;
+    this.payloadHex = payloadHex;
+  }
+}

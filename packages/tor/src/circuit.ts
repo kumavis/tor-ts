@@ -79,6 +79,7 @@ import {
 import type { NtorServerHandshake } from './ntor.ts';
 import {
   RelayCell,
+  RelayEndError,
   RelayEndReasons,
   RelayEndReasonNames,
   serializeExtend2,
@@ -864,9 +865,7 @@ export class Circuit extends EventEmitter {
         console.warn(
           `Got ungraceful end for stream ${streamId} with reason ${reasonName} (payload 0x${payloadHex})`
         );
-        stream.destroy(
-          new Error(`stream ended: ${reasonName} (${reason}) payload=0x${payloadHex}`)
-        );
+        stream.destroy(new RelayEndError(reason, payloadHex));
         return;
       }
       case RelayCell.SENDME: {

@@ -14,6 +14,7 @@ import { ReadableStream, WritableStream } from 'node:stream/web';
 
 import {
   SOCKS_VERSION,
+  SOCKS_USERPASS_VERSION,
   SocksAuthMethod,
   SocksCommand,
   SocksAddressType,
@@ -21,15 +22,21 @@ import {
   SocksProxyServer,
   buildSocksGreetingResponse,
   buildSocksReply,
+  buildSocksUserPassResponse,
   createSocksProxy,
   formatTorDestination,
   parseSocksGreeting,
   parseSocksRequest,
+  parseSocksUserPass,
   socksGreetingFrameLength,
   socksReplyForOpenError,
+  socksReplyForRelayEndReason,
   socksRequestFrameLength,
+  socksUserPassFrameLength,
+  type SocksConnectionContext,
 } from './socks.ts';
 import { Circuit, CircuitStream } from './circuit.ts';
+import { RelayEndError, RelayEndReasons } from './relay-cell.ts';
 
 // =============================================================================
 // Constants
@@ -305,8 +312,156 @@ test('socksReplyForOpenError: maps net error codes', (t) => {
   t.is(socksReplyForOpenError({ code: 'ENETUNREACH' }), SocksReply.NETWORK_UNREACHABLE);
   t.is(socksReplyForOpenError({ code: 'ECONNREFUSED' }), SocksReply.CONNECTION_REFUSED);
   t.is(socksReplyForOpenError({ code: 'EHOSTUNREACH' }), SocksReply.HOST_UNREACHABLE);
+  t.is(socksReplyForOpenError({ code: 'ETIMEDOUT' }), SocksReply.TTL_EXPIRED);
   t.is(socksReplyForOpenError({}), SocksReply.HOST_UNREACHABLE);
   t.is(socksReplyForOpenError(null), SocksReply.HOST_UNREACHABLE);
+});
+
+test('socksReplyForOpenError: prefers RelayEndError reason over Node code', (t) => {
+  // RelayEndError takes precedence — the Tor-side reason is more specific.
+  const err = new RelayEndError(RelayEndReasons.REASON_EXITPOLICY, 'aabb');
+  t.is(socksReplyForOpenError(err), SocksReply.CONNECTION_NOT_ALLOWED);
+});
+
+// =============================================================================
+// socksReplyForRelayEndReason — mirrors c-tor's stream_end_reason_to_socks5_response
+// =============================================================================
+
+test('socksReplyForRelayEndReason: known reasons map per c-tor', (t) => {
+  t.is(
+    socksReplyForRelayEndReason(RelayEndReasons.REASON_RESOLVEFAILED),
+    SocksReply.HOST_UNREACHABLE
+  );
+  t.is(
+    socksReplyForRelayEndReason(RelayEndReasons.REASON_CONNECTREFUSED),
+    SocksReply.CONNECTION_REFUSED
+  );
+  t.is(
+    socksReplyForRelayEndReason(RelayEndReasons.REASON_EXITPOLICY),
+    SocksReply.CONNECTION_NOT_ALLOWED
+  );
+  t.is(socksReplyForRelayEndReason(RelayEndReasons.REASON_TIMEOUT), SocksReply.TTL_EXPIRED);
+  t.is(socksReplyForRelayEndReason(RelayEndReasons.REASON_NOROUTE), SocksReply.NETWORK_UNREACHABLE);
+});
+
+test('socksReplyForRelayEndReason: catch-all reasons fall through to GENERAL_FAILURE', (t) => {
+  for (const reason of [
+    RelayEndReasons.REASON_MISC,
+    RelayEndReasons.REASON_DESTROY,
+    RelayEndReasons.REASON_DONE,
+    RelayEndReasons.REASON_HIBERNATING,
+    RelayEndReasons.REASON_INTERNAL,
+    RelayEndReasons.REASON_RESOURCELIMIT,
+    RelayEndReasons.REASON_CONNRESET,
+    RelayEndReasons.REASON_TORPROTOCOL,
+    RelayEndReasons.REASON_NOTDIRECTORY,
+  ]) {
+    t.is(socksReplyForRelayEndReason(reason), SocksReply.GENERAL_FAILURE, `reason=${reason}`);
+  }
+});
+
+test('socksReplyForRelayEndReason: unknown reason falls through to GENERAL_FAILURE', (t) => {
+  t.is(socksReplyForRelayEndReason(99), SocksReply.GENERAL_FAILURE);
+});
+
+// =============================================================================
+// RFC 1929 user/pass sub-negotiation
+// =============================================================================
+
+test('parseSocksUserPass: simple username + password', (t) => {
+  const data = Buffer.concat([
+    Buffer.from([SOCKS_USERPASS_VERSION, 4]),
+    Buffer.from('user', 'ascii'),
+    Buffer.from([4]),
+    Buffer.from('pass', 'ascii'),
+  ]);
+  const auth = parseSocksUserPass(data);
+  t.is(auth.username.toString('ascii'), 'user');
+  t.is(auth.password.toString('ascii'), 'pass');
+});
+
+test('parseSocksUserPass: empty username + password (Tor isolation pattern)', (t) => {
+  const data = Buffer.from([SOCKS_USERPASS_VERSION, 0, 0]);
+  const auth = parseSocksUserPass(data);
+  t.is(auth.username.length, 0);
+  t.is(auth.password.length, 0);
+});
+
+test('parseSocksUserPass: throws on too short', (t) => {
+  t.throws(() => parseSocksUserPass(Buffer.from([SOCKS_USERPASS_VERSION])), {
+    message: 'SOCKS user/pass too short',
+  });
+});
+
+test('parseSocksUserPass: throws on unsupported version', (t) => {
+  // 0x05 is the SOCKS5 version, not the user/pass sub-negotiation version.
+  t.throws(() => parseSocksUserPass(Buffer.from([0x05, 0x00, 0x00])), {
+    message: 'Unsupported SOCKS user/pass version: 5',
+  });
+});
+
+test('parseSocksUserPass: throws on truncated PASSWD', (t) => {
+  // ULEN=4 'user', PLEN=4 'pa' (truncated)
+  const data = Buffer.concat([
+    Buffer.from([SOCKS_USERPASS_VERSION, 4]),
+    Buffer.from('user', 'ascii'),
+    Buffer.from([4]),
+    Buffer.from('pa', 'ascii'),
+  ]);
+  t.throws(() => parseSocksUserPass(data), { message: /SOCKS user\/pass truncated/ });
+});
+
+test('parseSocksUserPass: throws when PLEN byte itself is missing', (t) => {
+  // VER + ULEN=4 + 'user', no PLEN.
+  const data = Buffer.concat([
+    Buffer.from([SOCKS_USERPASS_VERSION, 4]),
+    Buffer.from('user', 'ascii'),
+  ]);
+  t.throws(() => parseSocksUserPass(data), { message: /SOCKS user\/pass truncated/ });
+});
+
+test('socksUserPassFrameLength: complete frame returns total length', (t) => {
+  // VER + ULEN=4 + 'user' + PLEN=4 + 'pass' = 11 bytes
+  const data = Buffer.concat([
+    Buffer.from([SOCKS_USERPASS_VERSION, 4]),
+    Buffer.from('user', 'ascii'),
+    Buffer.from([4]),
+    Buffer.from('pass', 'ascii'),
+  ]);
+  t.is(socksUserPassFrameLength(data), 11);
+});
+
+test('socksUserPassFrameLength: returns undefined for partial frames', (t) => {
+  t.is(socksUserPassFrameLength(Buffer.from([SOCKS_USERPASS_VERSION])), undefined);
+  // VER + ULEN=4 but no UNAME yet
+  t.is(socksUserPassFrameLength(Buffer.from([SOCKS_USERPASS_VERSION, 4])), undefined);
+  // Missing PLEN byte
+  t.is(
+    socksUserPassFrameLength(
+      Buffer.concat([Buffer.from([SOCKS_USERPASS_VERSION, 4]), Buffer.from('user', 'ascii')])
+    ),
+    undefined
+  );
+  // Missing PASSWD bytes
+  t.is(
+    socksUserPassFrameLength(
+      Buffer.concat([
+        Buffer.from([SOCKS_USERPASS_VERSION, 4]),
+        Buffer.from('user', 'ascii'),
+        Buffer.from([4]),
+        Buffer.from('pa', 'ascii'),
+      ])
+    ),
+    undefined
+  );
+});
+
+test('buildSocksUserPassResponse: defaults to status=0 (success)', (t) => {
+  t.deepEqual(buildSocksUserPassResponse(), Buffer.from([SOCKS_USERPASS_VERSION, 0]));
+});
+
+test('buildSocksUserPassResponse: explicit non-zero status is preserved', (t) => {
+  t.deepEqual(buildSocksUserPassResponse(0xff), Buffer.from([SOCKS_USERPASS_VERSION, 0xff]));
 });
 
 // =============================================================================
@@ -514,8 +669,8 @@ test('SocksProxyServer: rejects unsupported auth methods', async (t) => {
     const socket = net.connect(port, '127.0.0.1');
     await once(socket, 'connect');
     const reader = makeByteReader(socket);
-    // Only USERNAME_PASSWORD - we don't support it.
-    socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.USERNAME_PASSWORD]));
+    // GSSAPI only — we never advertise it.
+    socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.GSSAPI]));
     const resp = await reader.read(2, 'greeting');
     t.deepEqual(resp, Buffer.from([SOCKS_VERSION, SocksAuthMethod.NO_ACCEPTABLE]));
     await once(socket, 'close');
@@ -678,4 +833,283 @@ test('SocksProxyServer: stop() closes active client sockets', async (t) => {
   await server.stop();
   await closed;
   t.pass();
+});
+
+// =============================================================================
+// USERNAME_PASSWORD support
+// =============================================================================
+
+test('SocksProxyServer: prefers NO_AUTH when both methods are offered', async (t) => {
+  const fake = new FakeCircuit();
+  const { server, port } = await startServer(fake);
+  try {
+    const socket = net.connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    const reader = makeByteReader(socket);
+
+    socket.write(
+      Buffer.from([SOCKS_VERSION, 0x02, SocksAuthMethod.NO_AUTH, SocksAuthMethod.USERNAME_PASSWORD])
+    );
+    const resp = await reader.read(2, 'greeting');
+    // c-tor's `socks_prefer_no_auth` mirrors this: pick NO_AUTH.
+    t.deepEqual(resp, Buffer.from([SOCKS_VERSION, SocksAuthMethod.NO_AUTH]));
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SocksProxyServer: falls back to USERNAME_PASSWORD when NO_AUTH absent', async (t) => {
+  const fake = new FakeCircuit();
+  let connectCtx: { auth?: { username: Buffer; password: Buffer } } | undefined;
+  const server = new SocksProxyServer({
+    circuit: fakeCircuitAsCircuit(fake),
+    port: 0,
+    host: '127.0.0.1',
+  });
+  server.on(
+    'connect',
+    (evt: { auth?: { username: Buffer; password: Buffer } }) => (connectCtx = evt)
+  );
+  await server.start();
+  try {
+    const addr = server.address();
+    if (!addr || typeof addr === 'string') throw new Error('not bound');
+    const socket = net.connect(addr.port, '127.0.0.1');
+    await once(socket, 'connect');
+    const reader = makeByteReader(socket);
+
+    // Greeting: only USERNAME_PASSWORD
+    socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.USERNAME_PASSWORD]));
+    const greetResp = await reader.read(2, 'greeting');
+    t.deepEqual(greetResp, Buffer.from([SOCKS_VERSION, SocksAuthMethod.USERNAME_PASSWORD]));
+
+    // RFC 1929 sub-negotiation
+    const username = 'tor-iso-key';
+    const password = 's3cret';
+    socket.write(
+      Buffer.concat([
+        Buffer.from([SOCKS_USERPASS_VERSION, username.length]),
+        Buffer.from(username, 'ascii'),
+        Buffer.from([password.length]),
+        Buffer.from(password, 'ascii'),
+      ])
+    );
+    const authResp = await reader.read(2, 'auth');
+    // Tor always succeeds (status=0).
+    t.deepEqual(authResp, Buffer.from([SOCKS_USERPASS_VERSION, 0]));
+
+    // CONNECT
+    socket.write(
+      Buffer.from([SOCKS_VERSION, SocksCommand.CONNECT, 0x00, 0x01, 127, 0, 0, 1, 0x00, 0x50])
+    );
+    const reply = await reader.read(10, 'connect');
+    t.is(reply[1], SocksReply.SUCCEEDED);
+
+    // The auth payload was surfaced on 'connect' — that's the isolation hook.
+    t.is(connectCtx?.auth?.username.toString('ascii'), username);
+    t.is(connectCtx?.auth?.password.toString('ascii'), password);
+
+    socket.destroy();
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SocksProxyServer: empty user/pass (Tor Browser isolation idiom) succeeds', async (t) => {
+  const fake = new FakeCircuit();
+  const server = new SocksProxyServer({
+    circuit: fakeCircuitAsCircuit(fake),
+    port: 0,
+    host: '127.0.0.1',
+  });
+  await server.start();
+  try {
+    const addr = server.address();
+    if (!addr || typeof addr === 'string') throw new Error('not bound');
+    const socket = net.connect(addr.port, '127.0.0.1');
+    await once(socket, 'connect');
+    const reader = makeByteReader(socket);
+
+    socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.USERNAME_PASSWORD]));
+    await reader.read(2, 'greeting');
+    socket.write(Buffer.from([SOCKS_USERPASS_VERSION, 0, 0]));
+    const authResp = await reader.read(2, 'auth');
+    t.deepEqual(authResp, Buffer.from([SOCKS_USERPASS_VERSION, 0]));
+
+    socket.write(
+      Buffer.from([SOCKS_VERSION, SocksCommand.CONNECT, 0x00, 0x01, 127, 0, 0, 1, 0x00, 0x50])
+    );
+    const reply = await reader.read(10, 'connect');
+    t.is(reply[1], SocksReply.SUCCEEDED);
+    socket.destroy();
+  } finally {
+    await server.stop();
+  }
+});
+
+// =============================================================================
+// circuitFactory option (per-connection isolation)
+// =============================================================================
+
+test('SocksServerOptions: rejects both circuit and circuitFactory', (t) => {
+  const fake = new FakeCircuit();
+  t.throws(
+    () =>
+      new SocksProxyServer({
+        circuit: fakeCircuitAsCircuit(fake),
+        circuitFactory: async () => fakeCircuitAsCircuit(fake),
+      }),
+    { message: /pass either `circuit` or `circuitFactory`, not both/ }
+  );
+});
+
+test('SocksServerOptions: requires one of circuit / circuitFactory', (t) => {
+  t.throws(() => new SocksProxyServer({}), {
+    message: /either `circuit` or `circuitFactory` is required/,
+  });
+});
+
+test('SocksProxyServer: circuitFactory receives request + auth + is invoked per connection', async (t) => {
+  const fakes = [new FakeCircuit(), new FakeCircuit()];
+  let calls = 0;
+  const seen: SocksConnectionContext[] = [];
+  const server = new SocksProxyServer({
+    circuitFactory: async (ctx) => {
+      seen.push(ctx);
+      const fake = fakes[calls % fakes.length]!;
+      calls += 1;
+      return fakeCircuitAsCircuit(fake);
+    },
+    port: 0,
+    host: '127.0.0.1',
+  });
+  await server.start();
+  try {
+    const addr = server.address();
+    if (!addr || typeof addr === 'string') throw new Error('not bound');
+
+    // Two clients with distinct USERNAME_PASSWORD isolation keys.
+    const driveOne = async (user: string, host: string) => {
+      const socket = net.connect(addr.port, '127.0.0.1');
+      await once(socket, 'connect');
+      const reader = makeByteReader(socket);
+      socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.USERNAME_PASSWORD]));
+      await reader.read(2, 'greeting');
+      socket.write(
+        Buffer.concat([
+          Buffer.from([SOCKS_USERPASS_VERSION, user.length]),
+          Buffer.from(user, 'ascii'),
+          Buffer.from([0]),
+        ])
+      );
+      await reader.read(2, 'auth');
+      const hostBytes = Buffer.from(host, 'ascii');
+      socket.write(
+        Buffer.concat([
+          Buffer.from([
+            SOCKS_VERSION,
+            SocksCommand.CONNECT,
+            0x00,
+            SocksAddressType.DOMAIN,
+            hostBytes.length,
+          ]),
+          hostBytes,
+          Buffer.from([0x00, 0x50]),
+        ])
+      );
+      const reply = await reader.read(10, 'connect');
+      t.is(reply[1], SocksReply.SUCCEEDED);
+      socket.destroy();
+    };
+
+    await driveOne('iso-key-A', 'a.example');
+    await driveOne('iso-key-B', 'b.example');
+
+    t.is(calls, 2);
+    t.is(seen.length, 2);
+    t.is(seen[0]!.auth!.username.toString('ascii'), 'iso-key-A');
+    t.is(seen[0]!.request.destinationAddress, 'a.example');
+    t.is(seen[1]!.auth!.username.toString('ascii'), 'iso-key-B');
+    t.is(seen[1]!.request.destinationAddress, 'b.example');
+    t.is(fakes[0]!.openCalls, 1);
+    t.is(fakes[1]!.openCalls, 1);
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SocksProxyServer: circuitFactory rejection replies HOST_UNREACHABLE', async (t) => {
+  const server = new SocksProxyServer({
+    circuitFactory: async () => {
+      throw Object.assign(new Error('factory failed'), { code: 'EHOSTUNREACH' });
+    },
+    port: 0,
+    host: '127.0.0.1',
+  });
+  await server.start();
+  try {
+    const addr = server.address();
+    if (!addr || typeof addr === 'string') throw new Error('not bound');
+    const socket = net.connect(addr.port, '127.0.0.1');
+    await once(socket, 'connect');
+    const reader = makeByteReader(socket);
+    socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.NO_AUTH]));
+    await reader.read(2, 'greeting');
+    socket.write(
+      Buffer.from([SOCKS_VERSION, SocksCommand.CONNECT, 0x00, 0x01, 127, 0, 0, 1, 0x00, 0x50])
+    );
+    const reply = await reader.read(10, 'reply');
+    t.is(reply[1], SocksReply.HOST_UNREACHABLE);
+    await once(socket, 'close');
+  } finally {
+    await server.stop();
+  }
+});
+
+// =============================================================================
+// circuit.open() failure surfaces RelayEndError-derived REP
+// =============================================================================
+
+test('SocksProxyServer: RELAY_END EXITPOLICY surfaces as CONNECTION_NOT_ALLOWED', async (t) => {
+  const fake = new FakeCircuit();
+  fake.openMode = 'reject';
+  fake.rejectError = new RelayEndError(RelayEndReasons.REASON_EXITPOLICY, '04');
+  const { server, port } = await startServer(fake);
+  try {
+    const socket = net.connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    const reader = makeByteReader(socket);
+    socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.NO_AUTH]));
+    await reader.read(2, 'greeting');
+    socket.write(
+      Buffer.from([SOCKS_VERSION, SocksCommand.CONNECT, 0x00, 0x01, 127, 0, 0, 1, 0x00, 0x50])
+    );
+    const reply = await reader.read(10, 'reply');
+    t.is(reply[1], SocksReply.CONNECTION_NOT_ALLOWED);
+    await once(socket, 'close');
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SocksProxyServer: RELAY_END TIMEOUT surfaces as TTL_EXPIRED', async (t) => {
+  const fake = new FakeCircuit();
+  fake.openMode = 'reject';
+  fake.rejectError = new RelayEndError(RelayEndReasons.REASON_TIMEOUT, '07');
+  const { server, port } = await startServer(fake);
+  try {
+    const socket = net.connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    const reader = makeByteReader(socket);
+    socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.NO_AUTH]));
+    await reader.read(2, 'greeting');
+    socket.write(
+      Buffer.from([SOCKS_VERSION, SocksCommand.CONNECT, 0x00, 0x01, 127, 0, 0, 1, 0x00, 0x50])
+    );
+    const reply = await reader.read(10, 'reply');
+    t.is(reply[1], SocksReply.TTL_EXPIRED);
+    await once(socket, 'close');
+  } finally {
+    await server.stop();
+  }
 });
