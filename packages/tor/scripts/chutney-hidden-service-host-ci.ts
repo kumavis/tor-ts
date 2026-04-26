@@ -10,9 +10,10 @@
  * to verify the full INTRODUCE1 → INTRODUCE2 → RENDEZVOUS1 → RENDEZVOUS2 →
  * BEGIN → DATA → END pipeline.
  *
- * Gated via `TOR_TS_CHUTNEY_TESTS` including `hidden-service-host`; OFF by
- * default in `ci-chutney.sh` because it exercises the full HS protocol stack
- * end-to-end and is the most fragile test in the suite.
+ * Runs when `TOR_TS_CHUTNEY_TESTS` includes `hidden-service-host` (the
+ * current default in `ci-chutney.sh` is `exit,hidden-service,hidden-service-host`).
+ * It exercises the full HS protocol stack end-to-end and is one of the more
+ * fragile tests in the suite.
  */
 
 import type { CircuitStream } from '../src/circuit.ts';
