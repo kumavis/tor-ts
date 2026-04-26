@@ -31,7 +31,8 @@
     "./cli": "./src/cli.ts",
     "./hidden-service": "./src/hidden-service.ts",
     "./hidden-service-host": "./src/hidden-service-host.ts",
-    "./relay-cell": "./src/relay-cell.ts"
+    "./relay-cell": "./src/relay-cell.ts",
+    "./socks": "./src/socks.ts"
   },
   "scripts": {
     "dev": "pm2 start --no-daemon scripts/dev.config.cjs",

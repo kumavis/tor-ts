@@ -176,3 +176,25 @@ export {
 
 // Node.js HTTP fetch over Tor
 export { fetchViaTorCircuit } from './http-fetch.ts';
+
+// SOCKS5 proxy server over a Tor circuit
+export {
+  SocksProxyServer,
+  createSocksProxy,
+  SOCKS_VERSION,
+  SocksAuthMethod,
+  SocksCommand,
+  SocksAddressType,
+  SocksReply,
+  parseSocksGreeting,
+  buildSocksGreetingResponse,
+  parseSocksRequest,
+  buildSocksReply,
+  socksGreetingFrameLength,
+  socksRequestFrameLength,
+  socksReplyForOpenError,
+  formatTorDestination,
+  type SocksGreeting,
+  type SocksRequest,
+  type SocksServerOptions,
+} from './socks.ts';
