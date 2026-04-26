@@ -767,6 +767,23 @@ export class SocksProxyServer extends EventEmitter {
         if (phase === ConnectionPhase.Request) {
           const total = socksRequestFrameLength(buffer);
           if (total === undefined) return; // wait for more
+
+          // Reject unknown ATYP up-front with the spec-mandated reply code.
+          // `socksRequestFrameLength` returns `4` for unknown ATYP so we
+          // don't wait forever for bytes that will never come; without
+          // this guard, `parseSocksRequest` would throw and the outer catch
+          // would emit a generic GENERAL_FAILURE — but RFC 1928 requires
+          // ADDRESS_TYPE_NOT_SUPPORTED (0x08) for this case.
+          const atyp = buffer.readUInt8(3);
+          if (
+            atyp !== SocksAddressType.IPv4 &&
+            atyp !== SocksAddressType.DOMAIN &&
+            atyp !== SocksAddressType.IPv6
+          ) {
+            replyFatal(SocksReply.ADDRESS_TYPE_NOT_SUPPORTED);
+            return;
+          }
+
           const request = parseSocksRequest(buffer.subarray(0, total));
           buffer = buffer.subarray(total);
 
@@ -823,9 +840,6 @@ export class SocksProxyServer extends EventEmitter {
             phase = ConnectionPhase.Connecting;
             this.handleResolve(socket, ctx, {
               isClosed: () => phase === ConnectionPhase.Closed,
-              markClosed: () => {
-                phase = ConnectionPhase.Closed;
-              },
             });
             return;
           }
@@ -922,7 +936,6 @@ export class SocksProxyServer extends EventEmitter {
     ctx: SocksConnectionContext,
     hooks: {
       isClosed: () => boolean;
-      markClosed: () => void;
     }
   ): void {
     const { request } = ctx;
@@ -946,11 +959,11 @@ export class SocksProxyServer extends EventEmitter {
         const reply = buildResolveReply(request.command, records);
         socket.write(reply);
         socket.end();
-        // RESOLVE / RESOLVE_PTR are one-shot: after the reply we're done.
-        // The natural `'close'` event removes the socket from
-        // `this.connections` via `closeAll`; mark phase Closed so that
-        // path becomes a no-op once it fires.
-        hooks.markClosed();
+        // RESOLVE / RESOLVE_PTR are one-shot: after the reply, the socket's
+        // natural `'close'` listener calls `cleanupConnection()`, which
+        // removes it from `this.connections`. Don't preemptively mark phase
+        // Closed here — that would short-circuit `cleanupConnection()` and
+        // leak the socket in the connections set.
       })
       .catch((err: Error) => {
         this.emit('connectionError', err);
