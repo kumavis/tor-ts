@@ -1,20 +1,21 @@
 /**
- * Example: SOCKS5 proxy server over Tor (Node.js).
+ * Standalone runner for the SOCKS5 proxy over a live-network Tor circuit.
  *
- * Bootstraps a 3-hop Tor circuit on the live network, stands up a
- * SOCKS5 listener bound to localhost, and bridges accepted SOCKS
- * clients onto the circuit. Used as a runnable smoke-test / demo —
- * the live integration coverage in CI lives in the chutney script
- * (packages/tor/scripts/chutney-socks-ci.ts), not here.
+ * Bootstraps a 3-hop circuit (with retry on transient failures), stands
+ * up a SOCKS5 listener on `127.0.0.1:1080`, and bridges accepted SOCKS
+ * clients onto the circuit. Stays up until SIGINT/SIGTERM.
  *
- * Usage:
+ * Usage from the workspace root:
  *
- *   yarn workspace tor-example-socks-proxy start
+ *   yarn workspace tor socks-proxy
+ *
+ * Or from inside packages/tor:
+ *
+ *   yarn socks-proxy
  *
  * In another terminal, point a SOCKS5-aware client at it:
  *
  *   curl --socks5-hostname localhost:1080 https://check.torproject.org
- *   curl --socks5-hostname localhost:1080 http://example.com
  *
  * Stop with Ctrl-C.
  *
@@ -23,8 +24,11 @@
  *   TOR_TS_SOCKS_HOST  — host to bind (default 127.0.0.1).
  */
 
-import { connectRandomCircuitWithSafeBootstrap, retryTransient } from 'tor/build-circuit/mainnet';
-import { SocksProxyServer } from 'tor/socks';
+import {
+  connectRandomCircuitWithSafeBootstrap,
+  retryTransient,
+} from '../src/build-circuit/mainnet.ts';
+import { SocksProxyServer } from '../src/socks.ts';
 
 async function main() {
   const port = Number.parseInt(process.env.TOR_TS_SOCKS_PORT ?? '1080', 10);
@@ -50,13 +54,13 @@ async function main() {
   // Surface protocol-level diagnostics so unexpected client behaviour is
   // visible during development. Without these listeners SocksProxyServer
   // still emits the events; they just go unobserved.
-  server.on('connect', ({ destination }) => {
+  server.on('connect', ({ destination }: { destination: string }) => {
     console.log(`SOCKS CONNECT → ${destination}`);
   });
-  server.on('resolve', ({ query }) => {
+  server.on('resolve', ({ query }: { query: string }) => {
     console.log(`SOCKS RESOLVE → ${query}`);
   });
-  server.on('connectionError', (err) => {
+  server.on('connectionError', (err: Error) => {
     console.warn(`SOCKS connection error: ${err.message}`);
   });
 
@@ -69,8 +73,9 @@ async function main() {
   console.log(`Try:  curl --socks5-hostname ${addr.address}:${addr.port} http://example.com`);
   console.log('Press Ctrl-C to stop.');
 
-  // Graceful shutdown — destroying the circuit before close() so any
-  // in-flight streams see a typed END rather than a half-open socket.
+  // Graceful shutdown — destroy active client sockets via server.stop()
+  // before tearing down the circuit so any in-flight stream sees a clean
+  // RELAY_END rather than a half-open socket.
   let stopping = false;
   const stop = async (signal: string) => {
     if (stopping) return;

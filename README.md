@@ -74,10 +74,12 @@ Not implemented:
   that fronts arbitrary clients with a Tor circuit per upstream connection.
   Useful for plugging existing tooling (curl, browsers, scripts) into the
   in-process Tor stack without changing them.
-- [`examples/socks-proxy`](./examples/socks-proxy) — local SOCKS5 proxy
-  server backed by a Tor circuit. Same idea as `http-proxy` but speaks
-  the protocol every Tor-aware tool already knows; supports CONNECT plus
-  Tor's anonymous-DNS RESOLVE / RESOLVE_PTR (proposal 100).
+
+A SOCKS5 listener equivalent of `http-proxy` ships inside the `tor`
+package — see `yarn workspace tor socks-proxy` (driver in
+[`packages/tor/scripts/run-socks-proxy.ts`](./packages/tor/scripts/run-socks-proxy.ts)).
+It bootstraps a circuit and binds `127.0.0.1:1080`; supports CONNECT
+plus Tor's anonymous-DNS RESOLVE / RESOLVE_PTR (proposal 100).
 
 ### Development
 
