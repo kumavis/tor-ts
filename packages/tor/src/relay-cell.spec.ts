@@ -353,6 +353,28 @@ test('ipv6StringToBytes: rejects malformed strings', (t) => {
   t.throws(() => ipv6StringToBytes('1::2::3'), { message: /Not a valid IPv6/ });
 });
 
+test('ipv6StringToBytes: rejects empty hextets outside `::` compression', (t) => {
+  // Trailing colon, no `::`. Used to be parsed as 1:2:3:4:5:6:7:0.
+  t.throws(() => ipv6StringToBytes('1:2:3:4:5:6:7:'), { message: /Not a valid IPv6/ });
+  // Leading colon
+  t.throws(() => ipv6StringToBytes(':1:2:3:4:5:6:7'), { message: /Not a valid IPv6/ });
+  // Empty middle group
+  t.throws(() => ipv6StringToBytes('1:2::3::4'), { message: /Not a valid IPv6/ });
+  // Group with non-hex chars
+  t.throws(() => ipv6StringToBytes('1:2:3:4:5:6:7:gggg'), { message: /Not a valid IPv6/ });
+  // Group with too many hex digits (5 > 4)
+  t.throws(() => ipv6StringToBytes('1:2:3:4:5:6:7:12345'), { message: /Not a valid IPv6/ });
+});
+
+test('ipv6StringToBytes: still accepts the canonical `::`-compressed forms', (t) => {
+  // Sanity-check the regression fix didn't break valid forms.
+  t.is(ipv6StringToBytes('::1').length, 16);
+  t.is(ipv6StringToBytes('1::').length, 16);
+  t.is(ipv6StringToBytes('::').length, 16);
+  t.is(ipv6StringToBytes('2001:db8::1').length, 16);
+  t.is(ipv6StringToBytes('::ffff:1.2.3.4').length, 16);
+});
+
 test('formatResolvedIPv4: rejects non-4-byte inputs', (t) => {
   t.throws(() => formatResolvedIPv4(Buffer.from([1, 2, 3])), { message: /4 bytes/ });
 });

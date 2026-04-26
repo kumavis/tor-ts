@@ -390,15 +390,26 @@ export function ipv6StringToBytes(addr: string): Buffer {
       throw new Error(`Not a valid IPv6 address: ${addr}`);
     }
   }
+  // Each non-compressed hextet must be 1-4 hex digits. The `sides[0] ?` /
+  // `sides[1] ?` ternaries above already collapse the empty boundary
+  // strings produced by `::`-compression to `[]`, so any empty group we
+  // see here came from a trailing/double-colon outside `::` (e.g.
+  // `1:2:3:4:5:6:7:`) and is invalid per RFC 4291.
+  const parseHextet = (g: string): number => {
+    if (!/^[0-9A-Fa-f]{1,4}$/.test(g)) {
+      throw new Error(`Not a valid IPv6 address: ${addr}`);
+    }
+    return parseInt(g, 16);
+  };
   const groups: number[] = [];
-  for (const g of left) groups.push(parseInt(g || '0', 16));
+  for (const g of left) groups.push(parseHextet(g));
   for (let i = 0; i < fillCount; i++) groups.push(0);
-  for (const g of right) groups.push(parseInt(g || '0', 16));
+  for (const g of right) groups.push(parseHextet(g));
   if (tail4) {
     groups.push((tail4[0] << 8) | tail4[1]);
     groups.push((tail4[2] << 8) | tail4[3]);
   }
-  if (groups.length !== 8 || groups.some((g) => !Number.isFinite(g) || g < 0 || g > 0xffff)) {
+  if (groups.length !== 8) {
     throw new Error(`Not a valid IPv6 address: ${addr}`);
   }
   const buf = Buffer.alloc(16);
