@@ -52,7 +52,7 @@ import {
   lookupPeerInfo,
   lookupPeerInfoWithEd25519IdentityKey,
 } from './directory-client.ts';
-import { computeTimePeriod, deriveSubcredential } from './hidden-service.ts';
+import { computeTimePeriod, deriveSubcredential, toBase64NoPad } from './hidden-service.ts';
 import type { VerifiedMicroDescConsensus, MicroDescNodeInfo } from './build-circuit/directory.ts';
 import type { TorClient } from './client.ts';
 
@@ -546,8 +546,12 @@ function generateInnerLayerPlaintext(params: {
 
   for (const intro of params.introPoints) {
     const lsBlock = buildLinkSpecifiersBlock(intro.peerInfo.linkSpecifiers);
-    lines.push(`introduction-point ${lsBlock.toString('base64')}`);
-    lines.push(`onion-key ntor ${intro.peerInfo.onionKey.toString('base64')}`);
+    // rend-spec-v3 §2.5.2: all the per-line base64 fields here are emitted
+    // WITHOUT `=` padding. C-tor's HSDir parser rejects the entire descriptor
+    // with "400 Invalid HS descriptor" if padding shows up — was the cause
+    // of the all-HSDirs-rejecting failure on the first chutney run.
+    lines.push(`introduction-point ${toBase64NoPad(lsBlock)}`);
+    lines.push(`onion-key ntor ${toBase64NoPad(intro.peerInfo.onionKey)}`);
 
     // auth-key cert (type 0x09): certifies the IP's auth ed25519 key,
     // signed by the descriptor signing key.
@@ -563,7 +567,7 @@ function generateInnerLayerPlaintext(params: {
     lines.push('auth-key');
     lines.push(...pemBlock('ED25519 CERT', authKeyCert));
 
-    lines.push(`enc-key ntor ${intro.encKeyPublic.toString('base64')}`);
+    lines.push(`enc-key ntor ${toBase64NoPad(intro.encKeyPublic)}`);
 
     // enc-key-cert (type 0x0b): certifies the ed25519-equivalent of the IP's
     // curve25519 enc key (proposal 228 appendix A), signed by the descriptor
@@ -603,13 +607,13 @@ function generateFirstLayerPlaintext(innerEncrypted: Buffer): Buffer {
 
   const lines: string[] = [];
   lines.push('desc-auth-type x25519');
-  lines.push(`desc-auth-ephemeral-key ${ephPub.toString('base64')}`);
+  lines.push(`desc-auth-ephemeral-key ${toBase64NoPad(ephPub)}`);
 
   // Padding to AUTH_CLIENT_PADDING_MULTIPLE entries with random fakes.
   for (let i = 0; i < AUTH_CLIENT_PADDING_MULTIPLE; i++) {
-    const clientId = Buffer.from(randomBytes(8)).toString('base64').replace(/=+$/, '');
-    const iv = Buffer.from(randomBytes(16)).toString('base64').replace(/=+$/, '');
-    const cookie = Buffer.from(randomBytes(16)).toString('base64').replace(/=+$/, '');
+    const clientId = toBase64NoPad(Buffer.from(randomBytes(8)));
+    const iv = toBase64NoPad(Buffer.from(randomBytes(16)));
+    const cookie = toBase64NoPad(Buffer.from(randomBytes(16)));
     lines.push(`auth-client ${clientId} ${iv} ${cookie}`);
   }
 
@@ -697,7 +701,7 @@ export async function generateDescriptor(params: {
     Buffer.from(descriptorBody, 'utf8'),
   ]);
   const signature = Buffer.from(ed.sign(sigInput, timePeriodKeys.descriptorSigningPrivateKey));
-  lines.push('signature ' + signature.toString('base64'));
+  lines.push('signature ' + toBase64NoPad(signature));
 
   return lines.join('\n') + '\n';
 }

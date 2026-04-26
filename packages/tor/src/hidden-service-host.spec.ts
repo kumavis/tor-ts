@@ -346,6 +346,45 @@ test('generateDescriptor: produces a parseable v3 descriptor with required field
   t.true(descriptor.includes('\nsignature '));
 });
 
+test('generateDescriptor: line-level base64 fields have NO `=` padding', async (t) => {
+  // c-tor's HSDir parser rejects descriptors with `=` padding on line-level
+  // base64 fields (introduction-point, onion-key ntor, enc-key ntor,
+  // desc-auth-ephemeral-key, signature) with a generic 400. Anything inside
+  // a -----BEGIN ... ----- PEM armor block is fine — those use padded base64.
+  const keys = generateHiddenServiceKeys();
+  const tp = deriveTimePeriodKeys({ keys, validAfter: new Date() });
+  const intro = generateIntroPointKeys(makePeerInfo(), Buffer.from(randomBytes(32)));
+  const descriptor = await generateDescriptor({
+    keys,
+    timePeriodKeys: tp,
+    introPoints: [intro],
+    revisionCounter: 1n,
+  });
+
+  // Strip every PEM block before checking — those legitimately have padding.
+  const stripped = descriptor.replace(
+    /-----BEGIN [A-Z0-9 ]+-----[\s\S]*?-----END [A-Z0-9 ]+-----/g,
+    ''
+  );
+
+  for (const field of [
+    'introduction-point',
+    'onion-key ntor',
+    'enc-key ntor',
+    'desc-auth-ephemeral-key',
+    'signature',
+    'auth-client',
+  ]) {
+    const lineRe = new RegExp(`^${field}\\s+(\\S.*?)\\s*$`, 'm');
+    const match = stripped.match(lineRe);
+    if (!match) continue;
+    t.false(
+      match[0].includes('='),
+      `field "${field}" must use base64-no-padding, got: ${match[0]}`
+    );
+  }
+});
+
 // =============================================================================
 // INTRODUCE2: client INTRODUCE1 -> server parse + decrypt round-trip
 // =============================================================================
