@@ -1,0 +1,20 @@
+{
+  "name": "tor-example-socks-proxy",
+  "version": "1.0.0",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node --experimental-transform-types index.ts",
+    "test": "echo 'No unit tests - this example is a runnable demo (yarn start)'",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test:live": "echo 'No live tests'"
+  },
+  "dependencies": {
+    "tor": "0.1.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.0.0",
+    "typescript": "^5.9.3"
+  }
+}
