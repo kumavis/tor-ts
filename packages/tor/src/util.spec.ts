@@ -55,25 +55,52 @@ test('PromiseLatch: multiple wait()ers each observe the same rejection', async (
   t.is(await b, 'b:shared');
 });
 
-test('PromiseLatch: a second resolve() is ignored (idempotent)', async (t) => {
+// Settling twice is a programmer error — the latch is one-shot. Loud failure
+// surfaces real bugs (handling a response twice, racing two destroy paths
+// against the success path) instead of silently dropping the second call.
+
+test('PromiseLatch: a second resolve() throws', async (t) => {
   const latch = new PromiseLatch<number>();
   latch.resolve(1);
-  latch.resolve(2);
+  t.throws(() => latch.resolve(2), {
+    message: /already-resolved/,
+  });
+  // Original value is preserved.
   t.is(await latch.wait(), 1);
 });
 
-test('PromiseLatch: reject() after resolve() is ignored', async (t) => {
+test('PromiseLatch: reject() after resolve() throws', async (t) => {
   const latch = new PromiseLatch<number>();
   latch.resolve(1);
-  latch.reject(new Error('too late'));
+  t.throws(() => latch.reject(new Error('too late')), {
+    message: /already-resolved/,
+  });
   t.is(await latch.wait(), 1);
 });
 
-test('PromiseLatch: resolve() after reject() is ignored', async (t) => {
+test('PromiseLatch: resolve() after reject() throws', async (t) => {
   const latch = new PromiseLatch<number>();
   latch.reject(new Error('first'));
-  latch.resolve(1);
+  t.throws(() => latch.resolve(1), {
+    message: /already-rejected/,
+  });
   await t.throwsAsync(latch.wait(), { message: 'first' });
+});
+
+test('PromiseLatch: a second reject() throws', (t) => {
+  const latch = new PromiseLatch<void>();
+  latch.reject(new Error('first'));
+  t.throws(() => latch.reject(new Error('second')), {
+    message: /already-rejected/,
+  });
+});
+
+test('PromiseLatch: callers can guard with isPending() to keep idempotent semantics', (t) => {
+  const latch = new PromiseLatch<void>();
+  // Pattern used in CircuitStream.destroy: only settle if pending.
+  if (latch.isPending()) latch.resolve();
+  if (latch.isPending()) latch.reject(new Error('would-have-thrown'));
+  t.true(latch.isSettled());
 });
 
 test('PromiseLatch: isPending / isSettled track state correctly', (t) => {

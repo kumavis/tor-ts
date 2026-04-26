@@ -106,7 +106,13 @@ export class Mutex {
  *  - `wait()` before settlement → Promise resolves/rejects when settlement happens
  *  - Multiple `wait()` callers each get an independent Promise, all settling together
  *  - Late `wait()` after settlement → Promise that's already in the right state
- *  - Second `resolve()`/`reject()` → no-op (idempotent)
+ *
+ * Differs from `Promise.withResolvers()` in one place: a second `resolve()`
+ * or `reject()` is a programmer error and throws synchronously rather than
+ * being silently ignored. Latch settlement is one-shot; a re-settle attempt
+ * usually means a bug in the caller (e.g. handling the same response twice
+ * or racing two destroy paths against the success path). Use `isPending()`
+ * to gate the call when racing is intentional.
  */
 export class PromiseLatch<T = void> {
   private state: 'pending' | 'resolved' | 'rejected' = 'pending';
@@ -115,8 +121,15 @@ export class PromiseLatch<T = void> {
   private resolveCallbacks: Array<(value: T) => void> = [];
   private rejectCallbacks: Array<(err: Error) => void> = [];
 
-  resolve(value: T): void {
-    if (this.state !== 'pending') return;
+  /**
+   * Settle with a resolved value. Throws if the latch has already been
+   * resolved or rejected. When `T` is `void` the argument is omitted.
+   */
+  resolve(...args: T extends void ? [] : [value: T]): void {
+    if (this.state !== 'pending') {
+      throw new Error(`PromiseLatch.resolve() called on already-${this.state} latch`);
+    }
+    const value = (args.length === 0 ? (undefined as unknown as T) : args[0]) as T;
     this.state = 'resolved';
     this.resolvedValue = value;
     const cbs = this.resolveCallbacks;
@@ -125,8 +138,14 @@ export class PromiseLatch<T = void> {
     for (const cb of cbs) cb(value);
   }
 
+  /**
+   * Settle with a rejection. Throws if the latch has already been resolved
+   * or rejected.
+   */
   reject(err: Error): void {
-    if (this.state !== 'pending') return;
+    if (this.state !== 'pending') {
+      throw new Error(`PromiseLatch.reject() called on already-${this.state} latch`);
+    }
     this.state = 'rejected';
     this.rejectionReason = err;
     const cbs = this.rejectCallbacks;
