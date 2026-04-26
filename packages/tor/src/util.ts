@@ -84,3 +84,71 @@ export class Mutex {
     return unlockP;
   }
 }
+
+/**
+ * One-shot Promise-shaped latch that holds its settled state instead of
+ * keeping a Promise around.
+ *
+ * Why this exists: with `Promise.withResolvers()` (or any deferred), calling
+ * `reject()` before any consumer has attached to `.promise` produces an
+ * unhandled rejection that crashes Node. The fix used to be a no-op
+ * `.catch()` at construction time, which silenced *all* errors from that
+ * kit — too coarse.
+ *
+ * `PromiseLatch` instead records the resolution/rejection synchronously and
+ * only materializes a Promise when a caller actually calls `wait()`. If
+ * nobody ever waits, `reject()` is a tree-falls-in-the-forest no-op — no
+ * Promise object exists, so there's nothing for the runtime to flag as
+ * unhandled. Late awaiters (after settlement) get a fresh Promise that
+ * resolves/rejects immediately from the cached state.
+ *
+ * Behaviour matches `Promise.withResolvers()` for the cases that matter:
+ *  - `wait()` before settlement → Promise resolves/rejects when settlement happens
+ *  - Multiple `wait()` callers each get an independent Promise, all settling together
+ *  - Late `wait()` after settlement → Promise that's already in the right state
+ *  - Second `resolve()`/`reject()` → no-op (idempotent)
+ */
+export class PromiseLatch<T = void> {
+  private state: 'pending' | 'resolved' | 'rejected' = 'pending';
+  private resolvedValue: T | undefined;
+  private rejectionReason: Error | undefined;
+  private resolveCallbacks: Array<(value: T) => void> = [];
+  private rejectCallbacks: Array<(err: Error) => void> = [];
+
+  resolve(value: T): void {
+    if (this.state !== 'pending') return;
+    this.state = 'resolved';
+    this.resolvedValue = value;
+    const cbs = this.resolveCallbacks;
+    this.resolveCallbacks = [];
+    this.rejectCallbacks = [];
+    for (const cb of cbs) cb(value);
+  }
+
+  reject(err: Error): void {
+    if (this.state !== 'pending') return;
+    this.state = 'rejected';
+    this.rejectionReason = err;
+    const cbs = this.rejectCallbacks;
+    this.resolveCallbacks = [];
+    this.rejectCallbacks = [];
+    for (const cb of cbs) cb(err);
+  }
+
+  wait(): Promise<T> {
+    if (this.state === 'resolved') return Promise.resolve(this.resolvedValue as T);
+    if (this.state === 'rejected') return Promise.reject(this.rejectionReason);
+    return new Promise<T>((resolve, reject) => {
+      this.resolveCallbacks.push(resolve);
+      this.rejectCallbacks.push(reject);
+    });
+  }
+
+  isPending(): boolean {
+    return this.state === 'pending';
+  }
+
+  isSettled(): boolean {
+    return this.state !== 'pending';
+  }
+}
