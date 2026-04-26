@@ -25,7 +25,6 @@ import {
   parseOnionV3Address,
   deriveBlindedPublicKey,
   deriveSubcredential,
-  hsNtorDeriveEncAndMac,
   hsNtorComplete,
   buildIntroduce1Payload,
   makeHsRendezvousCipherPairFromKeySeed,
@@ -453,33 +452,10 @@ test('completeHsNtorServer + hsNtorComplete agree on NTOR_KEY_SEED → cipher pa
   t.deepEqual(Buffer.from(responseRecovered), responsePlain);
 });
 
-test('hsNtorDeriveEncAndMac (client) and decryptIntroduce2 (server) agree on the encryption key', async (t) => {
-  // Direct sanity: server-side keys derived from EXP(b, X) match what the
-  // client side derives from EXP(x, B) since x25519 commutes.
-  const intro = generateIntroPointKeys(makePeerInfo(), Buffer.from(randomBytes(32)));
-  const subcred = Buffer.from(randomBytes(32));
-  const x = Buffer.from(x25519.utils.randomPrivateKey());
-  const X = Buffer.from(x25519.getPublicKey(x));
-
-  const { ENC_KEY: clientEnc, MAC_KEY: clientMac } = hsNtorDeriveEncAndMac({
-    x,
-    X,
-    B: intro.encKeyPublic,
-    AUTH_KEY: intro.authKeyPublic,
-    N_hs_subcred: subcred,
-  });
-
-  // Replicate server-side derivation (mirrors decryptIntroduce2 internals).
-  // We don't go through decryptIntroduce2 because that needs a real encrypted
-  // INTRODUCE2 payload; here we just compare KDF outputs.
-  void clientEnc;
-  void clientMac;
-
-  // We expect both sides to agree; the client mac/encryption keys should
-  // match what the server derives via the same KDF inputs (EXP(b,X) ==
-  // EXP(x,B) because x25519 is a Diffie-Hellman scheme).
-  t.pass();
-});
+// (`hsNtorDeriveEncAndMac` ↔ server agreement is already covered by the
+// "decryptIntroduce2 round-trips against the client buildIntroduce1Payload"
+// test above — that exercises the full client-encrypt → server-decrypt
+// path including the KDF, so a separate placeholder is just dead weight.)
 
 // =============================================================================
 // publishHiddenService — surface + argument validation

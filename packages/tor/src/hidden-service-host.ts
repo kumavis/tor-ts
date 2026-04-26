@@ -174,6 +174,14 @@ export interface Introduce2Parsed {
   clientPk: Buffer;
   encryptedData: Buffer;
   macValue: Buffer;
+  /**
+   * The exact serialized bytes from LEGACY_KEY_ID through ENCRYPTED
+   * (everything in the cell minus the trailing 32-byte MAC). Per
+   * rend-spec-v3 §3.3.2 this is what the MAC covers — including any
+   * extension bytes, which we don't otherwise interpret. Store rather
+   * than reconstruct so an INTRODUCE2 with extensions still verifies.
+   */
+  payloadWithoutMac: Buffer;
 }
 
 /** Decrypted INTRODUCE2 contents. */
@@ -796,8 +804,12 @@ export function parseIntroduce2(payload: Buffer): Introduce2Parsed {
 
   const encryptedData = tail.subarray(0, tail.length - 32);
   const macValue = tail.subarray(tail.length - 32);
+  // Preserve the exact prefix the MAC covers (everything except the trailing
+  // 32-byte MAC). Reconstructing from parsed fields wouldn't round-trip when
+  // extensions are present.
+  const payloadWithoutMac = payload.subarray(0, payload.length - 32);
 
-  return { authKey, clientPk, encryptedData, macValue };
+  return { authKey, clientPk, encryptedData, macValue, payloadWithoutMac };
 }
 
 /**
@@ -835,18 +847,12 @@ export async function decryptIntroduce2(params: {
   const encKey = keys.subarray(0, S_KEY_LEN);
   const macKey = keys.subarray(S_KEY_LEN);
 
-  // MAC covers everything from LEGACY_KEY_ID through ENCRYPTED (rend-spec-v3
-  // §3.3.2). Reconstruct that input from parsed fields.
-  const macInput = Buffer.concat([
-    Buffer.alloc(20), // LEGACY_KEY_ID
-    Buffer.from([0x02]), // AUTH_KEY_TYPE
-    Buffer.from([0x00, 0x20]), // AUTH_KEY_LEN
-    parsed.authKey,
-    Buffer.from([0x00]), // N_EXT
-    parsed.clientPk,
-    parsed.encryptedData,
-  ]);
-  const expected = mac(macKey, macInput);
+  // MAC covers the exact serialized payload from LEGACY_KEY_ID through the
+  // end of ENCRYPTED, including any extensions (rend-spec-v3 §3.3.2). Use
+  // the original bytes preserved by parseIntroduce2() rather than
+  // reconstructing — a reconstruction with N_EXT=0 fails MAC verification
+  // for any INTRODUCE2 that actually carries extensions.
+  const expected = mac(macKey, parsed.payloadWithoutMac);
   if (!expected.equals(parsed.macValue)) {
     throw new Error('INTRODUCE2 MAC verification failed');
   }
@@ -1106,62 +1112,73 @@ export class HiddenServiceHost extends EventEmitter {
       throw new Error('Hidden service is already running');
     }
     this.starting = true;
-
     this.torClient = torClient;
     this.log(`starting hidden service ${this.keys.onionAddress}`);
 
-    const consensus = torClient.consensus;
-    if (!consensus.validAfter) {
-      throw new Error('TorClient consensus missing valid-after');
-    }
-
-    // 1. Derive descriptor key bundle for this consensus's time window.
-    const tpArgs: Parameters<typeof deriveTimePeriodKeys>[0] = {
-      keys: this.keys,
-      validAfter: consensus.validAfter,
-    };
-    if (consensus.freshUntil) tpArgs.freshUntil = consensus.freshUntil;
-    this.timePeriodKeys = deriveTimePeriodKeys(tpArgs);
-
-    // 2. Pick + establish intro points. Mainnet relays advertise rich flag
-    //    sets; chutney's tiny network usually only has Running+Stable, so we
-    //    accept any relay with Stable+Running and exclude obvious non-IPs.
-    const introCandidates = consensus.relays.filter((r) => {
-      const flags = r.flags ?? [];
-      if (flags.includes('BadExit')) return false;
-      if (flags.includes('Authority')) return false;
-      return flags.includes('Stable') && flags.includes('Running');
-    });
-    if (introCandidates.length === 0) {
-      throw new Error('No suitable introduction-point candidates in consensus');
-    }
-
-    const used: MicroDescNodeInfo[] = [];
-    for (let i = 0; i < numIntroPoints && used.length < introCandidates.length; i++) {
-      const relay = pickRelayWithFlags(introCandidates, [], used);
-      used.push(relay);
-      try {
-        const { peerInfo, ed25519IdentityKey } = await lookupPeerInfoWithEd25519IdentityKey(
-          torClient.dirClient,
-          relay
-        );
-        const intro = generateIntroPointKeys(peerInfo, ed25519IdentityKey);
-        await this.establishIntroPoint(intro, perStepTimeoutMs);
-        this.introPoints.push(intro);
-      } catch (err) {
-        this.log(
-          `intro point ${relay.nickname} failed: ${err instanceof Error ? err.message : err}`
-        );
-      }
-    }
-    if (this.introPoints.filter((i) => i.established).length === 0) {
-      throw new Error('Failed to establish any introduction points');
-    }
-    this.log(`established ${this.introPoints.length} introduction points`);
-
-    // 3. Upload the descriptor.
+    // Wrap the entire body so any failure clears the start-in-progress
+    // latch and rolls back side effects (intro circuits + torClient
+    // reference). Otherwise an early throw — e.g. missing valid-after,
+    // empty intro candidates, or all establishIntroPoint() calls failing —
+    // would leave `starting === true` forever and prevent retries.
+    let succeeded = false;
     try {
-      await this.uploadDescriptor();
+      const consensus = torClient.consensus;
+      if (!consensus.validAfter) {
+        throw new Error('TorClient consensus missing valid-after');
+      }
+
+      // 1. Derive descriptor key bundle for this consensus's time window.
+      const tpArgs: Parameters<typeof deriveTimePeriodKeys>[0] = {
+        keys: this.keys,
+        validAfter: consensus.validAfter,
+      };
+      if (consensus.freshUntil) tpArgs.freshUntil = consensus.freshUntil;
+      this.timePeriodKeys = deriveTimePeriodKeys(tpArgs);
+
+      // 2. Pick + establish intro points. Mainnet relays advertise rich flag
+      //    sets; chutney's tiny network usually only has Running+Stable, so
+      //    accept any relay with Stable+Running and exclude obvious non-IPs.
+      const introCandidates = consensus.relays.filter((r) => {
+        const flags = r.flags ?? [];
+        if (flags.includes('BadExit')) return false;
+        if (flags.includes('Authority')) return false;
+        return flags.includes('Stable') && flags.includes('Running');
+      });
+      if (introCandidates.length === 0) {
+        throw new Error('No suitable introduction-point candidates in consensus');
+      }
+
+      const used: MicroDescNodeInfo[] = [];
+      for (let i = 0; i < numIntroPoints && used.length < introCandidates.length; i++) {
+        const relay = pickRelayWithFlags(introCandidates, [], used);
+        used.push(relay);
+        try {
+          const { peerInfo, ed25519IdentityKey } = await lookupPeerInfoWithEd25519IdentityKey(
+            torClient.dirClient,
+            relay
+          );
+          const intro = generateIntroPointKeys(peerInfo, ed25519IdentityKey);
+          await this.establishIntroPoint(intro, perStepTimeoutMs);
+          this.introPoints.push(intro);
+        } catch (err) {
+          this.log(
+            `intro point ${relay.nickname} failed: ${err instanceof Error ? err.message : err}`
+          );
+        }
+      }
+      if (this.introPoints.filter((i) => i.established).length === 0) {
+        throw new Error('Failed to establish any introduction points');
+      }
+      this.log(`established ${this.introPoints.length} introduction points`);
+
+      // 3. Upload the descriptor. Initial publish must hit at least one
+      //    HSDir or the .onion isn't actually reachable — fail fast so the
+      //    caller can retry rather than silently advertising an unreachable
+      //    address. Periodic refreshes (below) tolerate transient failures.
+      const initialUploads = await this.uploadDescriptor();
+      if (initialUploads === 0) {
+        throw new Error('Failed to upload descriptor to any HSDir');
+      }
 
       this.running = true;
       this.refreshInterval = setInterval(() => {
@@ -1172,10 +1189,24 @@ export class HiddenServiceHost extends EventEmitter {
       this.refreshInterval.unref?.();
 
       this.log(`running at ${this.keys.onionAddress}`);
+      succeeded = true;
     } finally {
-      // Always clear the start-in-progress latch — both on success (running
-      // is now true) and on failure (caller may want to retry start()).
       this.starting = false;
+      if (!succeeded) {
+        // Roll back partial state so the caller can retry start() on a
+        // fresh torClient. Tear down whatever intro circuits did get
+        // established (their event listeners would otherwise hold `this`).
+        for (const intro of this.introPoints) {
+          try {
+            intro.circuit?.destroy();
+          } catch {
+            // best-effort
+          }
+        }
+        this.introPoints = [];
+        this.timePeriodKeys = undefined;
+        this.torClient = undefined;
+      }
     }
   }
 
@@ -1235,7 +1266,16 @@ export class HiddenServiceHost extends EventEmitter {
    * Build, sign, and POST the descriptor to the first ~6 HSDirs in the
    * consensus. Increments `revisionCounter` so refreshes look fresh.
    */
-  private async uploadDescriptor(): Promise<void> {
+  /**
+   * Build, sign, and POST the descriptor to the first ~6 HSDirs in the
+   * consensus. Increments `revisionCounter` so refreshes look fresh.
+   *
+   * Returns the number of HSDirs that returned a 2xx. The initial publish
+   * in {@link start} treats `0` as fatal so the host doesn't claim to be
+   * reachable when no HSDir actually accepted the descriptor; periodic
+   * refreshes ignore failures and rely on the next refresh to catch up.
+   */
+  private async uploadDescriptor(): Promise<number> {
     if (!this.timePeriodKeys || !this.torClient) {
       throw new Error('Hidden service not initialized');
     }
@@ -1243,7 +1283,7 @@ export class HiddenServiceHost extends EventEmitter {
     const established = this.introPoints.filter((i) => i.established);
     if (established.length === 0) {
       this.log('no established intro points; skipping descriptor upload');
-      return;
+      return 0;
     }
 
     this.revisionCounter++;
@@ -1259,7 +1299,7 @@ export class HiddenServiceHost extends EventEmitter {
     const hsdirNodes = consensus.relays.filter((r) => (r.flags ?? []).includes('HSDir'));
     if (hsdirNodes.length === 0) {
       this.log('no HSDir nodes in consensus; cannot publish');
-      return;
+      return 0;
     }
 
     let uploads = 0;
@@ -1323,6 +1363,7 @@ export class HiddenServiceHost extends EventEmitter {
       }
     }
     this.log(`descriptor uploaded to ${uploads}/${Math.min(6, hsdirNodes.length)} HSDirs`);
+    return uploads;
   }
 
   /**
@@ -1404,18 +1445,18 @@ export class HiddenServiceHost extends EventEmitter {
       const stream = new CircuitStream();
       stream.streamId = streamId;
       stream.destination = destination;
-      stream.write = async (data: Buffer) => {
-        await circuit.sendRelayMessage({
-          streamId,
-          relayCommand: RelayCell.DATA,
-          data,
-        });
-      };
-      // The connectionLatch is a client-side artifact; pre-resolve it so the
-      // existing CONNECTED handler in Circuit.receiveRelayMessage doesn't
-      // throw if a stray CONNECTED arrives, and so application code that
-      // does `await stream.write(...)` doesn't deadlock waiting on it.
+      // The connectionLatch is a client-side artifact (it settles on
+      // CONNECTED). Pre-resolve it so server-side write() doesn't deadlock
+      // waiting for a CONNECTED that we ourselves just sent.
       stream.connectionLatch.resolve();
+      // Delegate to Circuit.writeToStream so the application gets chunking
+      // (RELAY_PAYLOAD_LEN = 498 cap) plus circuit + stream package-window
+      // flow control for free. A direct sendRelayMessage with relayCommand
+      // = DATA would throw on writes >498 bytes and would also bypass
+      // SENDME backpressure on long replies.
+      stream.write = async (data: Buffer) => {
+        await circuit.writeToStream(stream, data);
+      };
       circuit.streams.push(stream);
       return stream;
     };
