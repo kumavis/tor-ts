@@ -520,3 +520,41 @@ test('publishHiddenService identityKey is round-trippable as a 32-byte seed', (t
   t.deepEqual(Uint8Array.from(b.identityPrivateKey), Uint8Array.from(a.identityPrivateKey));
   t.is(b.onionAddress, a.onionAddress);
 });
+
+test('publishHiddenService rejects port arrays containing an invalid entry', async (t) => {
+  await t.throwsAsync(
+    publishHiddenService({
+      // @ts-expect-error: stub TorClient — port validation runs before any torClient method is touched
+      torClient: {},
+      port: [80, 0, 443],
+      onConnection: () => {},
+    }),
+    { message: /Invalid port 0/ }
+  );
+});
+
+test('publishHiddenService rejects an empty port array', async (t) => {
+  await t.throwsAsync(
+    publishHiddenService({
+      // @ts-expect-error: stub TorClient — port validation runs before any torClient method is touched
+      torClient: {},
+      port: [],
+      onConnection: () => {},
+    }),
+    { message: /at least one port required/ }
+  );
+});
+
+test('publishHiddenService rejects non-function acceptPort', async (t) => {
+  await t.throwsAsync(
+    publishHiddenService({
+      // @ts-expect-error: stub TorClient — acceptPort check runs before any torClient method is touched
+      torClient: {},
+      port: 80,
+      // @ts-expect-error: deliberately wrong type to exercise the runtime acceptPort guard
+      acceptPort: 'not a function',
+      onConnection: () => {},
+    }),
+    { message: /acceptPort must be a function/ }
+  );
+});
