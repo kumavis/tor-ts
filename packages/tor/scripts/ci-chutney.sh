@@ -223,7 +223,7 @@ cd "${ROOT_DIR}"
 # on the rendezvous point in microDescNodeInfoToPeerInfo (fixed in the
 # same PR, with spec-vector and unit tests in hidden-service-test-vector
 # .spec.ts + directory.spec.ts).
-TOR_TS_CHUTNEY_TESTS="${TOR_TS_CHUTNEY_TESTS:-exit,hidden-service}"
+TOR_TS_CHUTNEY_TESTS="${TOR_TS_CHUTNEY_TESTS:-exit,hidden-service,hidden-service-host}"
 IFS=',' read -ra TESTS <<< "${TOR_TS_CHUTNEY_TESTS}"
 for t in "${TESTS[@]}"; do
   case "${t}" in
@@ -239,13 +239,13 @@ for t in "${TESTS[@]}"; do
       echo "=== chutney integration test: hidden-service finished at $(date -Is) ==="
       ;;
     hidden-service-host)
-      # Opt-in: hosts a v3 HS via our HiddenServiceHost and connects to it
-      # with our client. Exercises the entire HS protocol stack end-to-end
-      # (descriptor publish + INTRODUCE2 + RENDEZVOUS1 + virtual hop) so it
-      # is the most fragile test in the suite. Set TOR_TS_CHUTNEY_TESTS to
-      # include "hidden-service-host" to enable.
+      # Hosts a v3 HS via publishHiddenService() and connects to it with our
+      # client. Exercises the entire HS protocol stack end-to-end (descriptor
+      # publish + INTRODUCE2 + RENDEZVOUS1 + virtual hop + BEGIN/DATA on the
+      # rendezvous circuit). Most fragile test in the suite — first to flake
+      # if the HS protocol path regresses.
       echo ""
-      echo "=== running chutney integration test: hidden-service-host (opt-in) ==="
+      echo "=== running chutney integration test: hidden-service-host ==="
       timeout 12m node --experimental-transform-types "${ROOT_DIR}/scripts/chutney-hidden-service-host-ci.ts"
       echo "=== chutney integration test: hidden-service-host finished at $(date -Is) ==="
       ;;
