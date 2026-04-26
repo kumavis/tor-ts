@@ -191,35 +191,8 @@ export {
 // Node.js HTTP fetch over Tor
 export { fetchViaTorCircuit } from './http-fetch.ts';
 
-// SOCKS5 proxy server over a Tor circuit
-export {
-  SocksProxyServer,
-  createSocksProxy,
-  SOCKS_VERSION,
-  SOCKS_USERPASS_VERSION,
-  SocksAuthMethod,
-  SocksCommand,
-  SocksAddressType,
-  SocksReply,
-  parseSocksGreeting,
-  buildSocksGreetingResponse,
-  parseSocksRequest,
-  buildSocksReply,
-  parseSocksUserPass,
-  buildSocksUserPassResponse,
-  buildSocksTypedReply,
-  buildResolveQuery,
-  buildResolveReply,
-  socksGreetingFrameLength,
-  socksRequestFrameLength,
-  socksUserPassFrameLength,
-  socksReplyForOpenError,
-  socksReplyForRelayEndReason,
-  formatTorDestination,
-  type SocksGreeting,
-  type SocksRequest,
-  type SocksAuth,
-  type SocksConnectionContext,
-  type SocksCircuitFactory,
-  type SocksServerOptions,
-} from './socks.ts';
+// SOCKS5 proxy server over a Tor circuit lives at the `'tor/socks'` subpath
+// — it imports `node:net` and isn't browser-safe, so re-exporting it from
+// the main entry point would force every browser consumer to externalize
+// `node:net` even when they never touch SOCKS. See packages/tor/package.json
+// for the entry point.
