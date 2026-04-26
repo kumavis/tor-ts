@@ -30,6 +30,7 @@
     "./build-circuit/util": "./src/build-circuit/util.ts",
     "./cli": "./src/cli.ts",
     "./hidden-service": "./src/hidden-service.ts",
+    "./hidden-service-host": "./src/hidden-service-host.ts",
     "./relay-cell": "./src/relay-cell.ts"
   },
   "scripts": {

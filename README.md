@@ -20,6 +20,7 @@ Implemented:
 
 - [x] Client circuit to clearweb (3-hop ntor + relay cells)
 - [x] Client circuit to v3 hidden services (rend-spec-v3, INTRODUCE/RENDEZVOUS, hs-ntor)
+- [x] **Hosting v3 hidden services (server side: ESTABLISH_INTRO with KH-bound MAC, descriptor build/sign/publish, INTRODUCE2 decrypt, hs-ntor server, rendezvous virtual hop)**
 - [x] Browser support via Snowflake (WSS → turbotunnel → KCP → SMUX → TLS 1.3 → Tor)
 - [x] Signed-consensus verification (against the hardcoded mainnet authorities; injectable trust anchor for chutney/test nets)
 - [x] Bandwidth-weighted relay selection with exit-policy filtering
@@ -29,16 +30,19 @@ Not implemented:
 
 - [ ] Guard / middle / exit relay (this is a client-only stack)
 - [ ] Directory authority
-- [ ] Hidden service (server side)
 
 ### Packages
 
 - [`packages/tor`](./packages/tor) — the Tor protocol implementation:
   cells, circuits, link/relay protocols, ntor handshake, directory client,
-  consensus parsing+verification, hidden-service client. Standalone in
-  Node.js with a TLS channel; the entry point most users want is
+  consensus parsing+verification, hidden-service client + server. Standalone
+  in Node.js with a TLS channel; the entry point most users want is
   `connectRandomCircuitWithSafeBootstrap()` from
   [`packages/tor/src/build-circuit/mainnet.ts`](./packages/tor/src/build-circuit/mainnet.ts).
+  To host an onion service, the entry point is `publishHiddenService(...)`
+  in [`packages/tor/src/hidden-service-host.ts`](./packages/tor/src/hidden-service-host.ts) —
+  takes any bootstrapped `TorClient` (mainnet, chutney, or browser/Snowflake)
+  and surfaces inbound BEGIN-streams via an `onConnection` callback.
 - [`packages/snowflake`](./packages/snowflake) — the client side of the
   [Snowflake](https://snowflake.torproject.org/) pluggable transport in pure
   TypeScript: encapsulation framing, turbotunnel preamble,
