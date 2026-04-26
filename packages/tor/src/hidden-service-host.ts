@@ -25,7 +25,6 @@ import {
   x25519,
   ed25519,
   randomBytes,
-  ed25519VerifySync,
   makeAes256CtrKey,
   aes256CtrXor,
   // rend-spec-v3 helpers (same impl shared with the client in hidden-service.ts):
@@ -53,11 +52,7 @@ import {
   lookupPeerInfo,
   lookupPeerInfoWithEd25519IdentityKey,
 } from './directory-client.ts';
-import {
-  computeTimePeriod,
-  deriveBlindedPublicKey,
-  deriveSubcredential,
-} from './hidden-service.ts';
+import { computeTimePeriod, deriveSubcredential } from './hidden-service.ts';
 import type { VerifiedMicroDescConsensus, MicroDescNodeInfo } from './build-circuit/directory.ts';
 import type { TorClient } from './client.ts';
 
@@ -1068,7 +1063,6 @@ export class HiddenServiceHost extends EventEmitter {
    *  or rejects. Prevents concurrent start() calls from racing past the
    *  `if (this.running)` check. */
   private starting = false;
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   private torClient: TorClient<any> | undefined;
   private refreshInterval: ReturnType<typeof setInterval> | undefined;
   private log: (msg: string) => void;
@@ -1093,7 +1087,6 @@ export class HiddenServiceHost extends EventEmitter {
    * Snowflake-backed browser.
    */
   async start(
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     torClient: TorClient<any>,
     options: {
       numIntroPoints?: number;
@@ -1580,7 +1573,6 @@ export interface PublishHiddenServiceOptions {
    * cast — the host only uses the channel-agnostic surface
    * (`consensus`, `dirClient`, `buildCircuitToTarget`).
    */
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   torClient: TorClient<any>;
   /** Virtual port the onion service will accept BEGIN cells for. */
   port: number;
