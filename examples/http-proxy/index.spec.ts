@@ -99,16 +99,4 @@ test('proxy HTTP request through Tor circuit', async (t) => {
 
   console.log(`Response length: ${body.length} bytes`);
   t.true(body.includes('Example Domain'), 'Response should contain "Example Domain"');
-
-  // Schedule a hard-exit deadline. Tor-side TLS sockets sometimes don't
-  // close cleanly within the small grace window ava waits before exiting
-  // the worker, hanging CI for several minutes despite the test already
-  // having passed. The timer is `unref`'d so it doesn't itself keep the
-  // loop alive — it only fires if some *other* handle does, in which case
-  // SIGTERM kills the worker. The parent ava process has already received
-  // the pass result over IPC at this point, so the test is reported as
-  // passing either way. Mirrors the explicit `process.exit(0)` the chutney
-  // scripts use; we can't call `process.exit` directly here because ava
-  // intercepts it.
-  setTimeout(() => process.kill(process.pid, 'SIGTERM'), 5000).unref();
 });
