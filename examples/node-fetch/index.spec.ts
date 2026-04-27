@@ -13,6 +13,32 @@ import test from 'ava';
 import fetch from 'node-fetch';
 import { withTorOperation } from 'tor/build-circuit/mainnet';
 import { getTorAgentForUrl } from 'tor/node';
+import type { CircuitHttpsAgent, CircuitHttpAgent } from 'tor/node';
+
+/**
+ * Print what's keeping the event loop alive at delay-from-now `ms`. The
+ * timer is `unref`'d so it doesn't itself keep the loop alive — if the
+ * loop drains naturally we never see this print, and if it doesn't we
+ * get a typed snapshot of the leftover handles. Used to diagnose the
+ * "ava worker hangs after the test passes" problem; see
+ * https://github.com/kumavis/tor-ts/pull/38 for the running discussion.
+ */
+function dumpHandlesAfter(ms: number, label: string): void {
+  const timer = setTimeout(() => {
+    const resources = process.getActiveResourcesInfo?.() ?? [];
+    const handles =
+      (
+        process as unknown as { _getActiveHandles?: () => Array<{ constructor: { name: string } }> }
+      )._getActiveHandles?.() ?? [];
+    const handleNames = handles.map((h) => h?.constructor?.name ?? 'unknown');
+    console.log(
+      `[diagnostic ${label} +${ms}ms] resources=${resources.length} handles=${handles.length}`
+    );
+    console.log(`[diagnostic ${label} +${ms}ms] resource types: ${resources.join(', ')}`);
+    console.log(`[diagnostic ${label} +${ms}ms] handle types:   ${handleNames.join(', ')}`);
+  }, ms);
+  timer.unref();
+}
 
 test('fetch through Tor circuit', async (t) => {
   // 10 minutes total to cover up to 3 attempts through the live Tor network.
@@ -20,6 +46,12 @@ test('fetch through Tor circuit', async (t) => {
 
   const target = 'http://example.com';
   console.log('Connecting to Tor network...');
+
+  // Track the agent created inside withTorOperation so we can destroy it
+  // after the response — http.Agent / https.Agent keep their pool of
+  // sockets alive across requests by default, and any leftover sockets
+  // (even on a destroyed circuit) keep ava's worker process from exiting.
+  let agentRef: CircuitHttpsAgent | CircuitHttpAgent | undefined;
 
   // withTorOperation builds a fresh 3-hop circuit for each attempt and
   // retries automatically on transient Tor-network failures (relay DESTROYs
@@ -31,6 +63,7 @@ test('fetch through Tor circuit', async (t) => {
     async (circuit) => {
       console.log('Circuit established!');
       const agent = getTorAgentForUrl(circuit, target);
+      agentRef = agent;
       console.log(`Fetching ${target} through Tor...`);
       const response = await fetch(target, { agent });
       console.log(`Response status: ${response.status}`);
@@ -50,6 +83,20 @@ test('fetch through Tor circuit', async (t) => {
     }
   );
 
+  // Tear down the agent before assertions: closes any pooled sockets so
+  // ava's worker can drain naturally. With KeepAlive off (Node default)
+  // pooled sockets are usually short-lived, but the agent still holds
+  // references that delay GC, and on the live test we've observed them
+  // outliving the test body.
+  agentRef?.destroy();
+
   t.is(status, 200);
   t.true(body.includes('Example Domain'), 'Response should contain "Example Domain"');
+
+  // Diagnostic: if the worker hangs past these checkpoints, the named
+  // handle types are what's keeping the loop alive. Each print uses an
+  // `unref()`'d timer so this is a no-op when the loop drains cleanly.
+  dumpHandlesAfter(2_000, 'node-fetch');
+  dumpHandlesAfter(10_000, 'node-fetch');
+  dumpHandlesAfter(60_000, 'node-fetch');
 });
