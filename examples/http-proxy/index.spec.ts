@@ -16,31 +16,6 @@ import { withTorOperation } from 'tor/build-circuit/mainnet';
 import { getTorAgentForUrl } from 'tor/node';
 import type { CircuitHttpsAgent, CircuitHttpAgent } from 'tor/node';
 
-/**
- * Print what's keeping the event loop alive at delay-from-now `ms`. The
- * timer is `unref`'d so it doesn't itself keep the loop alive — if the
- * loop drains naturally we never see this print, and if it doesn't we
- * get a typed snapshot of the leftover handles. Used to diagnose the
- * "ava worker hangs after the test passes" problem; see
- * https://github.com/kumavis/tor-ts/pull/38 for the running discussion.
- */
-function dumpHandlesAfter(ms: number, label: string): void {
-  const timer = setTimeout(() => {
-    const resources = process.getActiveResourcesInfo?.() ?? [];
-    const handles =
-      (
-        process as unknown as { _getActiveHandles?: () => Array<{ constructor: { name: string } }> }
-      )._getActiveHandles?.() ?? [];
-    const handleNames = handles.map((h) => h?.constructor?.name ?? 'unknown');
-    console.log(
-      `[diagnostic ${label} +${ms}ms] resources=${resources.length} handles=${handles.length}`
-    );
-    console.log(`[diagnostic ${label} +${ms}ms] resource types: ${resources.join(', ')}`);
-    console.log(`[diagnostic ${label} +${ms}ms] handle types:   ${handleNames.join(', ')}`);
-  }, ms);
-  timer.unref();
-}
-
 test('proxy HTTP request through Tor circuit', async (t) => {
   // 10 minutes total to cover up to 3 bootstrap attempts on the live network.
   t.timeout(600_000);
@@ -134,11 +109,4 @@ test('proxy HTTP request through Tor circuit', async (t) => {
 
   console.log(`Response length: ${body.length} bytes`);
   t.true(body.includes('Example Domain'), 'Response should contain "Example Domain"');
-
-  // Diagnostic: if the worker hangs past these checkpoints, the named
-  // handle types are what's keeping the loop alive. Each print uses an
-  // `unref()`'d timer so this is a no-op when the loop drains cleanly.
-  dumpHandlesAfter(2_000, 'http-proxy');
-  dumpHandlesAfter(10_000, 'http-proxy');
-  dumpHandlesAfter(60_000, 'http-proxy');
 });
