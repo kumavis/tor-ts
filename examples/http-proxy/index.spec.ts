@@ -50,13 +50,6 @@ test('proxy HTTP request through Tor circuit', async (t) => {
 
   console.log('Connecting to Tor network...');
 
-  // Track resources created inside the operation so the test body can
-  // tear them down after assertions — http.Agent / https.Agent and
-  // httpProxy each retain socket pools and IPC channels that delay the
-  // ava worker's natural exit.
-  const torAgents: Array<CircuitHttpsAgent | CircuitHttpAgent> = [];
-  let proxyRef: ReturnType<typeof httpProxy.createProxyServer> | undefined;
-
   // withTorOperation builds a fresh 3-hop circuit for each attempt and
   // retries automatically on transient Tor-network / transport-level failures
   // (ECONNREFUSED to a fallback dir, DESTROY with CHANNEL_CLOSED / TIMEOUT,
@@ -66,10 +59,13 @@ test('proxy HTTP request through Tor circuit', async (t) => {
     async (circuit) => {
       console.log('Circuit established!');
 
-      // Reset per-attempt: each retry creates a fresh proxy + agent pool.
-      torAgents.length = 0;
+      // Per-attempt resources: agent pool, httpProxy, and the listener.
+      // Tear them down inside the callback's `finally` so a failed
+      // attempt's resources don't outlive the retry — orphaning them
+      // across retries is what reintroduces the worker-hang we just
+      // fixed (each leaked agent retains pooled sockets).
+      const torAgents: Array<CircuitHttpsAgent | CircuitHttpAgent> = [];
       const proxy = httpProxy.createProxyServer({});
-      proxyRef = proxy;
       proxy.on('error', (err, _req, res) => {
         console.error('Proxy error:', err.message);
         if (res && 'writeHead' in res) {
@@ -120,6 +116,8 @@ test('proxy HTTP request through Tor circuit', async (t) => {
           req.end();
         });
       } finally {
+        for (const agent of torAgents) agent.destroy();
+        proxy.close();
         proxyServer.close();
       }
     },
@@ -133,13 +131,6 @@ test('proxy HTTP request through Tor circuit', async (t) => {
         console.warn(`Attempt ${attempt} hit transient Tor error: ${err.message}. Retrying...`),
     }
   );
-
-  // Tear down agents + proxy before assertions so ava's worker can drain
-  // naturally. node-http-proxy keeps its own internal http.Agent slot;
-  // calling .close() releases the listener but doesn't always release
-  // pooled sockets.
-  for (const agent of torAgents) agent.destroy();
-  proxyRef?.close();
 
   console.log(`Response length: ${body.length} bytes`);
   t.true(body.includes('Example Domain'), 'Response should contain "Example Domain"');
