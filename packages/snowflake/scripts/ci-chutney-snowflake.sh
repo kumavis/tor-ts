@@ -129,7 +129,38 @@ NODES = Authority.getN(4) + SnowflakeRelay.getN(1) + ExitRelay.getN(1) + Client.
 ConfigureNodes(NODES)
 EOF
 
-timeout 10m ./chutney bootstrap "${CHUTNEY_NETWORK}"
+# `chutney bootstrap` has no built-in retry, and on a 4-authority network
+# it's not unusual for one authority's tor process to hang at "starting"
+# — the other 3 reach 100% but the 4th never publishes its descriptor in
+# time, so the bootstrap fails after chutney's internal 300 s deadline.
+# The regular `chutney` job avoids this by running `tools/test-network.sh
+# --allow-failures 2`. We do the equivalent here as an explicit retry
+# loop, with full teardown between attempts so a stuck tor process
+# doesn't poison the next attempt's port allocations.
+BOOTSTRAP_ATTEMPTS=3
+bootstrap_succeeded=0
+for attempt in $(seq 1 ${BOOTSTRAP_ATTEMPTS}); do
+  echo ""
+  echo "=== chutney bootstrap attempt ${attempt}/${BOOTSTRAP_ATTEMPTS} ==="
+  if timeout 10m ./chutney bootstrap "${CHUTNEY_NETWORK}"; then
+    bootstrap_succeeded=1
+    break
+  fi
+  echo "Bootstrap attempt ${attempt} failed."
+  if [ "${attempt}" -lt "${BOOTSTRAP_ATTEMPTS}" ]; then
+    echo "Tearing down before retry..."
+    timeout 2m ./chutney stop "${CHUTNEY_NETWORK}" || true
+    if [ -n "${CHUTNEY_DATA_DIR:-}" ] && [ -d "${CHUTNEY_DATA_DIR}" ]; then
+      pkill -f "${CHUTNEY_DATA_DIR}/nodes" || true
+      pkill -9 -f "${CHUTNEY_DATA_DIR}/nodes" || true
+    fi
+    sleep 5
+  fi
+done
+if [ "${bootstrap_succeeded}" -ne 1 ]; then
+  echo "Bootstrap failed after ${BOOTSTRAP_ATTEMPTS} attempts; aborting."
+  exit 1
+fi
 ./chutney status "${CHUTNEY_NETWORK}"
 
 TOR_TS_CHUTNEY_EXIT_RSA_ID_DIGEST_HEX="$(awk '{print $2}' "${CHUTNEY_DATA_DIR}"/nodes/*r/fingerprint | head -n 1 | tr 'A-Z' 'a-z')"
