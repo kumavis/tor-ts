@@ -228,7 +228,13 @@ export function parseSocksRequest(data: Buffer): SocksRequest {
     throw new Error(`Unsupported SOCKS version: ${version}`);
   }
   const command = data.readUInt8(1) as SocksCommand;
-  // data[2] is the reserved 0x00 byte
+  // RFC 1928: byte 2 is reserved and MUST be 0x00. Reject non-conforming
+  // values rather than silently accepting them — masks parser bugs and
+  // makes traffic-shape mismatches debuggable.
+  const reserved = data.readUInt8(2);
+  if (reserved !== 0x00) {
+    throw new Error(`Invalid SOCKS reserved byte: ${reserved}`);
+  }
   const addressType = data.readUInt8(3) as SocksAddressType;
 
   let destinationAddress: string;
@@ -667,11 +673,32 @@ export class SocksProxyServer extends EventEmitter {
       cleanupConnection();
     });
 
+    /**
+     * Send a fatal failure reply and close the socket. The wire format
+     * the client expects depends on which phase we're in:
+     *
+     *   - Greeting   : 2-byte method-selection reply with NO_ACCEPTABLE.
+     *                  Sending a 10-byte CONNECT-style reply here would be
+     *                  misparsed (e.g. byte 1 = 0x01 → "GSSAPI selected").
+     *   - Auth       : 2-byte RFC 1929 sub-negotiation status (failure).
+     *   - Request &  : 10-byte CONNECT-shape reply with the supplied REP.
+     *     beyond
+     *
+     * Pre-Request phases ignore the supplied REP byte (the spec doesn't
+     * give us a way to surface it via the 2-byte responses), but it's
+     * still useful to log / emit on `'connectionError'` for diagnostics.
+     */
     const replyFatal = (reply: SocksReply) => {
-      if (!socket.destroyed) {
+      if (socket.destroyed) return;
+      if (phase === ConnectionPhase.Greeting) {
+        socket.write(buildSocksGreetingResponse(SocksAuthMethod.NO_ACCEPTABLE));
+      } else if (phase === ConnectionPhase.Auth) {
+        // Any non-zero status is a failure per RFC 1929; 0xff is unambiguous.
+        socket.write(buildSocksUserPassResponse(0xff));
+      } else {
         socket.write(buildSocksReply(reply));
-        socket.end();
       }
+      socket.end();
     };
 
     /**
@@ -910,10 +937,17 @@ export class SocksProxyServer extends EventEmitter {
           stream.destroy();
           return;
         }
-        this.setupRelay(socket, stream, closeAll);
+        // Write the SUCCEEDED reply BEFORE attaching the 'data' listener
+        // so the exit can't push application bytes (banner-protocol-style:
+        // SMTP/IRC/etc. servers speak first) into the socket ahead of the
+        // SOCKS reply. JS is single-threaded so no event-loop tick can
+        // interleave a DATA cell between this write and `setupRelay()`,
+        // and bytes inside `socket.write()` are delivered in submission
+        // order regardless of when the actual flush happens.
         if (!socket.destroyed) {
           socket.write(buildSocksReply(SocksReply.SUCCEEDED));
         }
+        this.setupRelay(socket, stream, closeAll);
         hooks.setRelayingPhase(stream);
         if (!socket.destroyed) socket.resume();
         hooks.flushPipelined(stream);

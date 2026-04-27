@@ -205,6 +205,16 @@ test('parseSocksRequest: throws on unsupported version', (t) => {
   );
 });
 
+test('parseSocksRequest: throws on non-zero reserved byte (RFC 1928 RSV)', (t) => {
+  // Same as the IPv4 happy path but with byte 2 = 0x42 instead of 0x00.
+  // Per RFC 1928 RSV must be 0x00; accepting non-zero would mask malformed
+  // requests and make traffic-shape mismatches harder to debug.
+  t.throws(
+    () => parseSocksRequest(Buffer.from([0x05, 0x01, 0x42, 0x01, 127, 0, 0, 1, 0x00, 0x50])),
+    { message: /Invalid SOCKS reserved byte: 66/ }
+  );
+});
+
 test('parseSocksRequest: throws on truncated IPv4', (t) => {
   t.throws(() => parseSocksRequest(Buffer.from([0x05, 0x01, 0x00, 0x01, 127, 0, 0, 1])), {
     message: 'SOCKS request too short for IPv4',
@@ -902,7 +912,7 @@ test('SocksProxyServer: stop() closes active client sockets', async (t) => {
   t.pass();
 });
 
-test('SocksProxyServer: handshake buffer overflow → GENERAL_FAILURE + close', async (t) => {
+test('SocksProxyServer: handshake buffer overflow during greeting → NO_ACCEPTABLE + close', async (t) => {
   const fake = new FakeCircuit();
   const { server, port } = await startServer(fake);
   try {
@@ -919,9 +929,7 @@ test('SocksProxyServer: handshake buffer overflow → GENERAL_FAILURE + close', 
     // Byte 0 (= 0x05) is a valid SOCKS5 version, byte 1 (= 0xff) promises
     // 255 methods, so the greeting frame won't be complete until we've
     // received 257 bytes. Before that point, appending 5 KiB at once
-    // pushes the buffer past 4 KiB and the overflow guard fires —
-    // appendToHandshakeBuffer emits a typed `connectionError` and writes
-    // GENERAL_FAILURE.
+    // pushes the buffer past 4 KiB and the overflow guard fires.
     const blob = Buffer.concat([Buffer.from([SOCKS_VERSION, 0xff]), Buffer.alloc(5000, 0xfe)]);
     socket.write(blob);
 
@@ -932,16 +940,54 @@ test('SocksProxyServer: handshake buffer overflow → GENERAL_FAILURE + close', 
     });
     await once(socket, 'close');
 
-    // The server must reply with GENERAL_FAILURE (10 bytes, IPv4 ATYP, all-zero
-    // bound address). On TCP loopback our single 5 KiB write arrives in one
-    // chunk, so the overflow guard is what fires; but even if the kernel were
-    // to split it differently, the server still must surface a failure REP.
+    // We're still in the Greeting phase when the overflow trips, so the
+    // phase-aware replyFatal sends a 2-byte method-selection reply with
+    // NO_ACCEPTABLE — NOT a 10-byte CONNECT-shape reply that the client
+    // would misparse as method=GSSAPI (0x01). This is the spec-correct
+    // wire shape for a fatal failure during the greeting.
     t.is(received[0], SOCKS_VERSION);
-    t.is(received[1], SocksReply.GENERAL_FAILURE);
+    t.is(received[1], SocksAuthMethod.NO_ACCEPTABLE);
+    t.is(received.length, 2, 'greeting-phase failure should be exactly 2 bytes');
     t.true(
       errs.some((e) => /handshake buffer overflow/.test(e.message)),
       `expected at least one connectionError matching /handshake buffer overflow/, got: ${errs.map((e) => e.message).join(', ')}`
     );
+  } finally {
+    await server.stop();
+  }
+});
+
+test('SocksProxyServer: malformed user/pass after USERNAME_PASSWORD greeting → 2-byte failure status', async (t) => {
+  // Drives the Auth-phase branch of the phase-aware replyFatal: a parse
+  // error during the RFC 1929 sub-negotiation should produce a 2-byte
+  // status reply (VER=0x01, STATUS=0xff), NOT a 10-byte CONNECT-shape
+  // reply that the client would misparse.
+  const fake = new FakeCircuit();
+  const { server, port } = await startServer(fake);
+  try {
+    const socket = net.connect(port, '127.0.0.1');
+    await once(socket, 'connect');
+    socket.on('error', () => {
+      // Expected after server.end().
+    });
+    const reader = makeByteReader(socket);
+
+    // Greeting: only USERNAME_PASSWORD → server picks USERNAME_PASSWORD
+    // and we move to the Auth phase.
+    socket.write(Buffer.from([SOCKS_VERSION, 0x01, SocksAuthMethod.USERNAME_PASSWORD]));
+    const greetReply = await reader.read(2, 'greeting');
+    t.deepEqual(greetReply, Buffer.from([SOCKS_VERSION, SocksAuthMethod.USERNAME_PASSWORD]));
+
+    // Send a malformed user/pass sub-negotiation: VER=0x05 (wrong — should
+    // be 0x01 per RFC 1929). socksUserPassFrameLength sees ULEN=0, PLEN=0
+    // so the frame "completes" at 3 bytes, then parseSocksUserPass throws
+    // on the bad VER, the outer catch fires, and replyFatal must produce
+    // a 2-byte failure status (not a 10-byte CONNECT-shape reply).
+    socket.write(Buffer.from([0x05, 0x00, 0x00]));
+    const failReply = await reader.read(2, 'auth-fail');
+    t.is(failReply[0], SOCKS_USERPASS_VERSION, 'VER byte is the user/pass version (0x01)');
+    t.is(failReply[1], 0xff, 'STATUS byte is non-zero (failure)');
+    await once(socket, 'close');
   } finally {
     await server.stop();
   }

@@ -47,12 +47,6 @@ test('fetch through Tor circuit', async (t) => {
   const target = 'http://example.com';
   console.log('Connecting to Tor network...');
 
-  // Track the agent created inside withTorOperation so we can destroy it
-  // after the response — http.Agent / https.Agent keep their pool of
-  // sockets alive across requests by default, and any leftover sockets
-  // (even on a destroyed circuit) keep ava's worker process from exiting.
-  let agentRef: CircuitHttpsAgent | CircuitHttpAgent | undefined;
-
   // withTorOperation builds a fresh 3-hop circuit for each attempt and
   // retries automatically on transient Tor-network failures (relay DESTROYs
   // with reasons like CHANNEL_CLOSED/TIMEOUT, transport-level ECONNRESET,
@@ -62,14 +56,22 @@ test('fetch through Tor circuit', async (t) => {
   const { status, body } = await withTorOperation(
     async (circuit) => {
       console.log('Circuit established!');
-      const agent = getTorAgentForUrl(circuit, target);
-      agentRef = agent;
-      console.log(`Fetching ${target} through Tor...`);
-      const response = await fetch(target, { agent });
-      console.log(`Response status: ${response.status}`);
-      const text = await response.text();
-      console.log(`Response length: ${text.length} bytes`);
-      return { status: response.status, body: text };
+      // Destroy the agent inside the per-attempt callback's `finally`. A
+      // single `agentRef` outside the callback would silently overwrite —
+      // and orphan — any agent created on a failed retry, which keeps
+      // pooled sockets alive and reintroduces the worker-hang we just
+      // fixed.
+      const agent: CircuitHttpsAgent | CircuitHttpAgent = getTorAgentForUrl(circuit, target);
+      try {
+        console.log(`Fetching ${target} through Tor...`);
+        const response = await fetch(target, { agent });
+        console.log(`Response status: ${response.status}`);
+        const text = await response.text();
+        console.log(`Response length: ${text.length} bytes`);
+        return { status: response.status, body: text };
+      } finally {
+        agent.destroy();
+      }
     },
     {
       // Bootstrap flakiness on the live network is real: the fallback-directory
@@ -82,13 +84,6 @@ test('fetch through Tor circuit', async (t) => {
         console.warn(`Attempt ${attempt} hit transient Tor error: ${err.message}. Retrying...`),
     }
   );
-
-  // Tear down the agent before assertions: closes any pooled sockets so
-  // ava's worker can drain naturally. With KeepAlive off (Node default)
-  // pooled sockets are usually short-lived, but the agent still holds
-  // references that delay GC, and on the live test we've observed them
-  // outliving the test body.
-  agentRef?.destroy();
 
   t.is(status, 200);
   t.true(body.includes('Example Domain'), 'Response should contain "Example Domain"');
