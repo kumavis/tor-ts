@@ -81,8 +81,8 @@ the contract. Remaining gaps are minor:
   `HsHost` yet — works via `import { publishHiddenService } from 'tor'`, but
   worth adding a browser-package re-export for symmetry with
   `connectToHiddenService`.
-- Service-worker viability is *claimed* in source comments and the
-  `EventEmitter` import is bundler-shimmed; not yet *demonstrated* end-to-end
+- Service-worker viability is _claimed_ in source comments and the
+  `EventEmitter` import is bundler-shimmed; not yet _demonstrated_ end-to-end
   under tab-backgrounding. This example will be the first real exercise.
 
 ### `claude/socks-proxy-tor-SRS33` — SOCKS proxy (**out of scope**)
@@ -106,6 +106,7 @@ Tracking removed from this project's blockers.
   it. Pin once a published version is in hand.
 
 If ocapn isn't on npm with these properties when we're ready to build:
+
 1. `pkg.pr.new` build of the PR branch, or
 2. fork + publish under a scoped name, or
 3. vendor the netlayer interface + sturdyref + chat helpers into the example.
@@ -122,18 +123,18 @@ If ocapn isn't on npm with these properties when we're ready to build:
 
 ## Need ranking (post-HS-host-landing)
 
-| # | Need | Owner | Status |
-|---|---|---|---|
-| 1 | Browser-shaped HS host with `publish()` accept-callback API | tor-ts `main` | **✅ landed** |
-| 2 | Persistable Ed25519 HS identity | tor-ts `main` | **✅ landed** |
-| 3 | Server-side hs-ntor + INTRODUCE2 + descriptor upload | tor-ts `main` | **✅ landed** |
-| 4 | OCapN netlayer registration in browser bundle | ocapn npm | **blocker** |
-| 5 | Browser-clean `runChatParticipant`-equivalent | ocapn / goblin-chat npm | blocker (or vendor) |
-| 6 | Demonstrate long-lived intro-circuit refresh inside service worker | this example | needs E2E test |
-| 7 | IndexedDB store for HS identity | this example (or `packages/browser`) | small task |
-| 8 | `openHsStream(onion, port)` convenience on browser TorClient | tor-ts | nice-to-have |
-| 9 | Re-export `publishHiddenService` from `packages/browser` | tor-ts | nice-to-have |
-| 10 | SOCKS proxy | `claude/socks-proxy-tor-SRS33` | out of scope |
+| #   | Need                                                               | Owner                                | Status              |
+| --- | ------------------------------------------------------------------ | ------------------------------------ | ------------------- |
+| 1   | Browser-shaped HS host with `publish()` accept-callback API        | tor-ts `main`                        | **✅ landed**       |
+| 2   | Persistable Ed25519 HS identity                                    | tor-ts `main`                        | **✅ landed**       |
+| 3   | Server-side hs-ntor + INTRODUCE2 + descriptor upload               | tor-ts `main`                        | **✅ landed**       |
+| 4   | OCapN netlayer registration in browser bundle                      | ocapn npm                            | **blocker**         |
+| 5   | Browser-clean `runChatParticipant`-equivalent                      | ocapn / goblin-chat npm              | blocker (or vendor) |
+| 6   | Demonstrate long-lived intro-circuit refresh inside service worker | this example                         | needs E2E test      |
+| 7   | IndexedDB store for HS identity                                    | this example (or `packages/browser`) | small task          |
+| 8   | `openHsStream(onion, port)` convenience on browser TorClient       | tor-ts                               | nice-to-have        |
+| 9   | Re-export `publishHiddenService` from `packages/browser`           | tor-ts                               | nice-to-have        |
+| 10  | SOCKS proxy                                                        | `claude/socks-proxy-tor-SRS33`       | out of scope        |
 
 ## Open questions
 
