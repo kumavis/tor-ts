@@ -20,6 +20,7 @@ import {
   signWithBlindedKey,
   deriveTimePeriodKeys,
   generateIntroPointKeys,
+  pickIntroPointCandidates,
   buildEstablishIntroPayload,
   parseIntroduce2,
   decryptIntroduce2,
@@ -595,5 +596,93 @@ test('publishHiddenService rejects non-function acceptPort', async (t) => {
       onConnection: () => {},
     }),
     { message: /acceptPort must be a function/ }
+  );
+});
+
+// =============================================================================
+// pickIntroPointCandidates: tiered Stable+Running → Running fallback
+// =============================================================================
+//
+// On mainnet relays advertise rich flag sets including Stable; chutney's
+// authorities at the pinned commit don't always vote Stable on non-authority
+// relays before the host's first consensus fetch. The picker prefers the
+// Stable set but falls back to plain Running so chutney bootstrap doesn't
+// race the Stable vote. Both tiers exclude BadExit and Authority.
+
+// Minimal MicroDescNodeInfo-shaped fixture — the picker only reads `flags`
+// (and would read `rsaIdDigest` for identification, but we don't compare on
+// that here).
+const r = (
+  nickname: string,
+  flags: string[]
+): {
+  nickname: string;
+  flags: string[];
+  rsaIdDigest: Buffer;
+} => ({ nickname, flags, rsaIdDigest: Buffer.alloc(20) });
+
+test('pickIntroPointCandidates: prefers Stable+Running when available', (t) => {
+  const relays = [
+    r('a', ['Authority', 'Running', 'Stable']),
+    r('b', ['Running', 'Stable']),
+    r('c', ['Running']),
+    r('d', ['Running', 'Stable', 'BadExit']),
+  ];
+  // @ts-expect-error: minimal fixture; the picker only reads `flags`
+  const picked = pickIntroPointCandidates(relays);
+  t.deepEqual(
+    picked.map((x) => x.nickname),
+    ['b'],
+    'picks only the non-Authority, non-BadExit, Stable+Running relay'
+  );
+});
+
+test('pickIntroPointCandidates: falls back to Running-only when no Stable relay', (t) => {
+  const relays = [
+    r('a', ['Authority', 'Running', 'Stable']),
+    r('b', ['Running']),
+    r('c', ['Running']),
+    r('d', ['Running', 'BadExit']),
+  ];
+  // @ts-expect-error: minimal fixture; the picker only reads `flags`
+  const picked = pickIntroPointCandidates(relays);
+  t.deepEqual(
+    picked.map((x) => x.nickname),
+    ['b', 'c'],
+    'falls back to plain Running when the Stable+Running set is empty'
+  );
+});
+
+test('pickIntroPointCandidates: empty when no Running relays at all', (t) => {
+  const relays = [r('a', ['Authority', 'Stable']), r('b', ['Valid', 'Fast'])];
+  // @ts-expect-error: minimal fixture; the picker only reads `flags`
+  const picked = pickIntroPointCandidates(relays);
+  t.deepEqual(picked, [], 'no Running candidates → empty (caller throws)');
+});
+
+test('pickIntroPointCandidates: BadExit excluded from both tiers', (t) => {
+  const relays = [r('a', ['Running', 'Stable', 'BadExit']), r('b', ['Running', 'BadExit'])];
+  // @ts-expect-error: minimal fixture; the picker only reads `flags`
+  const picked = pickIntroPointCandidates(relays);
+  t.deepEqual(picked, [], 'BadExit relays never qualify even when otherwise eligible');
+});
+
+test('pickIntroPointCandidates: Authority excluded from both tiers', (t) => {
+  const relays = [r('a', ['Authority', 'Running', 'Stable']), r('b', ['Authority', 'Running'])];
+  // @ts-expect-error: minimal fixture; the picker only reads `flags`
+  const picked = pickIntroPointCandidates(relays);
+  t.deepEqual(picked, [], 'Authorities never qualify (intro points must be plain relays)');
+});
+
+test('pickIntroPointCandidates: handles relays with undefined flags', (t) => {
+  const relays = [
+    { nickname: 'a', rsaIdDigest: Buffer.alloc(20) }, // no flags field
+    r('b', ['Running']),
+  ];
+  // @ts-expect-error: minimal fixture
+  const picked = pickIntroPointCandidates(relays);
+  t.deepEqual(
+    picked.map((x) => x.nickname),
+    ['b']
   );
 });

@@ -395,6 +395,30 @@ export function deriveTimePeriodKeys(params: {
 // ============================================================================
 
 /**
+ * Pick the set of relays the host considers valid candidates for
+ * introduction points, with a tiered fallback:
+ *
+ *   1. Prefer relays that advertise both `Stable` and `Running`.
+ *   2. If that set is empty (chutney's authorities at the pinned
+ *      `fb0bff1` commit don't always vote `Stable` on non-authority
+ *      relays before the first consensus fetch), fall back to relays
+ *      that advertise just `Running`.
+ *
+ * Both tiers exclude `BadExit` and `Authority`. Exposed for unit tests
+ * — `start()` calls this directly.
+ */
+export function pickIntroPointCandidates(relays: MicroDescNodeInfo[]): MicroDescNodeInfo[] {
+  const baseEligible = relays.filter((r) => {
+    const flags = r.flags ?? [];
+    if (flags.includes('BadExit')) return false;
+    if (flags.includes('Authority')) return false;
+    return flags.includes('Running');
+  });
+  const stable = baseEligible.filter((r) => (r.flags ?? []).includes('Stable'));
+  return stable.length > 0 ? stable : baseEligible;
+}
+
+/**
  * Generate fresh per-IP key material (auth + enc) for a candidate intro point.
  * The IP relay's identity comes in via `peerInfo` + `ed25519IdentityKey`.
  */
@@ -1154,14 +1178,11 @@ export class HiddenServiceHost extends EventEmitter {
       this.timePeriodKeys = deriveTimePeriodKeys(tpArgs);
 
       // 2. Pick + establish intro points. Mainnet relays advertise rich flag
-      //    sets; chutney's tiny network usually only has Running+Stable, so
-      //    accept any relay with Stable+Running and exclude obvious non-IPs.
-      const introCandidates = consensus.relays.filter((r) => {
-        const flags = r.flags ?? [];
-        if (flags.includes('BadExit')) return false;
-        if (flags.includes('Authority')) return false;
-        return flags.includes('Stable') && flags.includes('Running');
-      });
+      //    sets including Stable; chutney's authorities at the pinned commit
+      //    don't always vote Stable on non-authority relays before the host's
+      //    first consensus fetch, so prefer Stable+Running but fall back to
+      //    Running-only when the Stable set is empty.
+      const introCandidates = pickIntroPointCandidates(consensus.relays);
       if (introCandidates.length === 0) {
         throw new Error('No suitable introduction-point candidates in consensus');
       }

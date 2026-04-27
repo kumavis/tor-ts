@@ -26,6 +26,7 @@ export {
   signWithBlindedKey,
   deriveTimePeriodKeys,
   generateIntroPointKeys,
+  pickIntroPointCandidates,
   generateDescriptor,
   buildEstablishIntroPayload,
   parseIntroduce2,
