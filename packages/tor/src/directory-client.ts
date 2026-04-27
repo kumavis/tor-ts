@@ -111,12 +111,28 @@ export class DirectoryClient {
       });
     });
 
-    await Promise.race([
-      stream.write(Buffer.from(requestText, 'ascii')),
-      this.timeoutRejection('directory request write timeout'),
-    ]);
+    // Race write + ended against per-step timeouts. The timeouts MUST be
+    // cancelled on success: a fired-but-ignored Promise<never> is fine,
+    // but the underlying setTimeout would otherwise keep the event loop
+    // alive for `timeoutMs` past the request's natural completion. Per
+    // bootstrap we issue ~14 microdesc lookups + consensus + certs, each
+    // with two timeouts, which is enough leftover handles to delay
+    // process exit by tens of seconds — see the
+    // `[diagnostic http-proxy +2000ms] resources=29` instrumentation in
+    // the live tests.
+    const writeTimeout = this.armTimeoutRejection('directory request write timeout');
+    try {
+      await Promise.race([stream.write(Buffer.from(requestText, 'ascii')), writeTimeout.promise]);
+    } finally {
+      writeTimeout.cancel();
+    }
 
-    await Promise.race([endedP, this.timeoutRejection('directory request read timeout')]);
+    const readTimeout = this.armTimeoutRejection('directory request read timeout');
+    try {
+      await Promise.race([endedP, readTimeout.promise]);
+    } finally {
+      readTimeout.cancel();
+    }
 
     // Final progress update
     if (onProgress) {
@@ -169,10 +185,31 @@ export class DirectoryClient {
     );
   }
 
-  private timeoutRejection(message: string): Promise<never> {
-    return new Promise<never>((_resolve, reject) => {
-      setTimeout(() => reject(new Error(message)), this.timeoutMs);
+  /**
+   * Build a `{ promise, cancel }` pair for racing against an operation:
+   * the promise rejects after `this.timeoutMs`; `cancel()` clears the
+   * underlying `setTimeout` so a successful operation doesn't leave a
+   * timer outstanding — Node won't exit while there are armed timers,
+   * even ones nobody is waiting on. Callers MUST `cancel()` in a
+   * `finally` after every `Promise.race`.
+   */
+  private armTimeoutRejection(message: string): { promise: Promise<never>; cancel: () => void } {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    const promise = new Promise<never>((_resolve, reject) => {
+      timer = setTimeout(() => reject(new Error(message)), this.timeoutMs);
     });
+    // Swallow the unhandled rejection if `cancel()` is called before the
+    // timer fires (which never happens on a real timeout) — `Promise.race`
+    // discards the loser, so the rejected promise has no other consumers.
+    promise.catch(() => {
+      // intentionally empty
+    });
+    return {
+      promise,
+      cancel: () => {
+        if (timer) clearTimeout(timer);
+      },
+    };
   }
 
   /**

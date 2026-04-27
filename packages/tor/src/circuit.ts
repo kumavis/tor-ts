@@ -655,11 +655,27 @@ export class Circuit extends EventEmitter {
    * Perform handshake for a hop with timeout.
    */
   private async performHandshakeForHopWithTimeout(hop: Hop, timeoutMs: number): Promise<void> {
+    // Wire the timeout so it can be cleared on success — otherwise
+    // `setTimeout` keeps the event loop alive for the full `timeoutMs`
+    // (default 60 s) past every successful handshake. With 4 hops per
+    // bootstrap (1-hop dir + 3-hop circuit) that's 4 leftover timers
+    // per attempt × N attempts, all sitting in the loop until they
+    // fire and reject a Promise nobody's awaiting.
+    let timer: ReturnType<typeof setTimeout> | undefined;
     const timeoutPromise = new Promise<never>((_, reject) => {
-      setTimeout(() => reject(new Error(`Hop handshake timeout after ${timeoutMs}ms`)), timeoutMs);
+      timer = setTimeout(
+        () => reject(new Error(`Hop handshake timeout after ${timeoutMs}ms`)),
+        timeoutMs
+      );
     });
-
-    await Promise.race([this.performHandshakeForHop(hop), timeoutPromise]);
+    timeoutPromise.catch(() => {
+      // The Promise.race loser; nobody else is awaiting this rejection.
+    });
+    try {
+      await Promise.race([this.performHandshakeForHop(hop), timeoutPromise]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
   }
 
   async performHandshakeForHop(hop: Hop) {
