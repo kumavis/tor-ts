@@ -68,24 +68,22 @@ examples/goblin-chat-tor/
 
 ## Prerequisites and what each must deliver
 
-### `claude/tor-hidden-services-sDXWN` — HS host (**critical blocker**)
+### tor-ts HS host — **LANDED on `main`** ✅
 
-Detailed contract in [HS-HOST-API.md](./HS-HOST-API.md). Summary:
+Originally tracked as `claude/tor-hidden-services-sDXWN`. Shipped via #39
+(commits `289d54f` … `c5c5519`) as
+[`packages/tor/src/hidden-service-host.ts`](../../packages/tor/src/hidden-service-host.ts).
+The detailed contract in [HS-HOST-API.md](./HS-HOST-API.md) is met — see
+that file's "As-shipped audit" section for the line-by-line diff against
+the contract. Remaining gaps are minor:
 
-- Browser-shaped exports — no `node:net` / `node:dgram` / `node:fs` / `node:tls`
-  outside the existing `packages/browser/src/shims/` aliases. Must ride
-  `TorClient` + `Circuit` + `ChannelManager` like the client side does.
-- `publishHiddenService({ torClient, identityKey?, port, onConnection })`
-  returning `{ onion, identityKey, unpublish() }`.
-- Persistable Ed25519 identity (raw bytes round-trip) so the same `.onion` can
-  be republished across reloads.
-- Server-side hs-ntor (rend-spec-v3 §3.3), INTRODUCE2 parsing, RENDEZVOUS1
-  emission, descriptor upload to selected HSDirs.
-- Long-lived intro-circuit pool (≥3 circuits) with periodic descriptor
-  republish — must work in a service worker.
-- Concurrent rendezvous — multiple inbound peers introduce in parallel, each
-  produces its own `CircuitStream`.
-- Honest `unpublish()` — tears down intro circuits and stops republishing.
+- `packages/browser/src/index.ts` does not re-export `publishHiddenService` /
+  `HsHost` yet — works via `import { publishHiddenService } from 'tor'`, but
+  worth adding a browser-package re-export for symmetry with
+  `connectToHiddenService`.
+- Service-worker viability is *claimed* in source comments and the
+  `EventEmitter` import is bundler-shimmed; not yet *demonstrated* end-to-end
+  under tab-backgrounding. This example will be the first real exercise.
 
 ### `claude/socks-proxy-tor-SRS33` — SOCKS proxy (**out of scope**)
 
@@ -122,19 +120,20 @@ If ocapn isn't on npm with these properties when we're ready to build:
 - Confirm the `tamanegi-browser` service-worker pattern is compatible with the
   HS-host intro-circuit refresh loop.
 
-## Need ranking
+## Need ranking (post-HS-host-landing)
 
-| # | Need | Owner | Blocker? |
+| # | Need | Owner | Status |
 |---|---|---|---|
-| 1 | Browser-shaped HS host with `publish()` accept-callback API | `claude/tor-hidden-services-sDXWN` | **yes** |
-| 2 | Persistable Ed25519 HS identity | `claude/tor-hidden-services-sDXWN` | yes (usable chat) |
-| 3 | Server-side hs-ntor + INTRODUCE2 + descriptor upload | `claude/tor-hidden-services-sDXWN` | yes |
-| 4 | OCapN netlayer registration in browser bundle | ocapn npm | **yes** |
-| 5 | Browser-clean `runChatParticipant`-equivalent | ocapn / goblin-chat npm | yes (or vendor) |
-| 6 | Long-lived intro-circuit refresh inside service worker | tor-ts + HS-host branch | yes (tab backgrounding) |
-| 7 | IndexedDB store for HS identity | tor-ts browser package | yes (stable `.onion`) |
+| 1 | Browser-shaped HS host with `publish()` accept-callback API | tor-ts `main` | **✅ landed** |
+| 2 | Persistable Ed25519 HS identity | tor-ts `main` | **✅ landed** |
+| 3 | Server-side hs-ntor + INTRODUCE2 + descriptor upload | tor-ts `main` | **✅ landed** |
+| 4 | OCapN netlayer registration in browser bundle | ocapn npm | **blocker** |
+| 5 | Browser-clean `runChatParticipant`-equivalent | ocapn / goblin-chat npm | blocker (or vendor) |
+| 6 | Demonstrate long-lived intro-circuit refresh inside service worker | this example | needs E2E test |
+| 7 | IndexedDB store for HS identity | this example (or `packages/browser`) | small task |
 | 8 | `openHsStream(onion, port)` convenience on browser TorClient | tor-ts | nice-to-have |
-| 9 | SOCKS proxy | `claude/socks-proxy-tor-SRS33` | **no** (out of scope) |
+| 9 | Re-export `publishHiddenService` from `packages/browser` | tor-ts | nice-to-have |
+| 10 | SOCKS proxy | `claude/socks-proxy-tor-SRS33` | out of scope |
 
 ## Open questions
 

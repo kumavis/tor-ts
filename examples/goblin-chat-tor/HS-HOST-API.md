@@ -166,3 +166,43 @@ same process to prove `connect`/`listen` symmetry.
    exchange OCapN frames in both directions for ≥60 seconds without circuit
    churn breaking the conversation.
 5. `unpublish()` reliably stops the host and releases all circuits.
+
+---
+
+## As-shipped audit (against `main` @ `c5c5519`)
+
+The HS-host landed in `packages/tor/src/hidden-service-host.ts` and is
+re-exported from `packages/tor/src/index.ts`. Quick pass against the
+contract above:
+
+| § | Item | Shipped | Notes |
+|---|---|:-:|---|
+| 1 | `publishHiddenService(opts) => Promise<HsHost>` | ✅ | Signature matches, `HsHost` shape matches (`onion`, `identityKey`, `numActiveIntroPoints()`, `unpublish()`). |
+| 1 | `Ed25519PrivateKeyBytes` as raw 32-byte seed | ✅ | Accepts `Buffer \| Uint8Array`, returns `Uint8Array`. |
+| 1 | `CircuitStream` accept-callback yield type | ✅ | `onConnection(stream: CircuitStream)`. |
+| 2 | Browser portability | ✅ | No `node:net/tls/fs/dgram/http/crypto/stream/child_process/os/path`. Only Node-shaped import is `events`, which is shimmed by `vite-plugin-node-polyfills` and is `EventEmitter` in browsers. The file's docstring explicitly calls out service-worker compatibility. |
+| 3 | Identity persistence (round-trip seed → same `.onion`) | ✅ | `identityKey` in/out documented as "32-byte ed25519 seed that pins the .onion address". |
+| 4 | Server-side hs-ntor + descriptor pipeline + INTRODUCE2 + ESTABLISH_INTRO + HSDir upload | ✅ | All five exports present (`completeHsNtorServer`, `generateDescriptor`, `parseIntroduce2`, `decryptIntroduce2`, `buildEstablishIntroPayload`). Chutney CI exercises end-to-end. |
+| 5 | Lifecycle (publish resolves once IP up + descriptor uploaded; `unpublish` idempotent + non-rejecting) | ✅ | Documented: "Resolves once at least one introduction point is established AND the descriptor has been uploaded to at least one HSDir … `unpublish()` is idempotent and never rejects." |
+| 5 | Steady-state intro-circuit refresh + descriptor republish | ✅ | `descriptorRefreshMs` (default 30 min), intro-point churn watchdog (commit `157ee9f`). |
+| 6 | Concurrent rendezvous → independent streams per BEGIN | ✅ | Per-stream `onConnection` callback; multi-port via `port: number \| number[]` is a bonus over the contract. |
+| 7 | Service-worker viability | ⚠️ | Asserted in source comments; not yet demonstrated end-to-end under tab-backgrounding. The goblin-chat-tor example is the first user. |
+| 8 | Errors only via `log` in steady state | ✅ | Documented: "Errors during steady state … are surfaced via `log` only — they don't reject the original promise or escape." |
+| 9 | Unit tests + chutney integration | ✅ | `hidden-service-host.spec.ts` plus `scripts/chutney-hidden-service-host-ci.ts`, enabled in CI as of `a5d07e4`. |
+| 10 | Optional: `host.onIntroPointChurn` observable | ➕ partial | `HiddenServiceHost extends EventEmitter` with `'introduce2-error'`, `'rendezvous'`, `'connection'`, `'stopped'` events. The high-level `HsHost` returned by `publishHiddenService` does not surface the EE; if the example wants it, instantiate `HiddenServiceHost` directly. |
+
+**Bonus features beyond the contract** (worth knowing about):
+- Multi-port: `port: number \| number[]` accepts BEGIN cells for any listed port.
+- Custom `acceptPort: (port: number) => boolean` for wildcard / dynamic services.
+- `perStepTimeoutMs` for per-handshake timeouts.
+- `numActiveIntroPoints()` accessor on `HsHost`.
+
+**Minor gaps** (non-blocking, tracked in [README.md](./README.md) need ranking):
+- `packages/browser/src/index.ts` does not re-export `publishHiddenService`.
+  Works via `import { publishHiddenService } from 'tor'` but a browser-package
+  re-export would mirror the existing `connectToHiddenService` ergonomics.
+- High-level `HsHost` doesn't expose the underlying `EventEmitter`. Fine for v1.
+
+This contract is **considered satisfied for the purposes of unblocking
+goblin-chat-tor**. Any further work is on the OCapN side or in the example
+itself.
