@@ -1,0 +1,8 @@
+# Thales-emitted Lean sidecars (regenerated on every `verify.sh` run).
+Generated/*.lean
+
+# Lake build artifacts.
+.lake/
+
+# Thales clone created by verify.sh when no THALES_REPO is provided.
+.thales/

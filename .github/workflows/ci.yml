@@ -53,6 +53,47 @@ jobs:
       - name: Test
         run: yarn test
 
+  verify_core:
+    name: Verify tor-core (Thales + Lean)
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install elan (Lean toolchain manager)
+        run: |
+          curl -sSf https://raw.githubusercontent.com/leanprover/elan/master/elan-init.sh \
+            | sh -s -- -y --default-toolchain none
+          echo "$HOME/.elan/bin" >> "$GITHUB_PATH"
+
+      - name: Show Lean version
+        run: |
+          cd packages/core
+          lake --version
+          lean --version
+
+      - name: Resolve Thales pin
+        id: thales
+        run: |
+          # Until we pin Thales to a SHA in verify.sh, look up `main` once
+          # so the cache key reflects the exact build. Replace with a fixed
+          # SHA in a follow-up.
+          rev="$(git ls-remote https://github.com/jessealama/thales.git main | awk '{print $1}')"
+          echo "rev=$rev" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Thales build
+        uses: actions/cache@v4
+        with:
+          path: packages/core/.thales
+          key: thales-${{ runner.os }}-${{ steps.thales.outputs.rev }}
+
+      - name: Verify
+        env:
+          THALES_REV: ${{ steps.thales.outputs.rev }}
+        run: bash packages/core/scripts/verify.sh
+
   chutney:
     runs-on: ubuntu-latest
     timeout-minutes: 20
