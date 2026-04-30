@@ -74,24 +74,15 @@ jobs:
           lake --version
           lean --version
 
-      - name: Resolve Thales pin
-        id: thales
-        run: |
-          # Until we pin Thales to a SHA in verify.sh, look up `main` once
-          # so the cache key reflects the exact build. Replace with a fixed
-          # SHA in a follow-up.
-          rev="$(git ls-remote https://github.com/jessealama/thales.git main | awk '{print $1}')"
-          echo "rev=$rev" >> "$GITHUB_OUTPUT"
-
       - name: Cache Thales build
         uses: actions/cache@v4
         with:
           path: packages/core/.thales
-          key: thales-${{ runner.os }}-${{ steps.thales.outputs.rev }}
+          # Cache key reads the SHA out of verify.sh so it stays in sync
+          # whenever the pin is bumped.
+          key: thales-${{ runner.os }}-${{ hashFiles('packages/core/scripts/verify.sh') }}
 
       - name: Verify
-        env:
-          THALES_REV: ${{ steps.thales.outputs.rev }}
         run: bash packages/core/scripts/verify.sh
 
   chutney:

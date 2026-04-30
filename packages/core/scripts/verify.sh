@@ -12,15 +12,16 @@
 # Environment:
 #   THALES_REPO   Path to a pre-cloned Thales checkout. If unset, the
 #                 script clones into `.thales/` next to this package.
-#   THALES_REV    Git revision to check out (default: main). Pin to a SHA
-#                 before merging the first verified module.
+#   THALES_REV    Git revision to check out. Defaults to the SHA pinned
+#                 in lakefile.lean. Update both together.
 #
 # Requirements: `git`, `lake`/`lean` on PATH (install via elan).
 
 set -euo pipefail
 
 PKG_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
-THALES_REV="${THALES_REV:-main}"
+# Keep this SHA in sync with `require thales` in lakefile.lean.
+THALES_REV="${THALES_REV:-31f300449ea4514e1975fa559011d18793ee1a7a}"
 THALES_REPO="${THALES_REPO:-${PKG_DIR}/.thales}"
 
 if ! command -v lake >/dev/null 2>&1; then

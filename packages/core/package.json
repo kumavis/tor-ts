@@ -4,9 +4,6 @@
   "license": "MIT",
   "type": "module",
   "description": "Verified pure core for tor-ts. Every module here is in the Thales TypeScript subset and emits a Lean sidecar checked in CI.",
-  "exports": {
-    "./port-range": "./src/portRange.ts"
-  },
   "devDependencies": {
     "typescript": "^5.9.3"
   },

@@ -9,12 +9,14 @@
 // `Float`. The TS shell that uses this module passes `BigInt(portNumber)`
 // at the seam.
 
-export type PortRange = {
+// `endPort` rather than `end` because `end` is a reserved keyword in Lean
+// and Thales emits the field name verbatim.
+interface PortRange {
   start: bigint;
-  end: bigint;
-};
+  endPort: bigint;
+}
 
 /** @total */
-export function portInRange(port: bigint, range: PortRange): boolean {
-  return range.start <= port && port <= range.end;
+function portInRange(port: bigint, range: PortRange): boolean {
+  return range.start <= port && port <= range.endPort;
 }
