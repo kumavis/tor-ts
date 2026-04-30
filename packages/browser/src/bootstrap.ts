@@ -135,11 +135,11 @@ export async function performBootstrap(
 
   // Create consensus manager (will parse cached raw content if provided)
   const consensusManager = new ConsensusManager(bootstrapCircuit, {
-    initialRawContent: cachedRaw,
+    ...(cachedRaw !== undefined ? { initialRawContent: cachedRaw } : {}),
     defaultRefreshOptions: {
       timeoutMs: 600_000, // Longer timeout for browser environment
       ...(trustedAuthorities !== undefined ? { trustedAuthorities } : {}),
-      onProgress: onConsensusProgress,
+      ...(onConsensusProgress !== undefined ? { onProgress: onConsensusProgress } : {}),
       onStatus: log,
     },
   });

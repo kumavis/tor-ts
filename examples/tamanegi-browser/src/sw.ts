@@ -151,9 +151,9 @@ async function handleConnect(options?: ConnectOptions): Promise<void> {
     const microdescStorage = createIdbBackedMicrodescStorage(microdescMap);
 
     const { client: c, channel: ch } = await makeBrowserTorClient({
-      relayUrl: options?.relayUrl,
+      ...(options?.relayUrl !== undefined ? { relayUrl: options.relayUrl } : {}),
       skipConsensusCache: options?.skipConsensusCache ?? false,
-      cachedConsensusText: cachedConsensus,
+      ...(cachedConsensus !== undefined ? { cachedConsensusText: cachedConsensus } : {}),
       microdescStorage,
       onConsensusUpdate: (raw) => {
         consensusIDB.set(raw).catch((err) => console.warn('[sw] consensusIDB.set failed:', err));
@@ -202,7 +202,7 @@ async function handleFetch(requestId: string, url: string, timeout?: number): Pr
     return;
   }
   try {
-    const response = await client.fetch(url, { timeout });
+    const response = await client.fetch(url, timeout !== undefined ? { timeout } : {});
     await broadcast({
       type: 'fetchResult',
       requestId,
@@ -262,7 +262,7 @@ async function handleProxyFetch(request: Request): Promise<Response> {
 
     const result = await client.fetch(targetUrl, {
       method: request.method || 'GET',
-      headers: Object.keys(headers).length > 0 ? headers : undefined,
+      ...(Object.keys(headers).length > 0 ? { headers } : {}),
       timeout: TOR_PROXY_TIMEOUT_MS,
     });
 

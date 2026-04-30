@@ -135,6 +135,7 @@ function navigateBack(): void {
     historyIndex--;
     isNavigatingHistory = true;
     const url = historyStack[historyIndex];
+    if (url === undefined) return;
     urlInput.value = url;
     browsePage(url);
     updateNavButtons();
@@ -146,6 +147,7 @@ function navigateForward(): void {
     historyIndex++;
     isNavigatingHistory = true;
     const url = historyStack[historyIndex];
+    if (url === undefined) return;
     urlInput.value = url;
     browsePage(url);
     updateNavButtons();
@@ -309,7 +311,7 @@ function checkCachedConsensus(): void {
   const status = getConsensusCacheStatus();
   if (status.cached && status.validUntil) {
     setConsensusState('cached', {
-      isFresh: status.isFresh,
+      ...(status.isFresh !== undefined ? { isFresh: status.isFresh } : {}),
       validUntil: status.validUntil,
     });
   } else {
@@ -451,7 +453,7 @@ function showConsensusCached(): void {
   const status = getConsensusCacheStatus();
   if (status.cached && status.validUntil) {
     setConsensusState('cached', {
-      isFresh: status.isFresh,
+      ...(status.isFresh !== undefined ? { isFresh: status.isFresh } : {}),
       validUntil: status.validUntil,
     });
   }
@@ -761,7 +763,7 @@ function attachLinkHandler(): void {
         if (!href) return;
 
         const match = href.match(/^#tor-link-(\d+)$/);
-        if (!match) return;
+        if (!match?.[1]) return;
 
         const index = parseInt(match[1], 10);
         const targetUrl = linkMap.get(index);
@@ -841,8 +843,8 @@ function rewriteAssetUrls(html: string, baseUrl: URL): string {
               .split(',')
               .map((entry) => {
                 const parts = entry.trim().split(/\s+/);
-                if (parts.length === 0) return entry;
                 const url = parts[0];
+                if (!url) return entry;
                 const descriptor = parts.slice(1).join(' ');
                 const proxied = rewriteUrl(url, baseUrl);
                 if (!proxied) return entry;

@@ -9,6 +9,11 @@
     "esModuleInterop": true,
     "moduleDetection": "force",
     "strict": true,
+    "useUnknownInCatchVariables": true,
+    "noUncheckedIndexedAccess": true,
+    "exactOptionalPropertyTypes": true,
+    "noFallthroughCasesInSwitch": true,
+    "noImplicitReturns": true,
     "noEmit": true,
     "skipLibCheck": true,
     "types": ["node"]

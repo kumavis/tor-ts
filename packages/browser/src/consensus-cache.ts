@@ -154,9 +154,9 @@ export function getConsensusCacheStatus(): ConsensusCacheStatus {
   return {
     cached: true,
     sizeBytes: text.length,
-    freshUntil,
-    validUntil,
-    isFresh,
-    isValid,
+    ...(freshUntil !== undefined ? { freshUntil } : {}),
+    ...(validUntil !== undefined ? { validUntil } : {}),
+    ...(isFresh !== undefined ? { isFresh } : {}),
+    ...(isValid !== undefined ? { isValid } : {}),
   };
 }
