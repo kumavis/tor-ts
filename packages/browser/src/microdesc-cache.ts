@@ -99,7 +99,10 @@ function decodeEntry(value: string): CachedMicrodesc | null {
       microdesc.ed25519Identity = key;
     }
     if (policyStr) {
-      microdesc.exitPolicy = decodePolicy(policyStr);
+      const policy = decodePolicy(policyStr);
+      if (policy) {
+        microdesc.exitPolicy = policy;
+      }
     }
 
     return { microdesc, lastReferenced };

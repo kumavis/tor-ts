@@ -206,7 +206,7 @@ export async function makeBrowserTorClient(
     buildCircuit,
     fetchOverCircuit: fetchViaTorCircuit,
     log,
-    onMicrodescProgress,
+    ...(onMicrodescProgress !== undefined ? { onMicrodescProgress } : {}),
     onDestroy: () => channel.destroy(),
   });
 

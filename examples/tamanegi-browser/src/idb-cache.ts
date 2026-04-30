@@ -40,17 +40,19 @@ function openDB(): Promise<IDBDatabase> {
 
 function toStored(entry: CachedMicrodesc): StoredMicrodesc {
   const md = entry.microdesc;
+  const microdesc: StoredMicrodesc['microdesc'] = {};
+  if (md.ntorOnionKey?.length) {
+    microdesc.ntorOnionKeyB64 = Buffer.from(md.ntorOnionKey).toString('base64');
+  }
+  if (md.ed25519Identity?.length) {
+    microdesc.ed25519IdentityB64 = Buffer.from(md.ed25519Identity).toString('base64');
+  }
+  if (md.exitPolicy) {
+    microdesc.exitPolicy = md.exitPolicy;
+  }
   return {
     lastReferenced: entry.lastReferenced,
-    microdesc: {
-      ntorOnionKeyB64: md.ntorOnionKey?.length
-        ? Buffer.from(md.ntorOnionKey).toString('base64')
-        : undefined,
-      ed25519IdentityB64: md.ed25519Identity?.length
-        ? Buffer.from(md.ed25519Identity).toString('base64')
-        : undefined,
-      exitPolicy: md.exitPolicy,
-    },
+    microdesc,
   };
 }
 

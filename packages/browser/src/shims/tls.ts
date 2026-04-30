@@ -96,8 +96,8 @@ export class TLSSocket extends EventEmitter {
 
         // Handle received certificates
         onRecvCertificates: ({ certificates }: { certificates: X509Certificate[] }) => {
-          if (certificates.length > 0) {
-            const cert = certificates[0];
+          const cert = certificates[0];
+          if (cert) {
             try {
               // Access the internal @peculiar/x509 certificate to get raw DER data
               // This is needed for Tor's certificate verification (CERTS cell)

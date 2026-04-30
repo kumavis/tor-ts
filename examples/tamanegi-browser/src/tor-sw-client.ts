@@ -87,14 +87,19 @@ export class TorServiceWorkerClient {
   }
 
   connect(options?: { relayUrl?: string; skipConsensusCache?: boolean }): void {
-    this.post({ type: 'connect', options });
+    this.post({ type: 'connect', ...(options !== undefined ? { options } : {}) });
   }
 
   fetch(url: string, opts?: { timeout?: number }): Promise<FetchResult> {
     return new Promise((resolve, reject) => {
       const requestId = crypto.randomUUID();
       this.pendingFetch.set(requestId, { resolve, reject });
-      this.post({ type: 'fetch', requestId, url, timeout: opts?.timeout });
+      this.post({
+        type: 'fetch',
+        requestId,
+        url,
+        ...(opts?.timeout !== undefined ? { timeout: opts.timeout } : {}),
+      });
     });
   }
 
