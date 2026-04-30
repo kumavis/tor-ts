@@ -16,10 +16,12 @@ The seam strategy and per-package conversion plan live in
 ```
 packages/core/
 ├── src/                  TypeScript source (Thales subset, runs as JS)
-│   └── exitPolicy.ts
+│   ├── exitPolicy.ts
+│   └── seq32.ts
 ├── Generated/            Thales-emitted Lean sidecars (gitignored)
 ├── Spec/                 Hand-written Lean theorems
-│   └── ExitPolicy.lean
+│   ├── ExitPolicy.lean
+│   └── Seq32.lean
 ├── lakefile.lean         Lean project; `require`s Thales
 ├── lean-toolchain        Pinned Lean version
 ├── tsconfig.json         Strict TS settings
@@ -43,6 +45,7 @@ binary as long as `THALES_REV` is unchanged.
 | Module | Functions | Theorems in `Spec/` |
 |---|---|---|
 | `exitPolicy.ts` | `portInRange`, `anyRangeContainsPort`, `policyAllowsPort`, `policyAllowsAllPorts`, `policyAllowsAnyPort`, `isPortRangeListEmpty`, `isFullPortRange`, `policyRejectsAll` | 25 |
+| `seq32.ts` | `uint32`, `add32`, `sub32`, `asInt32`, `itimediff`, `seqLt`, `seqLe` | 15 |
 
 The intent is to port modules into here incrementally per the conversion
 plan, **rejecting any addition that isn't fully Thales-eligible and
@@ -99,3 +102,9 @@ later modules don't re-learn the same things.
   Thales (`Property 'head' does not exist on type 'object | object'`).
   Workaround: hoist the inner switch into a small helper function that
   takes the narrowed sub-record as an argument.
+- **`split_ifs`, `linarith`, and `ring` are Mathlib tactics** — they
+  aren't available in `Spec/` (we only have core Lean + batteries via
+  Thales's own dependency). Use `by_cases h : <cond>` + `if_pos h` /
+  `if_neg h` for splitting on `if`, and `omega` for arithmetic
+  obligations over `Int`/`Nat`. `omega` is surprisingly strong: given
+  `h : f x = a + b`, it'll close `f x = c` if `a + b = c` is decidable.
