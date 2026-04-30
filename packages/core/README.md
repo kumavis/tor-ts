@@ -42,7 +42,7 @@ binary as long as `THALES_REV` is unchanged.
 
 | Module | Functions | Theorems in `Spec/` |
 |---|---|---|
-| `exitPolicy.ts` | `portInRange`, `anyRangeContainsPort`, `policyAllowsPort` | 10 |
+| `exitPolicy.ts` | `portInRange`, `anyRangeContainsPort`, `policyAllowsPort`, `policyAllowsAllPorts`, `policyAllowsAnyPort`, `isPortRangeListEmpty`, `isFullPortRange`, `policyRejectsAll` | 25 |
 
 The intent is to port modules into here incrementally per the conversion
 plan, **rejecting any addition that isn't fully Thales-eligible and
@@ -84,3 +84,18 @@ later modules don't re-learn the same things.
   TS-side seam adapter converts arrays at the boundary. This is the
   pattern `total-recursion.ts` uses in the upstream Thales examples and
   is what compiles cleanly to `inductive` types in Lean.
+- **Object literals don't compile for `interface` types.** Constructing
+  a value of an `interface`-typed (or single-record `type`-aliased)
+  record with `{ … }` emits the literal text `(unsupported expr)` —
+  silently broken. DU constructors via the `kind` discriminator
+  (`{ kind: 'cons', head, tail }`) work fine. The practical
+  consequence: `interface` types can be **consumed** in verified code
+  but not **constructed** there. Builders that produce records have to
+  live in the impure shell. See
+  [`docs/thales-issues.md`](docs/thales-issues.md) for a filed repro.
+- **Switch narrowing doesn't reach into nested switches.** A
+  `switch (policy.kind) { case 'reject': switch (policy.ports.kind)
+  { case 'cons': policy.ports.head ... } }` fails type-check inside
+  Thales (`Property 'head' does not exist on type 'object | object'`).
+  Workaround: hoist the inner switch into a small helper function that
+  takes the narrowed sub-record as an argument.

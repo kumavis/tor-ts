@@ -55,3 +55,85 @@ function policyAllowsPort(policy: ExitPolicy, port: bigint): boolean {
       return !anyRangeContainsPort(port, policy.ports);
   }
 }
+
+// ----------------------------------------------------------------------------
+// Quantified port-list queries.
+//
+// `PortList` is a separate cons-cell list of single ports (not ranges). The
+// existing TS implementation in `packages/tor/src/exit-policy.ts` returns
+// `true` for both `policyAllowsAllPorts` and `policyAllowsAnyPort` on an
+// empty input array — that quirk is preserved here for behavioural parity.
+// ----------------------------------------------------------------------------
+
+type PortList = { kind: 'nil' } | { kind: 'cons'; head: bigint; tail: PortList };
+
+/** @total */
+function policyAllowsAllPorts(policy: ExitPolicy, ports: PortList): boolean {
+  switch (ports.kind) {
+    case 'nil':
+      return true;
+    case 'cons':
+      return (
+        policyAllowsPort(policy, ports.head) &&
+        policyAllowsAllPorts(policy, ports.tail)
+      );
+  }
+}
+
+/** @total */
+function policyAllowsAnyPort(policy: ExitPolicy, ports: PortList): boolean {
+  switch (ports.kind) {
+    case 'nil':
+      // Matches the existing TS: empty list short-circuits to true.
+      return true;
+    case 'cons':
+      return (
+        policyAllowsPort(policy, ports.head) ||
+        policyAllowsAnyPort(policy, ports.tail)
+      );
+  }
+}
+
+// ----------------------------------------------------------------------------
+// `policyRejectsAll`: the policy denies every valid port.
+//
+// True when the accept list is empty (nothing matches → nothing accepted) or
+// when the reject list is exactly the single range [1, 65535] (every valid
+// port matches → every valid port rejected). The strong correctness theorem
+// in Spec/ExitPolicy.lean proves: if this returns `true`, no port in
+// [1, 65535] is allowed.
+// ----------------------------------------------------------------------------
+
+/** @total */
+function isPortRangeListEmpty(ranges: PortRangeList): boolean {
+  switch (ranges.kind) {
+    case 'nil':
+      return true;
+    case 'cons':
+      return false;
+  }
+}
+
+/** @total */
+function isFullPortRange(ranges: PortRangeList): boolean {
+  switch (ranges.kind) {
+    case 'nil':
+      return false;
+    case 'cons':
+      return (
+        ranges.head.start === 1n &&
+        ranges.head.endPort === 65535n &&
+        isPortRangeListEmpty(ranges.tail)
+      );
+  }
+}
+
+/** @total */
+function policyRejectsAll(policy: ExitPolicy): boolean {
+  switch (policy.kind) {
+    case 'accept':
+      return isPortRangeListEmpty(policy.ports);
+    case 'reject':
+      return isFullPortRange(policy.ports);
+  }
+}
