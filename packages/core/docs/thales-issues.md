@@ -2,8 +2,9 @@
 
 Verified against `main` at `31f300449ea4514e1975fa559011d18793ee1a7a` (current
 tip as of filing). None of these duplicate any of the 10 existing issues
-(#1 closed, #2–#10 are 0.6 refinement-types milestones). All four produce
-silently or visibly broken Lean from input that Thales accepts.
+(#1 closed, #2–#10 are 0.6 refinement-types milestones). The first four
+produce silently or visibly broken Lean from input that Thales accepts;
+the fifth gates downstream adoption.
 
 GitHub MCP access in this environment is scoped to `kumavis/tor-ts`, so
 these drafts are intended to be copy-pasted into
@@ -353,7 +354,116 @@ verified and impure code.
 
 ---
 
-## Skipping the original "lakefile reproducibility" item
+## Issue 5: `import` and `export` declarations rejected by the parser
+
+**Title:** `Parser rejects \`import\` and \`export\` declarations even though subset.md lists them as supported (no multi-file Thales modules possible)`
+
+**Body:**
+
+`docs/subset.md` lists `Modules: import/export of values and types` under
+"Allowed Features", but every form of `import` and `export` I've tried is
+rejected at parse time. This forces every verified module to be a single
+self-contained file, which is fine for proofs but makes composition
+impossible: a downstream module that wants to reuse a type or function
+from a verified neighbor has no way to pull it in.
+
+### Minimal repro
+
+`a.ts`:
+```ts
+export interface Foo { x: bigint }
+
+export function makeFoo(x: bigint): Foo {
+  return { x };
+}
+```
+
+`b.ts`:
+```ts
+import { makeFoo } from './a';
+
+function useFoo(): bigint {
+  return makeFoo(42n).x;
+}
+```
+
+```
+$ thales --no-emit a.ts
+a.ts(1,1): error TS2304: Cannot find name 'export'
+a.ts(3,1): error TS2304: Cannot find name 'export'
+
+$ thales --no-emit b.ts
+b.ts(4,10): error TS2304: Cannot find name 'makeFoo'
+```
+
+Verified against `main` at `31f300449ea4514e1975fa559011d18793ee1a7a`.
+
+### Forms tested (all rejected)
+
+| form | result |
+|---|---|
+| `export function f() {…}`           | `TS2304: Cannot find name 'export'` |
+| `export type T = …;`                | `TS2304: Cannot find name 'export'` |
+| `export interface I {…}`            | `TS2304: Cannot find name 'export'` |
+| `export { f };` (trailing)          | `Parse error: Expected type name` |
+| `export {};` (module marker only)   | `TS2304: Cannot find name 'export'` |
+| `import { f } from './a';`          | bare TS error: identifier `f` unbound |
+
+The parser fixtures under `examples/` and `Test/Examples/fixtures/`
+confirm this — none use `export` or cross-file `import`.
+
+### Doc reference
+
+`docs/subset.md`, "Allowed Features" section:
+
+> **Modules:** `import`/`export` of values and types
+
+### Practical impact
+
+`tor-core` is currently a verified-pure subset of `tor-ts`
+(packages/core, https://github.com/kumavis/tor-ts/tree/claude/tor-thales-conversion-plan-ZV3bm/packages/core).
+Every file in `src/` is in the Thales subset and emits a Lean sidecar
+checked at build time. The seam strategy in `docs/thales-conversion-plan.md`
+calls for an impure shell that **imports** from this verified core and
+adapts effectful APIs (sockets, timers, EventEmitter) onto pure step
+functions.
+
+Without `export`, the verified modules can't be imported by the impure
+shell — so the plan's seam is currently blocked at the integration step.
+Inside core itself, types like `PortRange` end up duplicated in every
+file that uses them, and helpers like `isPortRangeListEmpty` can't be
+factored out into a shared utility module. Two modules so far
+(`exitPolicy.ts`, `seq32.ts`) — composition pressure will only grow.
+
+The DU + structural-recursion pattern from `total-recursion.ts` works
+cleanly for self-contained modules, so the rest of the subset is plenty
+useful in isolation. It's just that the "use this in production" story
+needs `import`/`export` to land.
+
+### Suggested fix shape
+
+For a minimal first pass that unblocks downstream consumers:
+
+1. **`export` on top-level declarations** — accept `export function`,
+   `export type`, `export interface`, `export const`. Lower to making
+   the corresponding Lean definition non-`private` (i.e., visible at
+   `import` sites).
+2. **Bare `import { name } from './sibling'`** — accept an import-clause
+   with named bindings; lower to a Lean `import Sibling`.
+3. **Re-export-only files** are not needed for v1.
+
+Default-imports, namespace-imports, and `import * as ns` can wait —
+named imports are sufficient for the seam pattern. The Lean side
+already handles `import` cleanly (Generated/ and Spec/ already cross-
+import in the test project), so the work is on the TS-parser /
+emitter side.
+
+### Why this is medium-priority and not low-priority
+
+This isn't a "the emitter writes broken Lean" failure mode like #1, #2,
+#3 — `--no-emit` reports a clean TS error and stops. But the absence
+makes Thales un-deployable in any project beyond a single-file demo,
+which is a much more visible adoption gate than the silent-emit bugs.
 
 In an earlier iteration I considered filing a fourth issue about Thales's
 docs not telling downstream Lake projects to pin by SHA. After
