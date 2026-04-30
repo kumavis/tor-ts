@@ -16,10 +16,10 @@ The seam strategy and per-package conversion plan live in
 ```
 packages/core/
 ├── src/                  TypeScript source (Thales subset, runs as JS)
-│   └── portRange.ts
+│   └── exitPolicy.ts
 ├── Generated/            Thales-emitted Lean sidecars (gitignored)
 ├── Spec/                 Hand-written Lean theorems
-│   └── PortRange.lean
+│   └── ExitPolicy.lean
 ├── lakefile.lean         Lean project; `require`s Thales
 ├── lean-toolchain        Pinned Lean version
 ├── tsconfig.json         Strict TS settings
@@ -40,13 +40,13 @@ binary as long as `THALES_REV` is unchanged.
 
 ## What's inside
 
-| Module | Status |
-|---|---|
-| `portRange.ts` — `PortRange` type and `portInRange` predicate | verified — three theorems in `Spec/PortRange.lean` |
+| Module | Functions | Theorems in `Spec/` |
+|---|---|---|
+| `exitPolicy.ts` | `portInRange`, `anyRangeContainsPort`, `policyAllowsPort` | 10 |
 
-This is the first slice. The intent is to port modules into here
-incrementally per the conversion plan, **rejecting any addition that
-isn't fully Thales-eligible and proven**.
+The intent is to port modules into here incrementally per the conversion
+plan, **rejecting any addition that isn't fully Thales-eligible and
+proven**.
 
 ## Known limitations & quirks
 
@@ -72,3 +72,15 @@ later modules don't re-learn the same things.
   `bigint` to Lean `Int`. Anything that wants integer reasoning (port
   numbers, byte values, sequence numbers, lengths) should be `bigint`.
   The TS-side adapter does `BigInt(x)` at the seam.
+- **No `import` between Thales files.** The Thales 0.5 parser rejects
+  `import` statements in user files just like it rejects `export`. Each
+  verified module must be self-contained. Cross-module composition waits
+  for an upstream Thales fix.
+- **No array methods yet.** Despite the subset doc listing `.map`,
+  `.filter`, `.reduce`, etc., the Thales 0.5 prelude only exposes
+  `Option<T>` / `Result<T, E>`. Iteration over a sequence is done via a
+  discriminated-union cons-cell list (`{ kind: 'nil' } | { kind: 'cons';
+  head; tail }`) and structural recursion with `switch (xs.kind)`. The
+  TS-side seam adapter converts arrays at the boundary. This is the
+  pattern `total-recursion.ts` uses in the upstream Thales examples and
+  is what compiles cleanly to `inductive` types in Lean.
