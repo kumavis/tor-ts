@@ -2,9 +2,11 @@
 
 Verified against `main` at `31f300449ea4514e1975fa559011d18793ee1a7a` (current
 tip as of filing). None of these duplicate any of the 10 existing issues
-(#1 closed, #2–#10 are 0.6 refinement-types milestones). The first four
-produce silently or visibly broken Lean from input that Thales accepts;
-the fifth gates downstream adoption.
+(#1 closed, #2–#10 are 0.6 refinement-types milestones). Issues 1, 2, 3,
+and 6 are silent emit failures (input accepted, output broken). Issue 4
+is a visible TS error (the documented runtime stdlib isn't actually
+callable from TS). Issue 5 is the export/import gap that gates
+downstream adoption.
 
 GitHub MCP access in this environment is scoped to `kumavis/tor-ts`, so
 these drafts are intended to be copy-pasted into
@@ -464,6 +466,114 @@ This isn't a "the emitter writes broken Lean" failure mode like #1, #2,
 #3 — `--no-emit` reports a clean TS error and stops. But the absence
 makes Thales un-deployable in any project beyond a single-file demo,
 which is a much more visible adoption gate than the silent-emit bugs.
+
+---
+
+## Issue 6: Switching on a non-parameter discriminant silently emits `()`
+
+**Title:** `switch on \`f(x).kind\` or on a \`const\`-bound DU value emits empty body \`()\` (silent — accepted by subset checker)`
+
+**Body:**
+
+When a `switch` discriminates on something other than a direct parameter
+of a discriminated-union type — specifically, on a property of a function
+call result, or on a property of a `const`-bound DU — Thales 0.5 silently
+emits `()` (Lean's `Unit`) as the function body. The subset checker
+reports no diagnostic; the file emits; only `lake build` then catches
+that the body type doesn't match the declared return type.
+
+### Minimal repro
+
+```ts
+type T = { kind: 'a' } | { kind: 'b' };
+
+function id(t: T): T { return t; }
+
+// (1) switch on direct DU parameter — works
+function f1(t: T): boolean {
+  switch (t.kind) {
+    case 'a': return true;
+    case 'b': return false;
+  }
+}
+
+// (2) switch on a `const`-bound copy — silently broken
+function f2(t: T): boolean {
+  const x = id(t);
+  switch (x.kind) {
+    case 'a': return true;
+    case 'b': return false;
+  }
+}
+
+// (3) switch on `f(t).kind` directly — silently broken
+function f3(t: T): boolean {
+  switch (id(t).kind) {
+    case 'a': return true;
+    case 'b': return false;
+  }
+}
+```
+
+Emitted Lean:
+
+```lean
+partial def f1 (t : T) : Bool :=
+  match t with
+    | .a => true
+    | .b => false
+
+partial def f2 (t : T) : Bool :=
+  let x := (id t)
+  ()
+
+partial def f3 (t : T) : Bool :=
+  ()
+```
+
+`f2` and `f3` ignore the `switch` body entirely and emit `()`, which
+fails Lean compilation with a type-mismatch (`Unit` vs `Bool`).
+
+Verified against `main` at `31f300449ea4514e1975fa559011d18793ee1a7a`.
+
+### Practical impact
+
+This affects any helper that wants to derive a result from a *computed*
+DU value. Concrete example from `tor-core`: a function `isRetryableEndReason(r)`
+that asks "is `getStreamRetryBehavior(r)` anything other than `.no_retry`?"
+cannot be written in the natural delegating form
+
+```ts
+function isRetryableEndReason(reason: RelayEndReason): boolean {
+  switch (getStreamRetryBehavior(reason).kind) {
+    case 'retry_circuit': return true;
+    case 'retry_exit':    return true;
+    case 'no_retry':      return false;
+  }
+}
+```
+
+It has to be inlined into a 14-case switch on `reason.kind` directly,
+duplicating the policy logic, and a separate Lean theorem then proves
+the inlined version agrees with `getStreamRetryBehavior`.
+
+### Suggested fix
+
+Either:
+
+1. Lift the discriminant into a `let`/`match` in the emitter — Lean
+   accepts arbitrary discriminants in `match`. The current behavior
+   suggests the emitter recognizes only the `<param>.kind` shape and
+   falls through to a generic "I don't know how to translate this
+   expression" branch that emits `()`.
+2. Or, more conservatively: emit a `TH####` diagnostic when the
+   discriminant isn't a recognized form, instead of silently emitting
+   `()`.
+
+(2) at minimum, since silent failures here are the same hazard as
+issues 1, 2, 3.
+
+---
 
 In an earlier iteration I considered filing a fourth issue about Thales's
 docs not telling downstream Lake projects to pin by SHA. After
