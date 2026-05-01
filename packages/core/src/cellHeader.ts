@@ -126,3 +126,35 @@ function decodeCircIdFromSplit(sub: SplitResult): ParseCircIdResult {
 function parseCircId(linkVersion: bigint, bs: ByteList): ParseCircIdResult {
   return decodeCircIdFromSplit(trySplit(circIdLengthForVersion(linkVersion), bs));
 }
+
+// ----------------------------------------------------------------------------
+// Command-byte parsing.
+//
+// After the circuit ID, every cell carries a single command byte. This
+// function returns the raw `bigint` code; the caller (or the next
+// slice) interprets it as a `MessageCellType` via the lookup table in
+// `messageCellType.ts`. Keeping the type interpretation out of this
+// module avoids redeclaring the 18-variant DU here on top of the
+// already-redeclared bytes primitives (Thales 0.5 has no `import` —
+// issue 5 in docs/thales-issues.md).
+// ----------------------------------------------------------------------------
+
+type ParseCommandResult = { kind: 'ok'; commandCode: bigint; rest: ByteList } | { kind: 'short' };
+
+/**
+ * Read one byte off the head of `bs` as a command code. Returns
+ * `.short` only on empty input.
+ */
+/** @total */
+function parseCommand(bs: ByteList): ParseCommandResult {
+  switch (bs.kind) {
+    case 'nil':
+      return { kind: 'short' };
+    case 'cons': {
+      // Bind to consts before constructing the result (issue-8 workaround).
+      const head = bs.head;
+      const tail = bs.tail;
+      return { kind: 'ok', commandCode: head, rest: tail };
+    }
+  }
+}

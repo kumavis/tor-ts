@@ -22,6 +22,7 @@ open _root_.CellHeader
 deriving instance DecidableEq for ByteList
 deriving instance DecidableEq for SplitResult
 deriving instance DecidableEq for ParseCircIdResult
+deriving instance DecidableEq for ParseCommandResult
 
 ----------------------------------------------------------------------------
 -- circIdLengthForVersion
@@ -197,5 +198,46 @@ where
           have hih : byteListLength taken' + byteListLength rest' = byteListLength tail :=
             ih (n - 1) taken' rest' hrec
           omega
+
+----------------------------------------------------------------------------
+-- parseCommand
+----------------------------------------------------------------------------
+
+/-- An empty byte list never yields a command. -/
+theorem parseCommand_nil :
+    parseCommand .nil = .short := rfl
+
+/-- **Unfolding lemma.** parseCommand on a non-empty input returns the
+    head byte as the command code and the tail as the remainder. -/
+theorem parseCommand_cons (h : Int) (t : ByteList) :
+    parseCommand (.cons h t) = .ok h t := rfl
+
+/-- The command byte is recovered exactly. -/
+theorem parseCommand_returns_head
+    (bs : ByteList) (cmd : Int) (rest : ByteList)
+    (h : parseCommand bs = .ok cmd rest) :
+    ∃ tail, bs = .cons cmd tail ∧ rest = tail := by
+  cases bs with
+  | nil => simp [parseCommand] at h
+  | cons head tail =>
+    rw [parseCommand_cons] at h
+    obtain ⟨hc, hr⟩ := ParseCommandResult.ok.injEq _ _ _ _ |>.mp h
+    refine ⟨tail, ?_, ?_⟩
+    · rw [hc]
+    · rw [hr]
+
+/-- **The headline theorem.** parseCommand consumes exactly one byte
+    when it succeeds — `length(rest) + 1 = length(input)`. -/
+theorem parseCommand_consumes_one
+    (bs : ByteList) (cmd : Int) (rest : ByteList)
+    (h : parseCommand bs = .ok cmd rest) :
+    byteListLength rest + 1 = byteListLength bs := by
+  cases bs with
+  | nil => simp [parseCommand] at h
+  | cons head tail =>
+    rw [parseCommand_cons] at h
+    obtain ⟨_, hr⟩ := ParseCommandResult.ok.injEq _ _ _ _ |>.mp h
+    rw [hr, byteListLength_cons_local]
+    omega
 
 end Spec.CellHeader
