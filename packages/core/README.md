@@ -18,20 +18,26 @@ packages/core/
 ├── src/                     TypeScript source (Thales subset, runs as JS)
 │   ├── bytes.ts
 │   ├── cellHeader.ts
+│   ├── certType.ts
+│   ├── destroyReason.ts
 │   ├── exitPolicy.ts
 │   ├── messageCellType.ts
 │   ├── relayCommand.ts
 │   ├── relayEndReason.ts
-│   └── seq32.ts
+│   ├── seq32.ts
+│   └── wireTypes.ts
 ├── Generated/               Thales-emitted Lean sidecars (gitignored)
 ├── Spec/                    Hand-written Lean theorems
 │   ├── Bytes.lean
 │   ├── CellHeader.lean
+│   ├── CertType.lean
+│   ├── DestroyReason.lean
 │   ├── ExitPolicy.lean
 │   ├── MessageCellType.lean
 │   ├── RelayCommand.lean
 │   ├── RelayEndReason.lean
-│   └── Seq32.lean
+│   ├── Seq32.lean
+│   └── WireTypes.lean
 ├── docs/thales-issues.md    Bug drafts for jessealama/thales
 ├── lakefile.lean            Lean project; `require`s Thales
 ├── lean-toolchain           Pinned Lean version
@@ -62,6 +68,9 @@ binary as long as `THALES_REV` is unchanged.
 | `relayCommand.ts` | `relayCommandCode`, `relayCommandFromCode`, `isHiddenServiceCommand`, `isPaddingCommand`, `isFlowControlCommand` | 18 |
 | `bytes.ts` | `byteListLength`, `byteListConcat`, `consIntoSplit`, `trySplit`, `bigEndianUintAux`, `bigEndianUint` | 15 |
 | `cellHeader.ts` | `circIdLengthForVersion`, `parseCircId`, `parseCommand`, `parseLengthPrefix`, `parsePayload`, `parseFixedPayload` (and locally-redeclared bytes primitives, until Thales adds `import`) | 25 |
+| `wireTypes.ts` | `addressTypeCode`/`FromCode`, `linkSpecifierTypeCode`/`FromCode`, `handshakeTypeCode`/`FromCode` | 15 |
+| `destroyReason.ts` | `destroyReasonCode`, `destroyReasonFromCode`, `isCleanDestroy` | 10 |
+| `certType.ts` | `certTypeCode`, `certTypeFromCode`, `isLegacyX509Cert`, `isHiddenServiceCert` | 8 |
 
 The intent is to port modules into here incrementally per the conversion
 plan, **rejecting any addition that isn't fully Thales-eligible and
