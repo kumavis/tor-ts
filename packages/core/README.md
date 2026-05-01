@@ -26,7 +26,9 @@ packages/core/
 │   ├── messageCellType.ts
 │   ├── relayCommand.ts
 │   ├── relayEndReason.ts
+│   ├── sendmeWindow.ts
 │   ├── seq32.ts
+│   ├── streamState.ts
 │   └── wireTypes.ts
 ├── Generated/               Thales-emitted Lean sidecars (gitignored)
 ├── Spec/                    Hand-written Lean theorems
@@ -40,7 +42,9 @@ packages/core/
 │   ├── MessageCellType.lean
 │   ├── RelayCommand.lean
 │   ├── RelayEndReason.lean
+│   ├── SendmeWindow.lean
 │   ├── Seq32.lean
+│   ├── StreamState.lean
 │   └── WireTypes.lean
 ├── docs/thales-issues.md    Bug drafts for jessealama/thales
 ├── lakefile.lean            Lean project; `require`s Thales
@@ -77,6 +81,8 @@ binary as long as `THALES_REV` is unchanged.
 | `certType.ts` | `certTypeCode`, `certTypeFromCode`, `isLegacyX509Cert`, `isHiddenServiceCert` | 8 |
 | `channelState.ts` | `step` + per-state helpers, `isHandshaking`, `isOpen`, `isClosed`, `linkVersionOf` | 23 |
 | `circuitState.ts` | `step` + per-state helpers, `advanceBuilding`, `isBuilding`, `isOpen`, `isDestroyed`, `hopCount` | 16 |
+| `streamState.ts` | `step` + per-state helpers, `isInit`, `isAwaiting`, `isOpen`, `isClosed` | 18 |
+| `sendmeWindow.ts` | `decrementWindow`, `applySendme`, `isWindowDepleted`, `shouldEmitSendme`, `isValidWindow`, `canSendData`, `wouldDeplete` | 23 |
 
 The intent is to port modules into here incrementally per the conversion
 plan, **rejecting any addition that isn't fully Thales-eligible and
