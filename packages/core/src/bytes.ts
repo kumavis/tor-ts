@@ -129,3 +129,39 @@ function bigEndianUintAux(acc: bigint, bs: ByteList): bigint {
 function bigEndianUint(bs: ByteList): bigint {
   return bigEndianUintAux(0n, bs);
 }
+
+// ----------------------------------------------------------------------------
+// Little-endian unsigned-integer codec
+//
+// In LE form the first byte of the list is the least-significant byte:
+//
+//     [b0, b1, b2, ...] = b0 + 256·b1 + 256²·b2 + ...
+//
+// Mirrors `bytesToBigIntLE` and `bigIntToBytesLE` from
+// `packages/crypto/src/hs-crypto.ts`, used in the curve25519/ed25519
+// scalar conversions for hidden-service key derivation.
+// ----------------------------------------------------------------------------
+
+/**
+ * Decode a `ByteList` as a little-endian unsigned bigint. Recurses
+ * structurally on the list (which is what makes this `@total`).
+ */
+/** @total */
+function bytesToBigIntLE(bs: ByteList): bigint {
+  switch (bs.kind) {
+    case 'nil':
+      return 0n;
+    case 'cons':
+      return bs.head + 256n * bytesToBigIntLE(bs.tail);
+  }
+}
+
+// Note: a `bigIntToBytesLE(n, length)` encoder is the natural inverse,
+// but it recurses on `length` (an `Int`) which neither structural
+// recursion nor Thales 0.5's `@decreasing` annotation handle yet.
+// Lean rejects the resulting `partial def` because `ByteList` doesn't
+// auto-derive `Nonempty`. Once Thales 0.5+ either honours
+// `@decreasing` or emits `deriving Nonempty` for inductives, the
+// encoder can land here and the round-trip theorem
+// `bytesToBigIntLE (bigIntToBytesLE n l) = n mod 256^l` becomes
+// reachable.

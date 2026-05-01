@@ -17,6 +17,7 @@ open _root_.WireTypes
 deriving instance DecidableEq for AddressType
 deriving instance DecidableEq for LinkSpecifierType
 deriving instance DecidableEq for HandshakeType
+deriving instance DecidableEq for RelayResolvedType
 
 ----------------------------------------------------------------------------
 -- AddressType
@@ -88,5 +89,46 @@ theorem handshakeTypeFromCode_three :
 
 theorem handshakeTypeFromCode_neg :
     handshakeTypeFromCode (-1) = none := by decide
+
+----------------------------------------------------------------------------
+-- RelayResolvedType
+----------------------------------------------------------------------------
+
+theorem relayResolvedTypeCode_in_set (t : RelayResolvedType) :
+    relayResolvedTypeCode t = 0 ∨
+    relayResolvedTypeCode t = 4 ∨
+    relayResolvedTypeCode t = 6 ∨
+    relayResolvedTypeCode t = 240 ∨
+    relayResolvedTypeCode t = 241 := by
+  cases t <;> first
+    | (left; decide)
+    | (right; left; decide)
+    | (right; right; left; decide)
+    | (right; right; right; left; decide)
+    | (right; right; right; right; decide)
+
+/-- **Round-trip.** -/
+theorem relayResolvedTypeFromCode_relayResolvedTypeCode (t : RelayResolvedType) :
+    relayResolvedTypeFromCode (relayResolvedTypeCode t) = some t := by
+  cases t <;> decide
+
+theorem relayResolvedTypeFromCode_one : relayResolvedTypeFromCode 1 = none := by decide
+theorem relayResolvedTypeFromCode_five : relayResolvedTypeFromCode 5 = none := by decide
+theorem relayResolvedTypeFromCode_239 : relayResolvedTypeFromCode 239 = none := by decide
+theorem relayResolvedTypeFromCode_242 : relayResolvedTypeFromCode 242 = none := by decide
+
+/-- **Error characterization.** A resolved-record type is an error iff
+    its wire code is 240 (transient) or 241 (permanent). -/
+theorem isResolvedError_iff (t : RelayResolvedType) :
+    isResolvedError t = true ↔
+      relayResolvedTypeCode t = 240 ∨ relayResolvedTypeCode t = 241 := by
+  cases t <;> simp [isResolvedError, relayResolvedTypeCode]
+
+/-- AddressType and RelayResolvedType agree on the IP-family codes. -/
+theorem addressType_relayResolvedType_ipv4_agree :
+    addressTypeCode (.IPv4) = relayResolvedTypeCode (.IPv4) := by decide
+
+theorem addressType_relayResolvedType_ipv6_agree :
+    addressTypeCode (.IPv6) = relayResolvedTypeCode (.IPv6) := by decide
 
 end Spec.WireTypes

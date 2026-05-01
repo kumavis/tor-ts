@@ -66,9 +66,9 @@ binary as long as `THALES_REV` is unchanged.
 | `relayEndReason.ts` | `relayEndReasonCode`, `relayEndReasonFromCode`, `getStreamRetryBehavior`, `isRetryableEndReason` | 12 |
 | `messageCellType.ts` | `messageCellTypeCode`, `messageCellTypeFromCode`, `isVariableLengthCell` | 16 |
 | `relayCommand.ts` | `relayCommandCode`, `relayCommandFromCode`, `isHiddenServiceCommand`, `isPaddingCommand`, `isFlowControlCommand` | 18 |
-| `bytes.ts` | `byteListLength`, `byteListConcat`, `consIntoSplit`, `trySplit`, `bigEndianUintAux`, `bigEndianUint` | 15 |
+| `bytes.ts` | `byteListLength`, `byteListConcat`, `consIntoSplit`, `trySplit`, `bigEndianUintAux`, `bigEndianUint`, `bytesToBigIntLE` | 20 |
 | `cellHeader.ts` | `circIdLengthForVersion`, `parseCircId`, `parseCommand`, `parseLengthPrefix`, `parsePayload`, `parseFixedPayload` (and locally-redeclared bytes primitives, until Thales adds `import`) | 25 |
-| `wireTypes.ts` | `addressTypeCode`/`FromCode`, `linkSpecifierTypeCode`/`FromCode`, `handshakeTypeCode`/`FromCode` | 15 |
+| `wireTypes.ts` | `addressTypeCode`/`FromCode`, `linkSpecifierTypeCode`/`FromCode`, `handshakeTypeCode`/`FromCode`, `relayResolvedTypeCode`/`FromCode`, `isResolvedError` | 24 |
 | `destroyReason.ts` | `destroyReasonCode`, `destroyReasonFromCode`, `isCleanDestroy` | 10 |
 | `certType.ts` | `certTypeCode`, `certTypeFromCode`, `isLegacyX509Cert`, `isHiddenServiceCert` | 8 |
 

@@ -96,3 +96,65 @@ function handshakeTypeFromCode(code: bigint): HandshakeType | null {
   if (code === 2n) return { kind: 'NTOR' };
   return null;
 }
+
+// ============================================================================
+// RelayResolvedType (tor-spec.txt §6.4 — RELAY_RESOLVED record types)
+// ============================================================================
+//
+// Type byte values inside a RELAY_RESOLVED record. Distinct from
+// `AddressType`: includes Hostname (text) and the two error variants
+// alongside the IP-family discriminators.
+
+type RelayResolvedType =
+  | { kind: 'Hostname' } //       0x00
+  | { kind: 'IPv4' } //           0x04
+  | { kind: 'IPv6' } //           0x06
+  | { kind: 'ErrorTransient' } // 0xF0 = 240
+  | { kind: 'ErrorPermanent' }; // 0xF1 = 241
+
+/** @total */
+function relayResolvedTypeCode(t: RelayResolvedType): bigint {
+  switch (t.kind) {
+    case 'Hostname':
+      return 0n;
+    case 'IPv4':
+      return 4n;
+    case 'IPv6':
+      return 6n;
+    case 'ErrorTransient':
+      return 240n;
+    case 'ErrorPermanent':
+      return 241n;
+  }
+}
+
+/** @total */
+function relayResolvedTypeFromCode(code: bigint): RelayResolvedType | null {
+  if (code === 0n) return { kind: 'Hostname' };
+  if (code === 4n) return { kind: 'IPv4' };
+  if (code === 6n) return { kind: 'IPv6' };
+  if (code === 240n) return { kind: 'ErrorTransient' };
+  if (code === 241n) return { kind: 'ErrorPermanent' };
+  return null;
+}
+
+/**
+ * Whether this resolved-record type indicates an error (codes 0xF0 or
+ * 0xF1) rather than a successful resolution.
+ */
+/** @total */
+function isResolvedError(t: RelayResolvedType): boolean {
+  switch (t.kind) {
+    case 'ErrorTransient':
+      return true;
+    case 'ErrorPermanent':
+      return true;
+
+    case 'Hostname':
+      return false;
+    case 'IPv4':
+      return false;
+    case 'IPv6':
+      return false;
+  }
+}

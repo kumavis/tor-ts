@@ -180,4 +180,32 @@ theorem bigEndianUint_two (hi lo : Int) :
     bigEndianUint (.cons hi (.cons lo .nil)) = hi * 256 + lo := by
   simp [bigEndianUint, bigEndianUintAux]
 
+----------------------------------------------------------------------------
+-- bytesToBigIntLE
+----------------------------------------------------------------------------
+
+theorem bytesToBigIntLE_nil : bytesToBigIntLE .nil = 0 := rfl
+
+/-- An empty list decodes to zero in either endianness. -/
+theorem bytesToBigIntLE_eq_bigEndianUint_nil :
+    bytesToBigIntLE .nil = bigEndianUint .nil := by
+  simp [bytesToBigIntLE, bigEndianUint, bigEndianUintAux]
+
+/-- A single-byte list: LSB-first means the only byte is the value. -/
+theorem bytesToBigIntLE_singleton (b : Int) :
+    bytesToBigIntLE (.cons b .nil) = b := by
+  simp [bytesToBigIntLE]
+
+/-- LE two-byte: `[lo, hi]` decodes to `lo + 256 * hi`. -/
+theorem bytesToBigIntLE_two (lo hi : Int) :
+    bytesToBigIntLE (.cons lo (.cons hi .nil)) = lo + 256 * hi := by
+  simp [bytesToBigIntLE]
+
+/-- LE three-byte: `[b0, b1, b2]` decodes to `b0 + 256·b1 + 65536·b2`. -/
+theorem bytesToBigIntLE_three (b0 b1 b2 : Int) :
+    bytesToBigIntLE (.cons b0 (.cons b1 (.cons b2 .nil))) =
+      b0 + 256 * b1 + 65536 * b2 := by
+  simp [bytesToBigIntLE]
+  omega
+
 end Spec.Bytes
