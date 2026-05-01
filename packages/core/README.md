@@ -18,12 +18,14 @@ packages/core/
 ├── src/                     TypeScript source (Thales subset, runs as JS)
 │   ├── exitPolicy.ts
 │   ├── messageCellType.ts
+│   ├── relayCommand.ts
 │   ├── relayEndReason.ts
 │   └── seq32.ts
 ├── Generated/               Thales-emitted Lean sidecars (gitignored)
 ├── Spec/                    Hand-written Lean theorems
 │   ├── ExitPolicy.lean
 │   ├── MessageCellType.lean
+│   ├── RelayCommand.lean
 │   ├── RelayEndReason.lean
 │   └── Seq32.lean
 ├── docs/thales-issues.md    Bug drafts for jessealama/thales
@@ -53,6 +55,7 @@ binary as long as `THALES_REV` is unchanged.
 | `seq32.ts` | `uint32`, `add32`, `sub32`, `asInt32`, `itimediff`, `seqLt`, `seqLe` | 15 |
 | `relayEndReason.ts` | `relayEndReasonCode`, `relayEndReasonFromCode`, `getStreamRetryBehavior`, `isRetryableEndReason` | 12 |
 | `messageCellType.ts` | `messageCellTypeCode`, `messageCellTypeFromCode`, `isVariableLengthCell` | 16 |
+| `relayCommand.ts` | `relayCommandCode`, `relayCommandFromCode`, `isHiddenServiceCommand`, `isPaddingCommand`, `isFlowControlCommand` | 18 |
 
 The intent is to port modules into here incrementally per the conversion
 plan, **rejecting any addition that isn't fully Thales-eligible and

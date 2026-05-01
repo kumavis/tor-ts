@@ -20,9 +20,7 @@ interface PortRange {
   endPort: bigint;
 }
 
-type PortRangeList =
-  | { kind: 'nil' }
-  | { kind: 'cons'; head: PortRange; tail: PortRangeList };
+type PortRangeList = { kind: 'nil' } | { kind: 'cons'; head: PortRange; tail: PortRangeList };
 
 type ExitPolicy =
   | { kind: 'accept'; ports: PortRangeList }
@@ -39,10 +37,7 @@ function anyRangeContainsPort(port: bigint, ranges: PortRangeList): boolean {
     case 'nil':
       return false;
     case 'cons':
-      return (
-        portInRange(port, ranges.head) ||
-        anyRangeContainsPort(port, ranges.tail)
-      );
+      return portInRange(port, ranges.head) || anyRangeContainsPort(port, ranges.tail);
   }
 }
 
@@ -73,10 +68,7 @@ function policyAllowsAllPorts(policy: ExitPolicy, ports: PortList): boolean {
     case 'nil':
       return true;
     case 'cons':
-      return (
-        policyAllowsPort(policy, ports.head) &&
-        policyAllowsAllPorts(policy, ports.tail)
-      );
+      return policyAllowsPort(policy, ports.head) && policyAllowsAllPorts(policy, ports.tail);
   }
 }
 
@@ -87,10 +79,7 @@ function policyAllowsAnyPort(policy: ExitPolicy, ports: PortList): boolean {
       // Matches the existing TS: empty list short-circuits to true.
       return true;
     case 'cons':
-      return (
-        policyAllowsPort(policy, ports.head) ||
-        policyAllowsAnyPort(policy, ports.tail)
-      );
+      return policyAllowsPort(policy, ports.head) || policyAllowsAnyPort(policy, ports.tail);
   }
 }
 

@@ -40,20 +40,34 @@ type StreamRetryBehavior =
 /** @total */
 function relayEndReasonCode(reason: RelayEndReason): bigint {
   switch (reason.kind) {
-    case 'REASON_MISC': return 1n;
-    case 'REASON_RESOLVEFAILED': return 2n;
-    case 'REASON_CONNECTREFUSED': return 3n;
-    case 'REASON_EXITPOLICY': return 4n;
-    case 'REASON_DESTROY': return 5n;
-    case 'REASON_DONE': return 6n;
-    case 'REASON_TIMEOUT': return 7n;
-    case 'REASON_NOROUTE': return 8n;
-    case 'REASON_HIBERNATING': return 9n;
-    case 'REASON_INTERNAL': return 10n;
-    case 'REASON_RESOURCELIMIT': return 11n;
-    case 'REASON_CONNRESET': return 12n;
-    case 'REASON_TORPROTOCOL': return 13n;
-    case 'REASON_NOTDIRECTORY': return 14n;
+    case 'REASON_MISC':
+      return 1n;
+    case 'REASON_RESOLVEFAILED':
+      return 2n;
+    case 'REASON_CONNECTREFUSED':
+      return 3n;
+    case 'REASON_EXITPOLICY':
+      return 4n;
+    case 'REASON_DESTROY':
+      return 5n;
+    case 'REASON_DONE':
+      return 6n;
+    case 'REASON_TIMEOUT':
+      return 7n;
+    case 'REASON_NOROUTE':
+      return 8n;
+    case 'REASON_HIBERNATING':
+      return 9n;
+    case 'REASON_INTERNAL':
+      return 10n;
+    case 'REASON_RESOURCELIMIT':
+      return 11n;
+    case 'REASON_CONNRESET':
+      return 12n;
+    case 'REASON_TORPROTOCOL':
+      return 13n;
+    case 'REASON_NOTDIRECTORY':
+      return 14n;
   }
 }
 
@@ -93,26 +107,40 @@ function relayEndReasonFromCode(code: bigint): RelayEndReason | null {
 function getStreamRetryBehavior(reason: RelayEndReason): StreamRetryBehavior {
   switch (reason.kind) {
     // Exit-specific issues — try a different exit.
-    case 'REASON_RESOLVEFAILED': return { kind: 'retry_exit' };
-    case 'REASON_EXITPOLICY':    return { kind: 'retry_exit' };
-    case 'REASON_NOROUTE':       return { kind: 'retry_exit' };
-    case 'REASON_HIBERNATING':   return { kind: 'retry_exit' };
+    case 'REASON_RESOLVEFAILED':
+      return { kind: 'retry_exit' };
+    case 'REASON_EXITPOLICY':
+      return { kind: 'retry_exit' };
+    case 'REASON_NOROUTE':
+      return { kind: 'retry_exit' };
+    case 'REASON_HIBERNATING':
+      return { kind: 'retry_exit' };
 
     // Transient — try a new circuit.
-    case 'REASON_TIMEOUT':       return { kind: 'retry_circuit' };
-    case 'REASON_RESOURCELIMIT': return { kind: 'retry_circuit' };
+    case 'REASON_TIMEOUT':
+      return { kind: 'retry_circuit' };
+    case 'REASON_RESOURCELIMIT':
+      return { kind: 'retry_circuit' };
 
     // Ambiguous — try one new circuit (matches tor-ts policy).
-    case 'REASON_MISC':          return { kind: 'retry_circuit' };
-    case 'REASON_CONNRESET':     return { kind: 'retry_circuit' };
+    case 'REASON_MISC':
+      return { kind: 'retry_circuit' };
+    case 'REASON_CONNRESET':
+      return { kind: 'retry_circuit' };
 
     // Permanent or normal close — don't retry.
-    case 'REASON_CONNECTREFUSED': return { kind: 'no_retry' };
-    case 'REASON_DESTROY':        return { kind: 'no_retry' };
-    case 'REASON_DONE':           return { kind: 'no_retry' };
-    case 'REASON_INTERNAL':       return { kind: 'no_retry' };
-    case 'REASON_TORPROTOCOL':    return { kind: 'no_retry' };
-    case 'REASON_NOTDIRECTORY':   return { kind: 'no_retry' };
+    case 'REASON_CONNECTREFUSED':
+      return { kind: 'no_retry' };
+    case 'REASON_DESTROY':
+      return { kind: 'no_retry' };
+    case 'REASON_DONE':
+      return { kind: 'no_retry' };
+    case 'REASON_INTERNAL':
+      return { kind: 'no_retry' };
+    case 'REASON_TORPROTOCOL':
+      return { kind: 'no_retry' };
+    case 'REASON_NOTDIRECTORY':
+      return { kind: 'no_retry' };
   }
 }
 
@@ -124,19 +152,33 @@ function isRetryableEndReason(reason: RelayEndReason): boolean {
   // docs/thales-issues.md. The two functions are still proved
   // equivalent in Spec/RelayEndReason.lean.
   switch (reason.kind) {
-    case 'REASON_RESOLVEFAILED': return true;
-    case 'REASON_EXITPOLICY':    return true;
-    case 'REASON_NOROUTE':       return true;
-    case 'REASON_HIBERNATING':   return true;
-    case 'REASON_TIMEOUT':       return true;
-    case 'REASON_RESOURCELIMIT': return true;
-    case 'REASON_MISC':          return true;
-    case 'REASON_CONNRESET':     return true;
-    case 'REASON_CONNECTREFUSED': return false;
-    case 'REASON_DESTROY':        return false;
-    case 'REASON_DONE':           return false;
-    case 'REASON_INTERNAL':       return false;
-    case 'REASON_TORPROTOCOL':    return false;
-    case 'REASON_NOTDIRECTORY':   return false;
+    case 'REASON_RESOLVEFAILED':
+      return true;
+    case 'REASON_EXITPOLICY':
+      return true;
+    case 'REASON_NOROUTE':
+      return true;
+    case 'REASON_HIBERNATING':
+      return true;
+    case 'REASON_TIMEOUT':
+      return true;
+    case 'REASON_RESOURCELIMIT':
+      return true;
+    case 'REASON_MISC':
+      return true;
+    case 'REASON_CONNRESET':
+      return true;
+    case 'REASON_CONNECTREFUSED':
+      return false;
+    case 'REASON_DESTROY':
+      return false;
+    case 'REASON_DONE':
+      return false;
+    case 'REASON_INTERNAL':
+      return false;
+    case 'REASON_TORPROTOCOL':
+      return false;
+    case 'REASON_NOTDIRECTORY':
+      return false;
   }
 }
