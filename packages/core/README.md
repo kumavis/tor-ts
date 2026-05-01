@@ -16,6 +16,7 @@ The seam strategy and per-package conversion plan live in
 ```
 packages/core/
 ├── src/                     TypeScript source (Thales subset, runs as JS)
+│   ├── bytes.ts
 │   ├── exitPolicy.ts
 │   ├── messageCellType.ts
 │   ├── relayCommand.ts
@@ -23,6 +24,7 @@ packages/core/
 │   └── seq32.ts
 ├── Generated/               Thales-emitted Lean sidecars (gitignored)
 ├── Spec/                    Hand-written Lean theorems
+│   ├── Bytes.lean
 │   ├── ExitPolicy.lean
 │   ├── MessageCellType.lean
 │   ├── RelayCommand.lean
@@ -56,6 +58,7 @@ binary as long as `THALES_REV` is unchanged.
 | `relayEndReason.ts` | `relayEndReasonCode`, `relayEndReasonFromCode`, `getStreamRetryBehavior`, `isRetryableEndReason` | 12 |
 | `messageCellType.ts` | `messageCellTypeCode`, `messageCellTypeFromCode`, `isVariableLengthCell` | 16 |
 | `relayCommand.ts` | `relayCommandCode`, `relayCommandFromCode`, `isHiddenServiceCommand`, `isPaddingCommand`, `isFlowControlCommand` | 18 |
+| `bytes.ts` | `byteListLength`, `byteListConcat`, `consIntoSplit`, `trySplit`, `bigEndianUintAux`, `bigEndianUint` | 15 |
 
 The intent is to port modules into here incrementally per the conversion
 plan, **rejecting any addition that isn't fully Thales-eligible and
