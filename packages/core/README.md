@@ -19,6 +19,8 @@ packages/core/
 │   ├── bytes.ts
 │   ├── cellHeader.ts
 │   ├── certType.ts
+│   ├── channelState.ts
+│   ├── circuitState.ts
 │   ├── destroyReason.ts
 │   ├── exitPolicy.ts
 │   ├── messageCellType.ts
@@ -31,6 +33,8 @@ packages/core/
 │   ├── Bytes.lean
 │   ├── CellHeader.lean
 │   ├── CertType.lean
+│   ├── ChannelState.lean
+│   ├── CircuitState.lean
 │   ├── DestroyReason.lean
 │   ├── ExitPolicy.lean
 │   ├── MessageCellType.lean
@@ -71,6 +75,8 @@ binary as long as `THALES_REV` is unchanged.
 | `wireTypes.ts` | `addressTypeCode`/`FromCode`, `linkSpecifierTypeCode`/`FromCode`, `handshakeTypeCode`/`FromCode`, `relayResolvedTypeCode`/`FromCode`, `isResolvedError` | 24 |
 | `destroyReason.ts` | `destroyReasonCode`, `destroyReasonFromCode`, `isCleanDestroy` | 10 |
 | `certType.ts` | `certTypeCode`, `certTypeFromCode`, `isLegacyX509Cert`, `isHiddenServiceCert` | 8 |
+| `channelState.ts` | `step` + per-state helpers, `isHandshaking`, `isOpen`, `isClosed`, `linkVersionOf` | 23 |
+| `circuitState.ts` | `step` + per-state helpers, `advanceBuilding`, `isBuilding`, `isOpen`, `isDestroyed`, `hopCount` | 16 |
 
 The intent is to port modules into here incrementally per the conversion
 plan, **rejecting any addition that isn't fully Thales-eligible and
