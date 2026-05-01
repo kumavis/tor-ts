@@ -3,10 +3,10 @@
 Verified against `main` at `31f300449ea4514e1975fa559011d18793ee1a7a` (current
 tip as of filing). None of these duplicate any of the 10 existing issues
 (#1 closed, #2–#10 are 0.6 refinement-types milestones). Issues 1, 2, 3,
-and 6 are silent emit failures (input accepted, output broken). Issue 4
-is a visible TS error (the documented runtime stdlib isn't actually
-callable from TS). Issue 5 is the export/import gap that gates
-downstream adoption.
+6, 7, and 8 are silent emit failures (input accepted, output broken).
+Issue 4 is a visible TS error (the documented runtime stdlib isn't
+actually callable from TS). Issue 5 is the export/import gap that
+gates downstream adoption.
 
 GitHub MCP access in this environment is scoped to `kumavis/tor-ts`, so
 these drafts are intended to be copy-pasted into
@@ -572,6 +572,168 @@ Either:
 
 (2) at minimum, since silent failures here are the same hazard as
 issues 1, 2, 3.
+
+---
+
+## Issue 7: Tuple `[a, b]` returns emit as Lean `Array`, not `Prod`
+
+**Title:** `tuple-typed function returns emit as \`#[a, b]\` (Lean Array) instead of \`(a, b)\` (Prod), causing type-mismatch at Lean compile`
+
+**Body:**
+
+A function declared to return a tuple type `[A, B]` emits the body as a
+Lean `Array` literal (`#[a, b]`) rather than a tuple constructor
+(`(a, b)`). The signature on the Lean side is correctly translated to
+`A × B`, so the body's `Array` type doesn't match.
+
+### Minimal repro
+
+```ts
+type IntList = { kind: 'nil' } | { kind: 'cons'; head: bigint; tail: IntList };
+
+function dupTuple(xs: IntList): [IntList, IntList] {
+  return [xs, xs];
+}
+```
+
+Emitted:
+
+```lean
+partial def dupTuple (xs : IntList) : (IntList × IntList) :=
+  (List.toArray ((List.cons xs ((List.cons xs List.nil)))))
+```
+
+Lean rejects with:
+```
+has type
+  Array IntList
+but is expected to have type
+  IntList × IntList
+```
+
+The subset doc lists tuples as supported — `Tuples: Fixed-size tuples
+like [A, B, C] map to Lean product types`. The signature-side
+translation works; the value-side translation should match.
+
+Verified against `main` at `31f300449ea4514e1975fa559011d18793ee1a7a`.
+
+### Suggested fix
+
+Emit `(a, b)` (or `Prod.mk a b`) for tuple-typed positions instead of
+the array literal that Thales currently emits. The literal `[a, b]` in
+TypeScript is overloaded between array and tuple; the emitter should
+look at the declared type to decide which Lean form to use.
+
+### Practical impact
+
+Bites any parser-result helper that wants to return both a parsed value
+and the rest of the input. `tor-core` works around it by routing the
+"two-output" shape through DU types like
+`{ kind: 'ok'; taken; rest } | { kind: 'short' }`, but tuples would be
+more idiomatic for this shape.
+
+---
+
+## Issue 8: Field access on a DU param inside a constructor expression emits broken `r.field` instead of the bound pattern name
+
+**Title:** `Field access on a switch-narrowed DU parameter emits \`r.field\` inside DU constructor expressions, but Lean inductives have no auto-projections (works fine in arithmetic / direct returns)`
+
+**Body:**
+
+When a function pattern-matches on a DU parameter via `switch`, then
+uses a field of that parameter inside another DU's constructor
+expression, Thales emits the source-side `r.field` projection instead
+of the pattern-bound local name. Lean rejects because `inductive` types
+don't auto-derive field accessors (only `structure` does). The same
+field access in arithmetic position (`p.a + p.b`) works correctly —
+the bug is specifically about the constructor-expression context.
+
+### Minimal repro
+
+```ts
+type Result = { kind: 'ok'; v: bigint } | { kind: 'err' };
+
+// Broken:
+function bumpVal(r: Result): Result {
+  switch (r.kind) {
+    case 'ok':
+      return { kind: 'ok', v: r.v + 1n };  // ← `r.v` inside ctor
+    case 'err':
+      return { kind: 'err' };
+  }
+}
+
+// Workaround that compiles:
+function bumpVal2(r: Result): Result {
+  switch (r.kind) {
+    case 'ok': {
+      const old = r.v;                     // ← bind first
+      return { kind: 'ok', v: old + 1n };
+    }
+    case 'err':
+      return { kind: 'err' };
+  }
+}
+```
+
+Emitted:
+
+```lean
+partial def bumpVal (r : Result) : Result :=
+  match r with
+    | .ok v => (.ok ((r.v + 1)))           -- ← uses `r.v`, not `v`
+    | .err => .err
+
+partial def bumpVal2 (r : Result) : Result :=
+  match r with
+    | .ok v => let old := v                 -- ← uses bound name
+               (.ok ((old + 1)))
+    | .err => .err
+```
+
+Lean rejects `bumpVal`:
+```
+error: Invalid field `v`: The environment does not contain `Result.v`,
+so it is not possible to project the field `v` from an expression
+  r
+of type `Result`
+```
+
+The `match` branch already binds `v` (the field name from the
+constructor), but the emitter doesn't substitute that bound name into
+the body — it preserves the source-side `r.v` reference. The same
+function written using direct `bigint` arithmetic on field accesses
+emits correctly:
+
+```ts
+function pairSum(p: { kind: 'pair'; a: bigint; b: bigint }
+                  | { kind: 'none' }): bigint {
+  switch (p.kind) {
+    case 'pair': return p.a + p.b;  // → match | .pair a b => (a + b)  -- works
+    case 'none': return 0n;
+  }
+}
+```
+
+So the emitter handles `r.field` correctly in some positions but not
+in DU-constructor positions.
+
+Verified against `main` at `31f300449ea4514e1975fa559011d18793ee1a7a`.
+
+### Suggested fix
+
+Inside a `case` branch of a `switch (r.kind)`, the emitter should
+substitute every `r.fieldName` with the corresponding pattern-bound
+name. The `match` it emits already binds the right names; the body
+just needs to use them.
+
+### Practical impact
+
+Same hazard as Issues 1, 2, 3, 6 — accepted by the subset checker,
+emit succeeds, only `lake build` catches the broken Lean. Workaround
+(bind to a local `const` first) adds a line per field access but is
+mechanical. Bites any function that *transforms* a DU value while
+preserving structure — common shape in parser-style code.
 
 ---
 
