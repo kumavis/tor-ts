@@ -23,6 +23,8 @@ deriving instance DecidableEq for ByteList
 deriving instance DecidableEq for SplitResult
 deriving instance DecidableEq for ParseCircIdResult
 deriving instance DecidableEq for ParseCommandResult
+deriving instance DecidableEq for ParseLengthResult
+deriving instance DecidableEq for ParsePayloadResult
 
 ----------------------------------------------------------------------------
 -- circIdLengthForVersion
@@ -130,6 +132,42 @@ theorem trySplit_taken_length_local
           · exact hrec
         omega
 
+/-- **Length conservation.** `trySplit` doesn't lose bytes: the sum of
+    taken-and-rest equals the original. Used by every parser-consumes
+    theorem in this module. -/
+theorem trySplit_total_length
+    (n : Int) (bs : ByteList) (taken rest : ByteList)
+    (h : trySplit n bs = .ok taken rest) :
+    byteListLength taken + byteListLength rest = byteListLength bs := by
+  induction bs generalizing n taken rest with
+  | nil =>
+    simp [trySplit] at h
+    by_cases hle : n ≤ 0
+    · simp [hle] at h
+      obtain ⟨ht, hr⟩ := h
+      rw [← ht, ← hr]
+      decide
+    · simp [hle] at h
+  | cons head tail ih =>
+    simp [trySplit] at h
+    by_cases hle : n ≤ 0
+    · simp [hle] at h
+      obtain ⟨ht, hr⟩ := h
+      rw [← ht, ← hr]
+      simp [byteListLength_nil_local]
+    · simp [hle] at h
+      simp [consIntoSplit] at h
+      cases hrec : trySplit (n - 1) tail with
+      | short => simp [hrec] at h
+      | ok taken' rest' =>
+        simp [hrec] at h
+        obtain ⟨ht, hr⟩ := h
+        rw [← ht, ← hr]
+        simp [byteListLength]
+        have hih : byteListLength taken' + byteListLength rest' = byteListLength tail :=
+          ih (n - 1) taken' rest' hrec
+        omega
+
 /-- **The headline theorem.** When `parseCircId` succeeds on link
     version `v`, the returned `rest` is exactly `length bs - circIdLen`
     bytes shorter than the input. The parser consumes the spec-defined
@@ -138,8 +176,6 @@ theorem parseCircId_consumes_correctly
     (v : Int) (bs : ByteList) (cid : Int) (rest : ByteList)
     (h : parseCircId v bs = .ok cid rest) :
     byteListLength rest + circIdLengthForVersion v = byteListLength bs := by
-  -- parseCircId is defined as `decodeCircIdFromSplit (trySplit width bs)`,
-  -- so unwrap one layer at a time.
   unfold parseCircId at h
   cases hsplit : trySplit (circIdLengthForVersion v) bs with
   | short =>
@@ -149,55 +185,15 @@ theorem parseCircId_consumes_correctly
     rw [hsplit] at h
     simp [decodeCircIdFromSplit] at h
     obtain ⟨_, hr⟩ := h
-    -- length taken = circIdLen, taken ++ rest' = bs (by trySplit's invariants).
-    -- We don't have trySplit_concat in this local file; instead, use the
-    -- length characterization from the local trySplit_taken_length.
     have htaken_len : byteListLength taken = circIdLengthForVersion v := by
       apply trySplit_taken_length_local
       · have := circIdLengthForVersion_pos v
         omega
       · exact hsplit
-    -- Now: rest = rest', and we know length taken = circIdLen. The remaining
-    -- claim is `length rest' + circIdLen = length bs`, i.e., trySplit
-    -- preserves total length. Re-derive it locally by induction on bs.
+    have htot : byteListLength taken + byteListLength rest' = byteListLength bs :=
+      trySplit_total_length (circIdLengthForVersion v) bs taken rest' hsplit
     rw [← hr]
-    have htot : byteListLength taken + byteListLength rest' = byteListLength bs := by
-      exact trySplit_total_length (circIdLengthForVersion v) bs taken rest' hsplit
     omega
-where
-  /-- **Length conservation.** trySplit doesn't lose bytes: the sum of
-      taken-and-rest equals the original. -/
-  trySplit_total_length (n : Int) (bs : ByteList) (taken rest : ByteList)
-      (h : trySplit n bs = .ok taken rest) :
-      byteListLength taken + byteListLength rest = byteListLength bs := by
-    induction bs generalizing n taken rest with
-    | nil =>
-      simp [trySplit] at h
-      by_cases hle : n ≤ 0
-      · simp [hle] at h
-        obtain ⟨ht, hr⟩ := h
-        rw [← ht, ← hr]
-        decide
-      · simp [hle] at h
-    | cons head tail ih =>
-      simp [trySplit] at h
-      by_cases hle : n ≤ 0
-      · simp [hle] at h
-        obtain ⟨ht, hr⟩ := h
-        rw [← ht, ← hr]
-        simp [byteListLength_nil_local]
-      · simp [hle] at h
-        simp [consIntoSplit] at h
-        cases hrec : trySplit (n - 1) tail with
-        | short => simp [hrec] at h
-        | ok taken' rest' =>
-          simp [hrec] at h
-          obtain ⟨ht, hr⟩ := h
-          rw [← ht, ← hr]
-          simp [byteListLength]
-          have hih : byteListLength taken' + byteListLength rest' = byteListLength tail :=
-            ih (n - 1) taken' rest' hrec
-          omega
 
 ----------------------------------------------------------------------------
 -- parseCommand
@@ -239,5 +235,121 @@ theorem parseCommand_consumes_one
     obtain ⟨_, hr⟩ := ParseCommandResult.ok.injEq _ _ _ _ |>.mp h
     rw [hr, byteListLength_cons_local]
     omega
+
+----------------------------------------------------------------------------
+-- parseLengthPrefix
+----------------------------------------------------------------------------
+
+/-- Empty input → short, regardless of anything else. -/
+theorem parseLengthPrefix_nil :
+    parseLengthPrefix .nil = .short := by
+  unfold parseLengthPrefix
+  rw [trySplit_nil_pos 2 (by decide)]
+  rfl
+
+/-- A one-byte input is also too short for the 2-byte length prefix. -/
+theorem parseLengthPrefix_singleton (b : Int) :
+    parseLengthPrefix (.cons b .nil) = .short := by
+  unfold parseLengthPrefix
+  -- trySplit 2 (.cons b .nil) recurses on the tail; tail is nil with n=1 → short.
+  rfl
+
+/-- **Length conservation.** When `parseLengthPrefix` succeeds, it
+    consumes exactly 2 bytes from the input. -/
+theorem parseLengthPrefix_consumes_two
+    (bs : ByteList) (len : Int) (rest : ByteList)
+    (h : parseLengthPrefix bs = .ok len rest) :
+    byteListLength rest + 2 = byteListLength bs := by
+  unfold parseLengthPrefix at h
+  cases hsplit : trySplit 2 bs with
+  | short =>
+    rw [hsplit] at h
+    simp [decodeLengthFromSplit] at h
+  | ok taken rest' =>
+    rw [hsplit] at h
+    simp [decodeLengthFromSplit] at h
+    obtain ⟨_, hr⟩ := h
+    have htaken_len : byteListLength taken = 2 := by
+      apply trySplit_taken_length_local
+      · decide
+      · exact hsplit
+    have htot : byteListLength taken + byteListLength rest' = byteListLength bs := by
+      exact trySplit_total_length 2 bs taken rest' hsplit
+    rw [← hr]
+    omega
+
+----------------------------------------------------------------------------
+-- parsePayload / parseFixedPayload
+----------------------------------------------------------------------------
+
+/-- An empty input never satisfies a positive-length payload request. -/
+theorem parsePayload_nil_pos (n : Int) (h : 0 < n) :
+    parsePayload n .nil = .short := by
+  unfold parsePayload
+  rw [trySplit_nil_pos n h]
+  rfl
+
+/-- An `n = 0` payload request always succeeds, returning an empty
+    payload and the input untouched. -/
+theorem parsePayload_zero (bs : ByteList) :
+    parsePayload 0 bs = .ok .nil bs := by
+  unfold parsePayload
+  unfold trySplit
+  rw [if_pos (by decide : (0 : Int) ≤ 0)]
+  rfl
+
+/-- **Payload-length correctness.** When `parsePayload n bs` succeeds
+    on a non-negative request, the returned payload has length exactly
+    `n`. -/
+theorem parsePayload_length
+    (n : Int) (bs : ByteList) (payload rest : ByteList)
+    (hn : 0 ≤ n) (h : parsePayload n bs = .ok payload rest) :
+    byteListLength payload = n := by
+  unfold parsePayload at h
+  cases hsplit : trySplit n bs with
+  | short =>
+    rw [hsplit] at h
+    simp [decodePayloadFromSplit] at h
+  | ok taken rest' =>
+    rw [hsplit] at h
+    simp [decodePayloadFromSplit] at h
+    obtain ⟨ht, _⟩ := h
+    rw [← ht]
+    apply trySplit_taken_length_local
+    · exact hn
+    · exact hsplit
+
+/-- **Payload consumption is exact.** When `parsePayload n bs` succeeds
+    on a non-negative `n`, the returned `rest` is exactly `n` bytes
+    shorter than the input. -/
+theorem parsePayload_consumes_n
+    (n : Int) (bs : ByteList) (payload rest : ByteList)
+    (hn : 0 ≤ n) (h : parsePayload n bs = .ok payload rest) :
+    byteListLength rest + n = byteListLength bs := by
+  unfold parsePayload at h
+  cases hsplit : trySplit n bs with
+  | short =>
+    rw [hsplit] at h
+    simp [decodePayloadFromSplit] at h
+  | ok taken rest' =>
+    rw [hsplit] at h
+    simp [decodePayloadFromSplit] at h
+    obtain ⟨_, hr⟩ := h
+    have htaken_len : byteListLength taken = n := by
+      apply trySplit_taken_length_local
+      · exact hn
+      · exact hsplit
+    have htot : byteListLength taken + byteListLength rest' = byteListLength bs := by
+      exact trySplit_total_length n bs taken rest' hsplit
+    rw [← hr]
+    omega
+
+/-- `parseFixedPayload` always asks for `CELL_PAYLOAD_LEN = 509` bytes. -/
+theorem parseFixedPayload_consumes_509
+    (bs : ByteList) (payload rest : ByteList)
+    (h : parseFixedPayload bs = .ok payload rest) :
+    byteListLength rest + 509 = byteListLength bs := by
+  unfold parseFixedPayload CELL_PAYLOAD_LEN at h
+  exact parsePayload_consumes_n 509 bs payload rest (by decide) h
 
 end Spec.CellHeader

@@ -61,7 +61,7 @@ binary as long as `THALES_REV` is unchanged.
 | `messageCellType.ts` | `messageCellTypeCode`, `messageCellTypeFromCode`, `isVariableLengthCell` | 16 |
 | `relayCommand.ts` | `relayCommandCode`, `relayCommandFromCode`, `isHiddenServiceCommand`, `isPaddingCommand`, `isFlowControlCommand` | 18 |
 | `bytes.ts` | `byteListLength`, `byteListConcat`, `consIntoSplit`, `trySplit`, `bigEndianUintAux`, `bigEndianUint` | 15 |
-| `cellHeader.ts` | `circIdLengthForVersion`, `parseCircId`, `parseCommand` (and locally-redeclared bytes primitives, until Thales adds `import`) | 16 |
+| `cellHeader.ts` | `circIdLengthForVersion`, `parseCircId`, `parseCommand`, `parseLengthPrefix`, `parsePayload`, `parseFixedPayload` (and locally-redeclared bytes primitives, until Thales adds `import`) | 25 |
 
 The intent is to port modules into here incrementally per the conversion
 plan, **rejecting any addition that isn't fully Thales-eligible and

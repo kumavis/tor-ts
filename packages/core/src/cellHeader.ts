@@ -158,3 +158,90 @@ function parseCommand(bs: ByteList): ParseCommandResult {
     }
   }
 }
+
+// ----------------------------------------------------------------------------
+// Length-prefix parsing.
+//
+// Variable-length cells (per `isVariableLengthCell` in messageCellType.ts)
+// announce their payload size with a 2-byte big-endian length immediately
+// after the command byte (tor-spec.txt §3, "Variable-length cell"
+// layout).
+// ----------------------------------------------------------------------------
+
+type ParseLengthResult = { kind: 'ok'; length: bigint; rest: ByteList } | { kind: 'short' };
+
+/** @total */
+function decodeLengthFromSplit(sub: SplitResult): ParseLengthResult {
+  switch (sub.kind) {
+    case 'short':
+      return { kind: 'short' };
+    case 'ok': {
+      const subTaken = sub.taken;
+      const subRest = sub.rest;
+      return {
+        kind: 'ok',
+        length: bigEndianUint(subTaken),
+        rest: subRest,
+      };
+    }
+  }
+}
+
+/**
+ * Read a 2-byte big-endian length prefix off the head of `bs`. The
+ * decoded length is in `[0, 65536)`.
+ */
+/** @total */
+function parseLengthPrefix(bs: ByteList): ParseLengthResult {
+  return decodeLengthFromSplit(trySplit(2n, bs));
+}
+
+// ----------------------------------------------------------------------------
+// Payload parsing.
+//
+// Once the cell type is known, the payload is either a fixed
+// `CELL_PAYLOAD_LEN`-byte body (the standard 509 bytes for fixed-length
+// cells) or `length`-byte body (for variable-length cells, where
+// `length` came from `parseLengthPrefix`).
+// ----------------------------------------------------------------------------
+
+/** Standard fixed-length cell payload size (tor-spec.txt §3, PAYLOAD_LEN). */
+const CELL_PAYLOAD_LEN: bigint = 509n;
+
+type ParsePayloadResult = { kind: 'ok'; payload: ByteList; rest: ByteList } | { kind: 'short' };
+
+/** @total */
+function decodePayloadFromSplit(sub: SplitResult): ParsePayloadResult {
+  switch (sub.kind) {
+    case 'short':
+      return { kind: 'short' };
+    case 'ok': {
+      const subTaken = sub.taken;
+      const subRest = sub.rest;
+      return {
+        kind: 'ok',
+        payload: subTaken,
+        rest: subRest,
+      };
+    }
+  }
+}
+
+/**
+ * Take exactly `n` bytes off the head of `bs` as a payload, returning
+ * the payload and the remainder. Wraps `trySplit` with a payload-shaped
+ * result so callers can pattern-match on the parser-specific DU
+ * without leaking the lower-level `SplitResult`.
+ */
+/** @total */
+function parsePayload(n: bigint, bs: ByteList): ParsePayloadResult {
+  return decodePayloadFromSplit(trySplit(n, bs));
+}
+
+/**
+ * Convenience: read the standard 509-byte fixed-cell payload.
+ */
+/** @total */
+function parseFixedPayload(bs: ByteList): ParsePayloadResult {
+  return parsePayload(CELL_PAYLOAD_LEN, bs);
+}
