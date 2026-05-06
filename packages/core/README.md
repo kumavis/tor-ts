@@ -67,22 +67,22 @@ binary as long as `THALES_REV` is unchanged.
 
 ## What's inside
 
-| Module | Functions | Theorems in `Spec/` |
-|---|---|---|
-| `exitPolicy.ts` | `portInRange`, `anyRangeContainsPort`, `policyAllowsPort`, `policyAllowsAllPorts`, `policyAllowsAnyPort`, `isPortRangeListEmpty`, `isFullPortRange`, `policyRejectsAll` | 25 |
-| `seq32.ts` | `uint32`, `add32`, `sub32`, `asInt32`, `itimediff`, `seqLt`, `seqLe` | 15 |
-| `relayEndReason.ts` | `relayEndReasonCode`, `relayEndReasonFromCode`, `getStreamRetryBehavior`, `isRetryableEndReason` | 12 |
-| `messageCellType.ts` | `messageCellTypeCode`, `messageCellTypeFromCode`, `isVariableLengthCell` | 16 |
-| `relayCommand.ts` | `relayCommandCode`, `relayCommandFromCode`, `isHiddenServiceCommand`, `isPaddingCommand`, `isFlowControlCommand` | 18 |
-| `bytes.ts` | `byteListLength`, `byteListConcat`, `consIntoSplit`, `trySplit`, `bigEndianUintAux`, `bigEndianUint`, `bytesToBigIntLE` | 20 |
-| `cellHeader.ts` | `circIdLengthForVersion`, `parseCircId`, `parseCommand`, `parseLengthPrefix`, `parsePayload`, `parseFixedPayload` (and locally-redeclared bytes primitives, until Thales adds `import`) | 25 |
-| `wireTypes.ts` | `addressTypeCode`/`FromCode`, `linkSpecifierTypeCode`/`FromCode`, `handshakeTypeCode`/`FromCode`, `relayResolvedTypeCode`/`FromCode`, `isResolvedError` | 24 |
-| `destroyReason.ts` | `destroyReasonCode`, `destroyReasonFromCode`, `isCleanDestroy` | 10 |
-| `certType.ts` | `certTypeCode`, `certTypeFromCode`, `isLegacyX509Cert`, `isHiddenServiceCert` | 8 |
-| `channelState.ts` | `step` + per-state helpers, `isHandshaking`, `isOpen`, `isClosed`, `linkVersionOf` | 23 |
-| `circuitState.ts` | `step` + per-state helpers, `advanceBuilding`, `isBuilding`, `isOpen`, `isDestroyed`, `hopCount` | 16 |
-| `streamState.ts` | `step` + per-state helpers, `isInit`, `isAwaiting`, `isOpen`, `isClosed` | 18 |
-| `sendmeWindow.ts` | `decrementWindow`, `applySendme`, `isWindowDepleted`, `shouldEmitSendme`, `isValidWindow`, `canSendData`, `wouldDeplete` | 23 |
+| Module               | Functions                                                                                                                                                                               | Theorems in `Spec/` |
+| -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------- |
+| `exitPolicy.ts`      | `portInRange`, `anyRangeContainsPort`, `policyAllowsPort`, `policyAllowsAllPorts`, `policyAllowsAnyPort`, `isPortRangeListEmpty`, `isFullPortRange`, `policyRejectsAll`                 | 25                  |
+| `seq32.ts`           | `uint32`, `add32`, `sub32`, `asInt32`, `itimediff`, `seqLt`, `seqLe`                                                                                                                    | 15                  |
+| `relayEndReason.ts`  | `relayEndReasonCode`, `relayEndReasonFromCode`, `getStreamRetryBehavior`, `isRetryableEndReason`                                                                                        | 12                  |
+| `messageCellType.ts` | `messageCellTypeCode`, `messageCellTypeFromCode`, `isVariableLengthCell`                                                                                                                | 16                  |
+| `relayCommand.ts`    | `relayCommandCode`, `relayCommandFromCode`, `isHiddenServiceCommand`, `isPaddingCommand`, `isFlowControlCommand`                                                                        | 18                  |
+| `bytes.ts`           | `byteListLength`, `byteListConcat`, `consIntoSplit`, `trySplit`, `bigEndianUintAux`, `bigEndianUint`, `bytesToBigIntLE`                                                                 | 20                  |
+| `cellHeader.ts`      | `circIdLengthForVersion`, `parseCircId`, `parseCommand`, `parseLengthPrefix`, `parsePayload`, `parseFixedPayload` (and locally-redeclared bytes primitives, until Thales adds `import`) | 25                  |
+| `wireTypes.ts`       | `addressTypeCode`/`FromCode`, `linkSpecifierTypeCode`/`FromCode`, `handshakeTypeCode`/`FromCode`, `relayResolvedTypeCode`/`FromCode`, `isResolvedError`                                 | 24                  |
+| `destroyReason.ts`   | `destroyReasonCode`, `destroyReasonFromCode`, `isCleanDestroy`                                                                                                                          | 10                  |
+| `certType.ts`        | `certTypeCode`, `certTypeFromCode`, `isLegacyX509Cert`, `isHiddenServiceCert`                                                                                                           | 8                   |
+| `channelState.ts`    | `step` + per-state helpers, `isHandshaking`, `isOpen`, `isClosed`, `linkVersionOf`                                                                                                      | 23                  |
+| `circuitState.ts`    | `step` + per-state helpers, `advanceBuilding`, `isBuilding`, `isOpen`, `isDestroyed`, `hopCount`                                                                                        | 16                  |
+| `streamState.ts`     | `step` + per-state helpers, `isInit`, `isAwaiting`, `isOpen`, `isClosed`                                                                                                                | 18                  |
+| `sendmeWindow.ts`    | `decrementWindow`, `applySendme`, `isWindowDepleted`, `shouldEmitSendme`, `isValidWindow`, `canSendData`, `wouldDeplete`                                                                | 23                  |
 
 The intent is to port modules into here incrementally per the conversion
 plan, **rejecting any addition that isn't fully Thales-eligible and
@@ -120,7 +120,7 @@ later modules don't re-learn the same things.
   `.filter`, `.reduce`, etc., the Thales 0.5 prelude only exposes
   `Option<T>` / `Result<T, E>`. Iteration over a sequence is done via a
   discriminated-union cons-cell list (`{ kind: 'nil' } | { kind: 'cons';
-  head; tail }`) and structural recursion with `switch (xs.kind)`. The
+head; tail }`) and structural recursion with `switch (xs.kind)`. The
   TS-side seam adapter converts arrays at the boundary. This is the
   pattern `total-recursion.ts` uses in the upstream Thales examples and
   is what compiles cleanly to `inductive` types in Lean.
@@ -135,7 +135,7 @@ later modules don't re-learn the same things.
   [`docs/thales-issues.md`](docs/thales-issues.md) for a filed repro.
 - **Switch narrowing doesn't reach into nested switches.** A
   `switch (policy.kind) { case 'reject': switch (policy.ports.kind)
-  { case 'cons': policy.ports.head ... } }` fails type-check inside
+{ case 'cons': policy.ports.head ... } }` fails type-check inside
   Thales (`Property 'head' does not exist on type 'object | object'`).
   Workaround: hoist the inner switch into a small helper function that
   takes the narrowed sub-record as an argument.

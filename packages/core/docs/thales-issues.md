@@ -69,22 +69,22 @@ error: Repro.lean:15:43: Invalid field `end`: The environment does not contain `
 I tested 14 Lean keywords as field names. **11** are accepted by Thales and
 silently produce uncompilable Lean:
 
-| keyword | thales | Lean compile |
-|---|---|---|
-| `match` | accepts | rejects |
-| `where` | accepts | rejects |
-| `mut` | accepts | rejects |
-| `fun` | accepts | rejects |
-| `structure` | accepts | rejects |
-| `inductive` | accepts | rejects |
-| `theorem` | accepts | rejects |
-| `section` | accepts | rejects |
-| `namespace` | accepts | rejects |
-| `then` | accepts | rejects |
-| `end` | accepts | rejects |
-| `do` | rejected at parse (TS) | — |
-| `let` | rejected at parse (TS) | — |
-| `if` / `else` | rejected at parse (TS) | — |
+| keyword       | thales                 | Lean compile |
+| ------------- | ---------------------- | ------------ |
+| `match`       | accepts                | rejects      |
+| `where`       | accepts                | rejects      |
+| `mut`         | accepts                | rejects      |
+| `fun`         | accepts                | rejects      |
+| `structure`   | accepts                | rejects      |
+| `inductive`   | accepts                | rejects      |
+| `theorem`     | accepts                | rejects      |
+| `section`     | accepts                | rejects      |
+| `namespace`   | accepts                | rejects      |
+| `then`        | accepts                | rejects      |
+| `end`         | accepts                | rejects      |
+| `do`          | rejected at parse (TS) | —            |
+| `let`         | rejected at parse (TS) | —            |
+| `if` / `else` | rejected at parse (TS) | —            |
 
 ### Suggested fix
 
@@ -146,11 +146,11 @@ error: Invalid field `endPort`: The environment does not contain `PUnit.endPort`
 
 Tested three forms in one file:
 
-| form | emits | works |
-|---|---|---|
-| `type T = { x; y }`              (single record) | `abbrev T := Unit` | **broken** |
-| `interface T { x; y }`           (single record) | `structure T where x ; y` | works |
-| `type T = {kind:'a';x} \| {kind:'b';y}`  (DU) | `inductive T where ...` | works |
+| form                                         | emits                     | works      |
+| -------------------------------------------- | ------------------------- | ---------- |
+| `type T = { x; y }` (single record)          | `abbrev T := Unit`        | **broken** |
+| `interface T { x; y }` (single record)       | `structure T where x ; y` | works      |
+| `type T = {kind:'a';x} \| {kind:'b';y}` (DU) | `inductive T where ...`   | works      |
 
 So the bug is specifically for single-record `type` aliases — DU `type`
 aliases emit correctly. Easiest workaround for users today is to use
@@ -189,7 +189,10 @@ This breaks the function in the README's headline example.
 ### Minimal repro
 
 ```ts
-interface Pair { x: bigint; y: bigint }
+interface Pair {
+  x: bigint;
+  y: bigint;
+}
 
 function makePairLong(x: bigint, y: bigint): Pair {
   return { x: x, y: y };
@@ -220,17 +223,17 @@ Lean rejects with `unknown identifier 'unsupported'`.
 
 I exercised several expression forms to localize the bug:
 
-| expression | emits |
-|---|---|
-| `42n`                                      | `42` (works) |
-| `"hello"`                                  | `"hello"` (works) |
-| `a + b`                                    | `(a + b)` (works) |
-| `p` (identifier)                           | `p` (works) |
-| `{ x, y }`                **interface**    | `(unsupported expr)` |
-| `{ x: x, y: y }`          **interface**    | `(unsupported expr)` |
-| `{ kind: 'some', value: v }` **DU**        | `(.some v)` (works) |
-| `{ kind: 'none' }`        **DU**           | `.none` (works) |
-| `{ kind: 'cons', head, tail }` **DU**      | `(.cons head tail)` (works) |
+| expression                            | emits                       |
+| ------------------------------------- | --------------------------- |
+| `42n`                                 | `42` (works)                |
+| `"hello"`                             | `"hello"` (works)           |
+| `a + b`                               | `(a + b)` (works)           |
+| `p` (identifier)                      | `p` (works)                 |
+| `{ x, y }` **interface**              | `(unsupported expr)`        |
+| `{ x: x, y: y }` **interface**        | `(unsupported expr)`        |
+| `{ kind: 'some', value: v }` **DU**   | `(.some v)` (works)         |
+| `{ kind: 'none' }` **DU**             | `.none` (works)             |
+| `{ kind: 'cons', head, tail }` **DU** | `(.cons head tail)` (works) |
 
 So discriminated-union construction works (it's lowered to constructor
 application), but constructing an `interface` (or single-record `type`)
@@ -291,13 +294,27 @@ no path to lower `arr.reduce(...)` to `Thales.TS.ArrayOps.reduce arr ...`.
 ### Minimal repro
 
 ```ts
-function len(xs: bigint[]): bigint { return BigInt(xs.length); }
-function elem(xs: bigint[]): bigint | undefined { return xs[0]; }
-function mapDouble(xs: bigint[]): bigint[] { return xs.map(x => x + x); }
-function filterPos(xs: bigint[]): bigint[] { return xs.filter(x => x > 0n); }
-function sumAll(xs: bigint[]): bigint { return xs.reduce((acc, x) => acc + x, 0n); }
-function concat(a: bigint[], b: bigint[]): bigint[] { return a.concat(b); }
-function head3(xs: bigint[]): bigint[] { return xs.slice(0, 3); }
+function len(xs: bigint[]): bigint {
+  return BigInt(xs.length);
+}
+function elem(xs: bigint[]): bigint | undefined {
+  return xs[0];
+}
+function mapDouble(xs: bigint[]): bigint[] {
+  return xs.map((x) => x + x);
+}
+function filterPos(xs: bigint[]): bigint[] {
+  return xs.filter((x) => x > 0n);
+}
+function sumAll(xs: bigint[]): bigint {
+  return xs.reduce((acc, x) => acc + x, 0n);
+}
+function concat(a: bigint[], b: bigint[]): bigint[] {
+  return a.concat(b);
+}
+function head3(xs: bigint[]): bigint[] {
+  return xs.slice(0, 3);
+}
 ```
 
 ```
@@ -323,6 +340,7 @@ array.ts(7,49): error TS2339: Property 'slice' does not exist on type 'bigint[]'
 
 > Array methods live in `Thales.TS.ArrayOps` and are referenced by the
 > emitter via their qualified names:
+>
 > ```
 > ArrayOps.map    : Array α → (α → β) → Array β
 > ArrayOps.filter : Array α → (α → Bool) → Array α
@@ -339,6 +357,7 @@ array.ts(7,49): error TS2339: Property 'slice' does not exist on type 'bigint[]'
 ### Suggested fix
 
 Either:
+
 1. Implement the surface — declare the methods in `Prelude.d.ts` and add
    emitter cases that lower `xs.method(...)` to
    `Thales.TS.ArrayOps.method xs ...`.
@@ -373,8 +392,11 @@ from a verified neighbor has no way to pull it in.
 ### Minimal repro
 
 `a.ts`:
+
 ```ts
-export interface Foo { x: bigint }
+export interface Foo {
+  x: bigint;
+}
 
 export function makeFoo(x: bigint): Foo {
   return { x };
@@ -382,6 +404,7 @@ export function makeFoo(x: bigint): Foo {
 ```
 
 `b.ts`:
+
 ```ts
 import { makeFoo } from './a';
 
@@ -403,14 +426,14 @@ Verified against `main` at `31f300449ea4514e1975fa559011d18793ee1a7a`.
 
 ### Forms tested (all rejected)
 
-| form | result |
-|---|---|
-| `export function f() {…}`           | `TS2304: Cannot find name 'export'` |
-| `export type T = …;`                | `TS2304: Cannot find name 'export'` |
-| `export interface I {…}`            | `TS2304: Cannot find name 'export'` |
-| `export { f };` (trailing)          | `Parse error: Expected type name` |
-| `export {};` (module marker only)   | `TS2304: Cannot find name 'export'` |
-| `import { f } from './a';`          | bare TS error: identifier `f` unbound |
+| form                              | result                                |
+| --------------------------------- | ------------------------------------- |
+| `export function f() {…}`         | `TS2304: Cannot find name 'export'`   |
+| `export type T = …;`              | `TS2304: Cannot find name 'export'`   |
+| `export interface I {…}`          | `TS2304: Cannot find name 'export'`   |
+| `export { f };` (trailing)        | `Parse error: Expected type name`     |
+| `export {};` (module marker only) | `TS2304: Cannot find name 'export'`   |
+| `import { f } from './a';`        | bare TS error: identifier `f` unbound |
 
 The parser fixtures under `examples/` and `Test/Examples/fixtures/`
 confirm this — none use `export` or cross-file `import`.
@@ -488,13 +511,17 @@ that the body type doesn't match the declared return type.
 ```ts
 type T = { kind: 'a' } | { kind: 'b' };
 
-function id(t: T): T { return t; }
+function id(t: T): T {
+  return t;
+}
 
 // (1) switch on direct DU parameter — works
 function f1(t: T): boolean {
   switch (t.kind) {
-    case 'a': return true;
-    case 'b': return false;
+    case 'a':
+      return true;
+    case 'b':
+      return false;
   }
 }
 
@@ -502,16 +529,20 @@ function f1(t: T): boolean {
 function f2(t: T): boolean {
   const x = id(t);
   switch (x.kind) {
-    case 'a': return true;
-    case 'b': return false;
+    case 'a':
+      return true;
+    case 'b':
+      return false;
   }
 }
 
 // (3) switch on `f(t).kind` directly — silently broken
 function f3(t: T): boolean {
   switch (id(t).kind) {
-    case 'a': return true;
-    case 'b': return false;
+    case 'a':
+      return true;
+    case 'b':
+      return false;
   }
 }
 ```
@@ -539,7 +570,7 @@ Verified against `main` at `31f300449ea4514e1975fa559011d18793ee1a7a`.
 
 ### Practical impact
 
-This affects any helper that wants to derive a result from a *computed*
+This affects any helper that wants to derive a result from a _computed_
 DU value. Concrete example from `tor-core`: a function `isRetryableEndReason(r)`
 that asks "is `getStreamRetryBehavior(r)` anything other than `.no_retry`?"
 cannot be written in the natural delegating form
@@ -547,9 +578,12 @@ cannot be written in the natural delegating form
 ```ts
 function isRetryableEndReason(reason: RelayEndReason): boolean {
   switch (getStreamRetryBehavior(reason).kind) {
-    case 'retry_circuit': return true;
-    case 'retry_exit':    return true;
-    case 'no_retry':      return false;
+    case 'retry_circuit':
+      return true;
+    case 'retry_exit':
+      return true;
+    case 'no_retry':
+      return false;
   }
 }
 ```
@@ -605,6 +639,7 @@ partial def dupTuple (xs : IntList) : (IntList × IntList) :=
 ```
 
 Lean rejects with:
+
 ```
 has type
   Array IntList
@@ -658,7 +693,7 @@ type Result = { kind: 'ok'; v: bigint } | { kind: 'err' };
 function bumpVal(r: Result): Result {
   switch (r.kind) {
     case 'ok':
-      return { kind: 'ok', v: r.v + 1n };  // ← `r.v` inside ctor
+      return { kind: 'ok', v: r.v + 1n }; // ← `r.v` inside ctor
     case 'err':
       return { kind: 'err' };
   }
@@ -668,7 +703,7 @@ function bumpVal(r: Result): Result {
 function bumpVal2(r: Result): Result {
   switch (r.kind) {
     case 'ok': {
-      const old = r.v;                     // ← bind first
+      const old = r.v; // ← bind first
       return { kind: 'ok', v: old + 1n };
     }
     case 'err':
@@ -693,6 +728,7 @@ partial def bumpVal2 (r : Result) : Result :=
 ```
 
 Lean rejects `bumpVal`:
+
 ```
 error: Invalid field `v`: The environment does not contain `Result.v`,
 so it is not possible to project the field `v` from an expression
@@ -707,11 +743,12 @@ function written using direct `bigint` arithmetic on field accesses
 emits correctly:
 
 ```ts
-function pairSum(p: { kind: 'pair'; a: bigint; b: bigint }
-                  | { kind: 'none' }): bigint {
+function pairSum(p: { kind: 'pair'; a: bigint; b: bigint } | { kind: 'none' }): bigint {
   switch (p.kind) {
-    case 'pair': return p.a + p.b;  // → match | .pair a b => (a + b)  -- works
-    case 'none': return 0n;
+    case 'pair':
+      return p.a + p.b; // → match | .pair a b => (a + b)  -- works
+    case 'none':
+      return 0n;
   }
 }
 ```
@@ -733,7 +770,7 @@ just needs to use them.
 Same hazard as Issues 1, 2, 3, 6 — accepted by the subset checker,
 emit succeeds, only `lake build` catches the broken Lean. Workaround
 (bind to a local `const` first) adds a line per field access but is
-mechanical. Bites any function that *transforms* a DU value while
+mechanical. Bites any function that _transforms_ a DU value while
 preserving structure — common shape in parser-style code.
 
 ---
@@ -800,6 +837,7 @@ Verified against `main` at `31f300449ea4514e1975fa559011d18793ee1a7a`.
 
 > **`@decreasing` hint:** Annotation naming the structural decreasing
 > argument:
+>
 > ```typescript
 > /** @decreasing n */
 > function collatz(n: bigint): bigint { ... }
@@ -887,7 +925,7 @@ error: failed to compile 'partial' definition `MyMod.repeatNil`,
 
 The fix Lean suggests in its error message — `add a 'deriving
 Nonempty' clause to the inductive` — is exactly what's needed. The
-`IntList` inductive *is* nonempty (`.nil` is a witness), but Lean
+`IntList` inductive _is_ nonempty (`.nil` is a witness), but Lean
 needs a derived instance to know.
 
 Verified against `main` at `31f300449ea4514e1975fa559011d18793ee1a7a`.
