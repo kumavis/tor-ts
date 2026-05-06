@@ -3,9 +3,9 @@
 Verified against `main` at `31f300449ea4514e1975fa559011d18793ee1a7a` (current
 tip as of filing). None of these duplicate any of the 10 existing issues
 (#1 closed, #2–#10 are 0.6 refinement-types milestones). Issues 1, 2, 3,
-6, 7, 8, and 10 are silent emit failures (input accepted, output broken).
-Issue 4 is a visible TS error (the documented runtime stdlib isn't
-actually callable from TS). Issue 5 is the export/import gap that
+6, 7, 8, 10, 11 and 12 are silent emit failures (input accepted, output
+broken). Issue 4 is a visible TS error (the documented runtime stdlib
+isn't actually callable from TS). Issue 5 is the export/import gap that
 gates downstream adoption. Issue 9 is `@decreasing` being parsed but
 not honored.
 
@@ -960,3 +960,144 @@ other's symptom for affected users — but the underlying gap is
 "non-structural termination + user inductive return type isn't a
 viable shape today, even though `subset.md` advertises it via
 `@decreasing`".
+
+---
+
+## Issue 11: Null-narrowing through `if (x === null) return …` doesn't propagate to later uses
+
+**Title:** `Subset checker doesn't narrow \`T | null\` through an early-return null check; subsequent uses of x still trip TS2322`
+
+**Body:**
+
+`tsc --strict` narrows `T | null` to `T` after `if (x === null) return …`,
+which is the standard idiom for getting at a non-null value. Thales 0.5's
+subset checker doesn't propagate that narrowing — every later expression
+that uses `x` as if it were `T` reports TS2322 ("Type 'T | null' is not
+assignable to type 'T'"), even though plain `tsc --noEmit` accepts the
+same source.
+
+### Minimal repro
+
+```ts
+function updateMax(current: bigint | null, candidate: bigint): bigint {
+  if (current === null) {
+    return candidate;
+  }
+  // After the early return, `current` should be narrowed to `bigint`.
+  // Thales 0.5 still sees it as `bigint | null` here:
+  if (current >= candidate) {
+    //  ^^^^^^^^^^^^^^^^^^^
+    //  error TS2322: Type 'bigint | null' is not assignable to type 'bigint'
+    return current;
+  }
+  return candidate;
+}
+```
+
+`tsc --noEmit` on the same source: passes.
+
+### Doc reference
+
+The published subset doc lists nullable unions and "narrowing via
+`x === null` / `x !== null`" as supported (see `Nullable Unions
+(v1.0 – lifted from TH0025)`). The example given in the doc is
+`option-nullable.ts`, which uses narrowing only to dispatch on
+`name === null` to a string return — it never _uses_ the narrowed
+`name` afterwards in another expression. So the failure mode here is
+"narrowing-and-use" specifically.
+
+### Practical impact
+
+Standard `T | null` accumulators ("max so far" / "first found" / etc.)
+are unwritable in the subset today. Worked around in
+`packages/core/src/versionNegotiation.ts` by routing through a custom
+`MaxAcc = { kind: 'none' } | { kind: 'some'; value: bigint }` DU
+instead — but that's a workaround, not what the doc claims is
+supported.
+
+### Suggested fix
+
+Make the subset checker propagate null-narrowing from a positive
+early-return through the rest of the function body. Plain TS-side
+type-checking with `tsc --noEmit` already does this, so the work is
+either (a) reusing tsc's narrowing or (b) implementing the same flow
+analysis in the subset checker.
+
+---
+
+## Issue 12: Function calls returning `T | null` are wrapped in an extra `.some` at the return site, producing `Option (Option T)`
+
+**Title:** `Returning the result of a \`T | null\`-returning helper double-wraps it: emit gets \`(.some (helper ...))\` instead of \`(helper ...)\``
+
+**Body:**
+
+When function `f`'s return type is `T | null` and the body calls a
+helper `g` that also returns `T | null`, Thales 0.5 emits the call
+site wrapped in an extra `.some`. The Lean side then has type
+`Option (Option T)` where `Option T` was intended; Lean rejects.
+
+### Minimal repro
+
+```ts
+type MaxAcc = { kind: 'none' } | { kind: 'some'; value: bigint };
+
+/** @total */
+function unwrap(acc: MaxAcc): bigint | null {
+  switch (acc.kind) {
+    case 'none':
+      return null;
+    case 'some':
+      return acc.value;
+  }
+}
+
+/** @total */
+function topLevel(): bigint | null {
+  return unwrap({ kind: 'none' });
+}
+```
+
+Emitted Lean (the relevant excerpt):
+
+```lean
+def unwrap (acc : MaxAcc) : (Option Int) :=
+  match acc with
+    | .none => .none
+    | .some value => (.some value)
+
+def topLevel : (Option Int) :=
+  (.some ((unwrap .none)))   -- ← extra .some wrapper here
+```
+
+Lean rejects:
+
+```
+type mismatch
+  some (unwrap MaxAcc.none)
+has type
+  Option (Option Int)
+but is expected to have type
+  Option Int
+```
+
+The same pattern with `.some` returns of plain values (no helper
+call) emits correctly — it's specifically calls returning a
+nullable-union type that get the spurious wrapper.
+
+Verified against `main` at `31f300449ea4514e1975fa559011d18793ee1a7a`.
+
+### Practical impact
+
+The natural shape "compose two functions that each return
+`T | null`" doesn't work. Worked around in
+`packages/core/src/versionNegotiation.ts` by exposing the
+`MaxAcc` DU directly to callers and letting the seam unwrap on the
+TS side rather than calling a verified-side unwrap helper.
+
+### Suggested fix
+
+In the emitter's return-site handling, recognize when the called
+function's return type is already `Option …` and don't add a
+`.some` wrapper. The wrapper is only needed when raising `T` to
+`Option T`; calls returning `Option T` are already at the right
+type.

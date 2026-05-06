@@ -10,6 +10,9 @@ file in this package fails either step, the build fails.
 
 The seam strategy and per-package conversion plan live in
 [`docs/thales-conversion-plan.md`](../../docs/thales-conversion-plan.md).
+The conventions and recipes for adding a new module are in
+[`docs/PATTERNS.md`](docs/PATTERNS.md). Filed Thales 0.5 quirks are
+in [`docs/thales-issues.md`](docs/thales-issues.md).
 
 ## Layout
 
