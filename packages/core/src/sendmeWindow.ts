@@ -1,39 +1,53 @@
 // Tor SENDME flow-control window arithmetic (verified core).
 //
-// Each Tor circuit and stream maintains a sliding window for flow
-// control. Two windows per direction:
+// Tor maintains a sliding window for flow control at TWO layers, with
+// DIFFERENT spec constants:
 //
-//   * package_window (sender side): starts at 1000; decremented by 1
-//                                   for each RELAY_DATA sent; the peer
-//                                   replenishes it with +100 by sending
-//                                   us a SENDME cell.
-//   * deliver_window (receiver side): starts at 1000; decremented by 1
-//                                   for each RELAY_DATA received; we
-//                                   emit a SENDME ourselves once it
-//                                   drops to 900 or below, replenishing
-//                                   the peer's package_window.
+//                     INITIAL  INCREMENT  THRESHOLD
+//   circuit window     1000      100        900
+//   stream window       500       50        450
 //
-// Spec source: tor-spec.txt §7.3 (flow-control), prop324 for the
-// stream-level mechanism.
+// (tor-spec.txt §7.3.1; mirrored in packages/tor/src/circuit.ts as
+//  CIRCUIT_WINDOW_START / CIRCUIT_SENDME_INCREMENT and
+//  STREAM_WINDOW_START / STREAM_SENDME_INCREMENT.)
 //
-// This module captures the arithmetic on a single window: decrement,
-// SENDME-receive, depletion check, "should-emit-sendme" predicate, and
-// a "valid-range" invariant predicate. The state-machine layer can
-// compose these per-direction; the seam adapter dispatches RELAY_DATA
-// / RELAY_SENDME cells to the right window functions.
-
-/** Initial window value. tor-spec §7.3.1. */
-const SENDME_INITIAL: bigint = 1000n;
-
-/** SENDME-cell increment. Each SENDME announces +100 cells of capacity. */
-const SENDME_INCREMENT: bigint = 100n;
-
-/** Deliver-side threshold. When deliver_window drops to this or below,
-    we emit a SENDME. INITIAL - INCREMENT = 900. */
-const SENDME_THRESHOLD: bigint = 900n;
+// Both windows obey the same arithmetic rules — only the numeric
+// constants differ. So this module exposes:
+//
+//   * The four spec constants for each layer.
+//   * Generic predicates parameterized over `increment` / `threshold`
+//     / `max`. Spec/SendmeWindow.lean proves invariants over the
+//     parameterized form, plus concrete-value witnesses for both the
+//     circuit and stream constants so the seam can use the bare
+//     constants without having to re-prove anything.
+//
+// The decrement / depletion predicates are constant-free and work for
+// either layer unchanged.
 
 // ----------------------------------------------------------------------------
-// Single-step arithmetic.
+// Spec constants.
+// ----------------------------------------------------------------------------
+
+/** Initial circuit-level window (tor-spec §7.3.1). */
+const CIRCUIT_WINDOW_INITIAL: bigint = 1000n;
+
+/** Circuit-level SENDME-cell increment. */
+const CIRCUIT_SENDME_INCREMENT: bigint = 100n;
+
+/** Deliver-side circuit threshold = INITIAL − INCREMENT. */
+const CIRCUIT_SENDME_THRESHOLD: bigint = 900n;
+
+/** Initial stream-level window. */
+const STREAM_WINDOW_INITIAL: bigint = 500n;
+
+/** Stream-level SENDME-cell increment. */
+const STREAM_SENDME_INCREMENT: bigint = 50n;
+
+/** Deliver-side stream threshold = INITIAL − INCREMENT. */
+const STREAM_SENDME_THRESHOLD: bigint = 450n;
+
+// ----------------------------------------------------------------------------
+// Constant-free single-step arithmetic.
 // ----------------------------------------------------------------------------
 
 /** Window state after sending or receiving one RELAY_DATA cell. */
@@ -42,14 +56,18 @@ function decrementWindow(window: bigint): bigint {
   return window - 1n;
 }
 
-/** Window state after receiving (or being credited by) one SENDME. */
+/**
+ * Window state after receiving (or being credited by) one SENDME with
+ * the given increment. Use `CIRCUIT_SENDME_INCREMENT` for circuit
+ * windows and `STREAM_SENDME_INCREMENT` for stream windows.
+ */
 /** @total */
-function applySendme(window: bigint): bigint {
-  return window + SENDME_INCREMENT;
+function applySendme(window: bigint, increment: bigint): bigint {
+  return window + increment;
 }
 
 // ----------------------------------------------------------------------------
-// Predicates.
+// Constant-free predicates.
 // ----------------------------------------------------------------------------
 
 /**
@@ -62,32 +80,8 @@ function isWindowDepleted(window: bigint): boolean {
 }
 
 /**
- * The deliver window has dropped to the SENDME threshold: time to emit
- * a SENDME of our own to replenish the peer's package window.
- */
-/** @total */
-function shouldEmitSendme(window: bigint): boolean {
-  return window <= SENDME_THRESHOLD;
-}
-
-/**
- * The window is in its valid range `[0, INITIAL]`. A window outside
- * this range indicates a protocol violation: either an under-flow (the
- * peer sent more data than allowed) or an over-flow (we received an
- * unsolicited SENDME).
- */
-/** @total */
-function isValidWindow(window: bigint): boolean {
-  return 0n <= window && window <= SENDME_INITIAL;
-}
-
-// ----------------------------------------------------------------------------
-// Combined predicates over the two window directions.
-// ----------------------------------------------------------------------------
-
-/**
- * "Can I safely send one more data cell?" — the package window must be
- * strictly positive.
+ * "Can I safely send one more data cell?" — the package window must
+ * be strictly positive.
  */
 /** @total */
 function canSendData(packageWindow: bigint): boolean {
@@ -101,4 +95,71 @@ function canSendData(packageWindow: bigint): boolean {
 /** @total */
 function wouldDeplete(window: bigint): boolean {
   return window <= 1n;
+}
+
+// ----------------------------------------------------------------------------
+// Parameterized threshold/validity predicates.
+//
+// Each takes the layer-appropriate constant explicitly. The seam picks
+// CIRCUIT_* or STREAM_* per the call site.
+// ----------------------------------------------------------------------------
+
+/**
+ * The deliver window has dropped to (or below) the SENDME threshold:
+ * time to emit a SENDME of our own to replenish the peer's package
+ * window.
+ */
+/** @total */
+function shouldEmitSendme(window: bigint, threshold: bigint): boolean {
+  return window <= threshold;
+}
+
+/**
+ * The window is in its valid range `[0, max]`. A window outside this
+ * range indicates a protocol violation: either an under-flow (the peer
+ * sent more data than allowed) or an over-flow (we received an
+ * unsolicited SENDME).
+ */
+/** @total */
+function isValidWindow(window: bigint, max: bigint): boolean {
+  return 0n <= window && window <= max;
+}
+
+// ----------------------------------------------------------------------------
+// Layer-specific shorthands.
+//
+// Each pair below specializes the parameterized predicates above to
+// the circuit and stream constants, so callers in the seam can use a
+// single function name per layer without having to thread the
+// constants through.
+// ----------------------------------------------------------------------------
+
+/** @total */
+function shouldEmitCircuitSendme(window: bigint): boolean {
+  return shouldEmitSendme(window, CIRCUIT_SENDME_THRESHOLD);
+}
+
+/** @total */
+function shouldEmitStreamSendme(window: bigint): boolean {
+  return shouldEmitSendme(window, STREAM_SENDME_THRESHOLD);
+}
+
+/** @total */
+function isValidCircuitWindow(window: bigint): boolean {
+  return isValidWindow(window, CIRCUIT_WINDOW_INITIAL);
+}
+
+/** @total */
+function isValidStreamWindow(window: bigint): boolean {
+  return isValidWindow(window, STREAM_WINDOW_INITIAL);
+}
+
+/** @total */
+function applyCircuitSendme(window: bigint): bigint {
+  return applySendme(window, CIRCUIT_SENDME_INCREMENT);
+}
+
+/** @total */
+function applyStreamSendme(window: bigint): bigint {
+  return applySendme(window, STREAM_SENDME_INCREMENT);
 }

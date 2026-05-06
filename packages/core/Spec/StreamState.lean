@@ -43,19 +43,37 @@ theorem tcp_happy_path :
   rw [step_init_local_begin, step_awaiting_connected_recv_connected]
 
 ----------------------------------------------------------------------------
--- RESOLVE one-shot: init → awaiting_resolved → closed (DNS_DONE)
+-- RESOLVE flow: init → awaiting_resolved → resolved → closed (after END)
 ----------------------------------------------------------------------------
 
 theorem step_awaiting_resolved_recv_resolved :
-    step .awaiting_resolved .recv_resolved = .closed 6 := by
-  simp [step, stepFromAwaitingResolved, REASON_DNS_DONE]
+    step .awaiting_resolved .recv_resolved = .resolved := by
+  simp [step, stepFromAwaitingResolved]
 
-/-- **DNS happy path.** A 2-step sequence (RESOLVE, then RESOLVED)
-    drives an `init` stream to `closed` with `REASON_DNS_DONE`. The
-    stream never enters `open` for DNS — it's a one-shot exchange. -/
-theorem dns_happy_path :
-    step (step .init .local_resolve) .recv_resolved = .closed 6 := by
+theorem step_resolved_recv_end (r : Int) :
+    step .resolved (.recv_end r) = .closed r := by
+  simp [step, stepFromResolved]
+
+theorem step_resolved_local_close (r : Int) :
+    step .resolved (.local_close r) = .closed r := by
+  simp [step, stepFromResolved]
+
+/-- **DNS path to `resolved`.** A 2-step sequence (RESOLVE, then
+    RESOLVED) drives an `init` stream to the `resolved` phase. The
+    stream is *not yet* terminal here — it waits for the follow-up
+    RELAY_END that the spec sends after a successful RELAY_RESOLVED. -/
+theorem dns_path_reaches_resolved :
+    step (step .init .local_resolve) .recv_resolved = .resolved := by
   rw [step_init_local_resolve, step_awaiting_resolved_recv_resolved]
+
+/-- **Full DNS sequence.** RESOLVE, RESOLVED, then END(reason) closes
+    the stream with the supplied reason. This is the spec-conformant
+    happy path; real Tor exits send REASON_DONE here. -/
+theorem dns_full_close (r : Int) :
+    step (step (step .init .local_resolve) .recv_resolved) (.recv_end r)
+      = .closed r := by
+  rw [step_init_local_resolve, step_awaiting_resolved_recv_resolved,
+      step_resolved_recv_end r]
 
 ----------------------------------------------------------------------------
 -- DATA in open is a no-op
@@ -114,13 +132,14 @@ theorem step_open_recv_connected_protocol_error :
 -- Phase partition
 ----------------------------------------------------------------------------
 
-/-- The four phase predicates partition every state. -/
+/-- The five phase predicates partition every state. -/
 theorem phase_partition (s : StreamState) :
-    (isInit s = true ∧ isAwaiting s = false ∧ isOpen s = false ∧ isClosed s = false) ∨
-    (isInit s = false ∧ isAwaiting s = true ∧ isOpen s = false ∧ isClosed s = false) ∨
-    (isInit s = false ∧ isAwaiting s = false ∧ isOpen s = true ∧ isClosed s = false) ∨
-    (isInit s = false ∧ isAwaiting s = false ∧ isOpen s = false ∧ isClosed s = true) := by
-  cases s <;> simp [isInit, isAwaiting, isOpen, isClosed]
+    (isInit s = true ∧ isAwaiting s = false ∧ isResolved s = false ∧ isOpen s = false ∧ isClosed s = false) ∨
+    (isInit s = false ∧ isAwaiting s = true ∧ isResolved s = false ∧ isOpen s = false ∧ isClosed s = false) ∨
+    (isInit s = false ∧ isAwaiting s = false ∧ isResolved s = true ∧ isOpen s = false ∧ isClosed s = false) ∨
+    (isInit s = false ∧ isAwaiting s = false ∧ isResolved s = false ∧ isOpen s = true ∧ isClosed s = false) ∨
+    (isInit s = false ∧ isAwaiting s = false ∧ isResolved s = false ∧ isOpen s = false ∧ isClosed s = true) := by
+  cases s <;> simp [isInit, isAwaiting, isResolved, isOpen, isClosed]
 
 ----------------------------------------------------------------------------
 -- One-way closure
@@ -130,8 +149,17 @@ theorem phase_partition (s : StreamState) :
 theorem closed_does_not_reopen (r : Int) (i : StreamInput) :
     isOpen (step (.closed r) i) = false ∧
     isAwaiting (step (.closed r) i) = false ∧
+    isResolved (step (.closed r) i) = false ∧
     isInit (step (.closed r) i) = false := by
   rw [step_closed_stable r i]
-  refine ⟨?_, ?_, ?_⟩ <;> simp [isOpen, isAwaiting, isInit]
+  refine ⟨?_, ?_, ?_, ?_⟩ <;> simp [isOpen, isAwaiting, isResolved, isInit]
+
+/-- The `resolved` phase is one-step-from-closed: any of `recv_end`
+    (with any reason) or `local_close` (with any reason) lands in
+    `closed`, and the protocol-error inputs do too. The stream cannot
+    leave `resolved` to anything other than `closed`. -/
+theorem resolved_only_advances_to_closed (i : StreamInput) :
+    isClosed (step .resolved i) = true := by
+  cases i <;> simp [step, stepFromResolved, isClosed]
 
 end Spec.StreamState

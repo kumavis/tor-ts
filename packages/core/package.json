@@ -9,6 +9,7 @@
   },
   "scripts": {
     "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "tsc -p tsconfig.json --noEmit",
     "verify": "bash scripts/verify.sh"
   }
 }

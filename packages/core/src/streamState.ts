@@ -19,6 +19,13 @@ type StreamState =
   | { kind: 'init' }
   | { kind: 'awaiting_connected' }
   | { kind: 'awaiting_resolved' }
+  // RESOLVED has been received; the spec follows it with a RELAY_END
+  // (typically REASON_DONE) before the stream is fully closed. Real
+  // tor-ts code waits for that END rather than tearing down on
+  // RESOLVED alone, so we model that explicitly: this is a "received
+  // the answer, awaiting the formal close" phase that accepts END
+  // (or local close) and rejects everything else.
+  | { kind: 'resolved' }
   | { kind: 'open' }
   | { kind: 'closed'; reason: bigint };
 
@@ -93,8 +100,12 @@ function stepFromAwaitingConnected(input: StreamInput): StreamState {
 function stepFromAwaitingResolved(input: StreamInput): StreamState {
   switch (input.kind) {
     case 'recv_resolved':
-      // RESOLVE is one-shot: the response itself ends the stream.
-      return { kind: 'closed', reason: REASON_DNS_DONE };
+      // RESOLVED moves us into `resolved`, where we wait for the
+      // RELAY_END that the spec says always follows. We do NOT tear
+      // down here, because real Tor exits send the END separately
+      // and the stream is only formally closed after that END is
+      // observed.
+      return { kind: 'resolved' };
     case 'recv_end': {
       const r = input.reason;
       return { kind: 'closed', reason: r };
@@ -108,6 +119,35 @@ function stepFromAwaitingResolved(input: StreamInput): StreamState {
     case 'local_resolve':
       return { kind: 'closed', reason: REASON_PROTOCOL_ERROR };
     case 'recv_connected':
+      return { kind: 'closed', reason: REASON_PROTOCOL_ERROR };
+    case 'recv_data':
+      return { kind: 'closed', reason: REASON_PROTOCOL_ERROR };
+  }
+}
+
+/**
+ * After RELAY_RESOLVED, the stream is in `resolved` and the only
+ * spec-correct next inputs are the follow-up RELAY_END from the exit
+ * or a local close. Anything else is a protocol error.
+ */
+/** @total */
+function stepFromResolved(input: StreamInput): StreamState {
+  switch (input.kind) {
+    case 'recv_end': {
+      const r = input.reason;
+      return { kind: 'closed', reason: r };
+    }
+    case 'local_close': {
+      const r = input.reason;
+      return { kind: 'closed', reason: r };
+    }
+    case 'local_begin':
+      return { kind: 'closed', reason: REASON_PROTOCOL_ERROR };
+    case 'local_resolve':
+      return { kind: 'closed', reason: REASON_PROTOCOL_ERROR };
+    case 'recv_connected':
+      return { kind: 'closed', reason: REASON_PROTOCOL_ERROR };
+    case 'recv_resolved':
       return { kind: 'closed', reason: REASON_PROTOCOL_ERROR };
     case 'recv_data':
       return { kind: 'closed', reason: REASON_PROTOCOL_ERROR };
@@ -153,6 +193,8 @@ function step(state: StreamState, input: StreamInput): StreamState {
       return stepFromAwaitingConnected(input);
     case 'awaiting_resolved':
       return stepFromAwaitingResolved(input);
+    case 'resolved':
+      return stepFromResolved(input);
     case 'open':
       return stepFromOpen(input);
     case 'closed':
@@ -173,6 +215,8 @@ function isInit(s: StreamState): boolean {
       return false;
     case 'awaiting_resolved':
       return false;
+    case 'resolved':
+      return false;
     case 'open':
       return false;
     case 'closed':
@@ -188,6 +232,26 @@ function isAwaiting(s: StreamState): boolean {
     case 'awaiting_resolved':
       return true;
     case 'init':
+      return false;
+    case 'resolved':
+      return false;
+    case 'open':
+      return false;
+    case 'closed':
+      return false;
+  }
+}
+
+/** @total */
+function isResolved(s: StreamState): boolean {
+  switch (s.kind) {
+    case 'resolved':
+      return true;
+    case 'init':
+      return false;
+    case 'awaiting_connected':
+      return false;
+    case 'awaiting_resolved':
       return false;
     case 'open':
       return false;
@@ -207,6 +271,8 @@ function isOpen(s: StreamState): boolean {
       return false;
     case 'awaiting_resolved':
       return false;
+    case 'resolved':
+      return false;
     case 'closed':
       return false;
   }
@@ -222,6 +288,8 @@ function isClosed(s: StreamState): boolean {
     case 'awaiting_connected':
       return false;
     case 'awaiting_resolved':
+      return false;
+    case 'resolved':
       return false;
     case 'open':
       return false;
