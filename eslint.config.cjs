@@ -90,6 +90,21 @@ module.exports = [
     },
   },
   {
+    // Thales 0.5's parser rejects `export` declarations
+    // (https://github.com/jessealama/thales filed as Issue 5 in
+    // packages/core/docs/thales-issues.md), so every top-level
+    // function and `const` in `packages/core/src/` is module-local
+    // and appears "unused" to ESLint. The Lean side IS using these
+    // — they're consumed by the emitted Generated/*.lean and
+    // referenced in Spec/*.lean — so disable the rule for this
+    // tree until Thales gains export support and the seam can
+    // re-`export` properly.
+    files: ['packages/core/src/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-unused-vars': 'off',
+    },
+  },
+  {
     files: ['**/*.cjs'],
     languageOptions: {
       sourceType: 'script',
