@@ -7299,6 +7299,14 @@ __metadata:
   languageName: node
   linkType: hard
 
+"tor-core@workspace:packages/core":
+  version: 0.0.0-use.local
+  resolution: "tor-core@workspace:packages/core"
+  dependencies:
+    typescript: "npm:^5.9.3"
+  languageName: unknown
+  linkType: soft
+
 "tor-crypto@workspace:^, tor-crypto@workspace:packages/crypto":
   version: 0.0.0-use.local
   resolution: "tor-crypto@workspace:packages/crypto"
