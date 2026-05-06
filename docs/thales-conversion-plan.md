@@ -15,18 +15,18 @@ thin imperative shell drives I/O.
 
 From the v0.5 / v1.0 subset doc, the rules that bite this codebase are:
 
-| Code | Rule | tor-ts impact |
-|---|---|---|
-| TH0001 | No `let` reassignment | Pervasive; ~all stateful classes |
-| TH0002–TH0004 | No array/object mutation, no `.push/.pop/.splice/.sort/.reverse` | 181 mutating-method call sites |
-| TH0010 | No `for`/`while`/`do-while` | 185 loop sites; many in parsers |
-| TH0012 | No `async`/`await`/`Promise` | 543 hits in non-test code |
-| TH0020/TH0021 | No `any`/`unknown` | ~80 occurrences, mostly at FFI boundaries |
-| TH0022 | Unions must be discriminated (`kind:` field) | Several string-literal unions need refactor |
-| TH0023/TH0024 | No `&` intersections, `keyof`, conditional/mapped types | Sparse but present (e.g. `(typeof X)[keyof typeof X]`) |
-| TH0030/TH0031 | No `class` / `extends` | 40+ class declarations, EventEmitter inheritance throughout |
-| TH0050/TH0070 | Termination must be provable (structural recursion or `@decreasing`) | Most parsers walk byte buffers — fits `@decreasing` on remaining length |
-| TH0060/TH0064 | `throw` requires `@throws` annotation; callers must catch or re-declare | Tractable; existing throws are mostly plain `Error` |
+| Code          | Rule                                                                    | tor-ts impact                                                           |
+| ------------- | ----------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| TH0001        | No `let` reassignment                                                   | Pervasive; ~all stateful classes                                        |
+| TH0002–TH0004 | No array/object mutation, no `.push/.pop/.splice/.sort/.reverse`        | 181 mutating-method call sites                                          |
+| TH0010        | No `for`/`while`/`do-while`                                             | 185 loop sites; many in parsers                                         |
+| TH0012        | No `async`/`await`/`Promise`                                            | 543 hits in non-test code                                               |
+| TH0020/TH0021 | No `any`/`unknown`                                                      | ~80 occurrences, mostly at FFI boundaries                               |
+| TH0022        | Unions must be discriminated (`kind:` field)                            | Several string-literal unions need refactor                             |
+| TH0023/TH0024 | No `&` intersections, `keyof`, conditional/mapped types                 | Sparse but present (e.g. `(typeof X)[keyof typeof X]`)                  |
+| TH0030/TH0031 | No `class` / `extends`                                                  | 40+ class declarations, EventEmitter inheritance throughout             |
+| TH0050/TH0070 | Termination must be provable (structural recursion or `@decreasing`)    | Most parsers walk byte buffers — fits `@decreasing` on remaining length |
+| TH0060/TH0064 | `throw` requires `@throws` annotation; callers must catch or re-declare | Tractable; existing throws are mostly plain `Error`                     |
 
 Effects Thales has no answer for at all:
 
@@ -150,13 +150,13 @@ Header legend:
 
 ### 4.1 `packages/crypto` (~860 LOC)
 
-| File | Verdict | Notes |
-|---|---|---|
-| `hashes.ts` | SHELL (FFI declare) | `sha256`, `sha3_256`, `shake256` are platform calls. Declare as Lean `extern`; Thales-side code calls them as opaque pure functions. |
-| `curves.ts` | SHELL (FFI declare) | Curve25519 / Ed25519 implementations bottom out in WebCrypto or Node `crypto`. Same FFI treatment. |
-| `hs-crypto.ts` | **PURE** | `mac`, `dMac`, `bytesToBigIntLE`, `bigIntToBytesLE`, `modInverse`, `u64be` are bigint/byte math over the FFI hashes. The `Sha3_256Hash` class collapses to `type Sha3State = { acc: ReadonlyArray<number> }` + 3 functions. |
-| `aes.ts` | SHELL | Uses WebCrypto (async) and a `Mutex`. Pure block-counter math (`incrementCounter`) can be lifted into a tiny `aes-counter.ts` Thales module that produces the next counter buffer; the rest stays out. |
-| `node.ts` / `browser.ts` | SHELL | Platform glue. |
+| File                     | Verdict             | Notes                                                                                                                                                                                                                       |
+| ------------------------ | ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hashes.ts`              | SHELL (FFI declare) | `sha256`, `sha3_256`, `shake256` are platform calls. Declare as Lean `extern`; Thales-side code calls them as opaque pure functions.                                                                                        |
+| `curves.ts`              | SHELL (FFI declare) | Curve25519 / Ed25519 implementations bottom out in WebCrypto or Node `crypto`. Same FFI treatment.                                                                                                                          |
+| `hs-crypto.ts`           | **PURE**            | `mac`, `dMac`, `bytesToBigIntLE`, `bigIntToBytesLE`, `modInverse`, `u64be` are bigint/byte math over the FFI hashes. The `Sha3_256Hash` class collapses to `type Sha3State = { acc: ReadonlyArray<number> }` + 3 functions. |
+| `aes.ts`                 | SHELL               | Uses WebCrypto (async) and a `Mutex`. Pure block-counter math (`incrementCounter`) can be lifted into a tiny `aes-counter.ts` Thales module that produces the next counter buffer; the rest stays out.                      |
+| `node.ts` / `browser.ts` | SHELL               | Platform glue.                                                                                                                                                                                                              |
 
 **Yield:** ~250 LOC of `hs-crypto.ts` and a small slice of `aes.ts`
 counter math become Thales-eligible. The rest is declared FFI.
@@ -165,33 +165,33 @@ counter math become Thales-eligible. The rest is declared FFI.
 
 #### Cleanly pure (PURE)
 
-| File | LOC | Notes |
-|---|---|---|
-| `time.ts` | 3 | Trivial; the `getTime` interface itself is a seam input. |
-| `profiles.ts` | 72 | Static config records. |
-| `fallback-dirs.ts` | 150 | Compile-time data table. |
-| `exit-policy.ts` | 207 | Has one `for-of` loop; rewrite to `parts.map(...).filter(...)`. The `'accept' | 'reject'` field needs to be promoted to a `kind:` discriminator (TH0022). |
-| `http-parse.ts` | 166 | Pure HTTP/1.1 line parser; rewrite the `for` loops as recursion over remaining lines. |
-| `relay-cell.ts` | 464 | Encode/decode of relay-cell payloads. The single class (`RelayEndError extends Error`) becomes a discriminated-union `Result` return. The `as const` keyed lookup tables either stay (Thales allows `as const` records) or get inlined into a `switch`. |
-| `messaging.ts` | 858 | The largest pure island. All cell parsing/serialization is referentially transparent. The Buffer-based dispatch tables (`Record<number, fn>`) flatten to discriminated-union `switch` (TH0024). The current `assert` calls become `@throws Error`. |
-| `ntor.ts` | 265 | Pure handshake math built on tor-crypto FFI. |
-| `cert.ts` | 600 | Cert parsing + Ed25519 signature verification (the `verify` itself is FFI). The `@peculiar/x509` import is platform-only; the Thales-side code consumes already-extracted DER bytes. |
-| `consensus-signature.ts` | 690 | Already split into "verification logic" + "crypto FFI"; the logic side is convertible. |
+| File                     | LOC | Notes                                                                                                                                                                                                                                                   |
+| ------------------------ | --- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------- |
+| `time.ts`                | 3   | Trivial; the `getTime` interface itself is a seam input.                                                                                                                                                                                                |
+| `profiles.ts`            | 72  | Static config records.                                                                                                                                                                                                                                  |
+| `fallback-dirs.ts`       | 150 | Compile-time data table.                                                                                                                                                                                                                                |
+| `exit-policy.ts`         | 207 | Has one `for-of` loop; rewrite to `parts.map(...).filter(...)`. The `'accept'                                                                                                                                                                           | 'reject'`field needs to be promoted to a`kind:` discriminator (TH0022). |
+| `http-parse.ts`          | 166 | Pure HTTP/1.1 line parser; rewrite the `for` loops as recursion over remaining lines.                                                                                                                                                                   |
+| `relay-cell.ts`          | 464 | Encode/decode of relay-cell payloads. The single class (`RelayEndError extends Error`) becomes a discriminated-union `Result` return. The `as const` keyed lookup tables either stay (Thales allows `as const` records) or get inlined into a `switch`. |
+| `messaging.ts`           | 858 | The largest pure island. All cell parsing/serialization is referentially transparent. The Buffer-based dispatch tables (`Record<number, fn>`) flatten to discriminated-union `switch` (TH0024). The current `assert` calls become `@throws Error`.      |
+| `ntor.ts`                | 265 | Pure handshake math built on tor-crypto FFI.                                                                                                                                                                                                            |
+| `cert.ts`                | 600 | Cert parsing + Ed25519 signature verification (the `verify` itself is FFI). The `@peculiar/x509` import is platform-only; the Thales-side code consumes already-extracted DER bytes.                                                                    |
+| `consensus-signature.ts` | 690 | Already split into "verification logic" + "crypto FFI"; the logic side is convertible.                                                                                                                                                                  |
 
 **Subtotal: ~3.5k LOC of pure-or-nearly-pure code in the `tor` package.**
 
 #### Refactor into pure core + adapter (SPLIT)
 
-| File | LOC | Pure-core extraction |
-|---|---|---|
-| `util.ts` | 173 | `BytesReader` becomes `type Cursor = { bytes; offset }` + functions. `bufferFromUint` becomes pure (returns `ReadonlyArray<number>`). `shuffleInPlace` → `shuffle(arr, entropy)` taking pre-drawn random bytes. `Mutex`, `PromiseLatch` stay in adapter. |
-| `channel.ts` | 678 | Extract `channel-core.ts`: state record, `step(state, ChannelInput)`, frame parser, padding-timer scheduler (returns deadline rather than calling `setTimeout`), digest accumulator. Keep `channel-tls.ts` as the adapter that owns the `tls.TLSSocket` and EventEmitter. |
-| `circuit.ts` | ~1474 | Extract `circuit-core.ts`: hop key state, sendme windows, relay-cell tag/digest verification, EXTEND2 / RENDEZVOUS state machine. The async / `EventEmitter` / `ReadableStream` plumbing stays in `circuit-driver.ts`. The `Sha1Hash` and `Tor1Cipher` classes become functional state. |
-| `consensus-manager.ts` | 328 | Extract a pure "given current consensus + now → which actions" function. The fetch / scheduling stays out. |
-| `microdesc-manager.ts` | 488 | Same shape: pure "store + query + freshness check" functions; the actual fetch loop is the adapter. |
-| `directory-client.ts` | 713 | The HTTP request *shape* (URL + headers + signed-portion offsets) is pure data; the fetch is not. Extract the request-builder and the response-validator. |
-| `hidden-service.ts` | ~2337 | This is the biggest prize and the biggest job. The HSv3 client is a four-phase state machine (descriptor fetch → INTRODUCE1 → wait for RENDEZVOUS2 → handshake), every phase of which is pure given inputs. Split into `hs-client-core.ts` (state machine + crypto) and `hs-client-driver.ts` (circuit + timer wiring). |
-| `hidden-service-host.ts` | ~1885 | Same. ESTABLISH_INTRO, descriptor build/sign, INTRODUCE2 decrypt, hs-ntor server, rendezvous virtual hop are all pure. The IPT lifecycle / publish loop / rendezvous circuit dispatch is the adapter. |
+| File                     | LOC   | Pure-core extraction                                                                                                                                                                                                                                                                                                    |
+| ------------------------ | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `util.ts`                | 173   | `BytesReader` becomes `type Cursor = { bytes; offset }` + functions. `bufferFromUint` becomes pure (returns `ReadonlyArray<number>`). `shuffleInPlace` → `shuffle(arr, entropy)` taking pre-drawn random bytes. `Mutex`, `PromiseLatch` stay in adapter.                                                                |
+| `channel.ts`             | 678   | Extract `channel-core.ts`: state record, `step(state, ChannelInput)`, frame parser, padding-timer scheduler (returns deadline rather than calling `setTimeout`), digest accumulator. Keep `channel-tls.ts` as the adapter that owns the `tls.TLSSocket` and EventEmitter.                                               |
+| `circuit.ts`             | ~1474 | Extract `circuit-core.ts`: hop key state, sendme windows, relay-cell tag/digest verification, EXTEND2 / RENDEZVOUS state machine. The async / `EventEmitter` / `ReadableStream` plumbing stays in `circuit-driver.ts`. The `Sha1Hash` and `Tor1Cipher` classes become functional state.                                 |
+| `consensus-manager.ts`   | 328   | Extract a pure "given current consensus + now → which actions" function. The fetch / scheduling stays out.                                                                                                                                                                                                              |
+| `microdesc-manager.ts`   | 488   | Same shape: pure "store + query + freshness check" functions; the actual fetch loop is the adapter.                                                                                                                                                                                                                     |
+| `directory-client.ts`    | 713   | The HTTP request _shape_ (URL + headers + signed-portion offsets) is pure data; the fetch is not. Extract the request-builder and the response-validator.                                                                                                                                                               |
+| `hidden-service.ts`      | ~2337 | This is the biggest prize and the biggest job. The HSv3 client is a four-phase state machine (descriptor fetch → INTRODUCE1 → wait for RENDEZVOUS2 → handshake), every phase of which is pure given inputs. Split into `hs-client-core.ts` (state machine + crypto) and `hs-client-driver.ts` (circuit + timer wiring). |
+| `hidden-service-host.ts` | ~1885 | Same. ESTABLISH_INTRO, descriptor build/sign, INTRODUCE2 decrypt, hs-ntor server, rendezvous virtual hop are all pure. The IPT lifecycle / publish loop / rendezvous circuit dispatch is the adapter.                                                                                                                   |
 
 #### Stays out of Thales (SHELL)
 
@@ -204,16 +204,16 @@ all of `build-circuit/*` (orchestration over the above), `guard-nodes.ts`
 Snowflake is a pipeline of codecs (good) over async transports (bad). The
 codecs are all small and almost-pure today.
 
-| File | LOC | Verdict |
-|---|---|---|
-| `encapsulation.ts` | 215 | **PURE** — `encodeEncapsulatedData`, `dataPrefixForLength` already pure. `EncapsulationDecoder` class becomes `type DecoderState = { buf; off }` + `feed(state, chunk) -> { state, frames[] }`. |
-| `kcp/segment.ts` | 78 | **PURE** — codec; one `for` loop and one `out.push` rewrite to recursion. |
-| `kcp/byte-queue.ts` | 55 | SPLIT — the data-structure half (`push`/`readExactly`) is pure; `waitForAtLeast` is async and stays in adapter. |
-| `kcp/session.ts` | 371 | SPLIT — KCP ARQ is a textbook step-machine: `step(state, KcpInput) -> { state, packetsToSend[], dataReady[], retransmitDeadline? }`. Retransmit timers and UDP socket live in the adapter. |
-| `smux/protocol.ts` | 68 | **PURE** — frame codec. |
-| `smux/session.ts` | 438 | SPLIT — same shape as KCP: pure multiplexing state machine + Promise-based adapter. |
-| `smux/duplex.ts` | 90 | SHELL — extends `Duplex`. |
-| `ws-downlink.ts`, `tor-channel.ts`, `tor-chutney.ts`, `snowflake-ws-stack.ts` | | SHELL — WebSocket / fetch / EventEmitter glue. |
+| File                                                                          | LOC | Verdict                                                                                                                                                                                         |
+| ----------------------------------------------------------------------------- | --- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `encapsulation.ts`                                                            | 215 | **PURE** — `encodeEncapsulatedData`, `dataPrefixForLength` already pure. `EncapsulationDecoder` class becomes `type DecoderState = { buf; off }` + `feed(state, chunk) -> { state, frames[] }`. |
+| `kcp/segment.ts`                                                              | 78  | **PURE** — codec; one `for` loop and one `out.push` rewrite to recursion.                                                                                                                       |
+| `kcp/byte-queue.ts`                                                           | 55  | SPLIT — the data-structure half (`push`/`readExactly`) is pure; `waitForAtLeast` is async and stays in adapter.                                                                                 |
+| `kcp/session.ts`                                                              | 371 | SPLIT — KCP ARQ is a textbook step-machine: `step(state, KcpInput) -> { state, packetsToSend[], dataReady[], retransmitDeadline? }`. Retransmit timers and UDP socket live in the adapter.      |
+| `smux/protocol.ts`                                                            | 68  | **PURE** — frame codec.                                                                                                                                                                         |
+| `smux/session.ts`                                                             | 438 | SPLIT — same shape as KCP: pure multiplexing state machine + Promise-based adapter.                                                                                                             |
+| `smux/duplex.ts`                                                              | 90  | SHELL — extends `Duplex`.                                                                                                                                                                       |
+| `ws-downlink.ts`, `tor-channel.ts`, `tor-chutney.ts`, `snowflake-ws-stack.ts` |     | SHELL — WebSocket / fetch / EventEmitter glue.                                                                                                                                                  |
 
 **Yield:** ~1k LOC of codec + state-machine cores convertible.
 
@@ -222,10 +222,10 @@ codecs are all small and almost-pure today.
 Almost entirely platform glue: WebSocket shims, TLS shims wrapping
 `@reclaimprotocol/tls`, `localStorage` caches, `fetch`-based HTTP.
 
-| File | Verdict |
-|---|---|
-| `microdesc-cache.ts`, `consensus-cache.ts` | SPLIT — the freshness-check + serialization half is pure; the `localStorage` half is shell. |
-| `shims/*`, `client.ts`, `bootstrap.ts`, `http-fetch.ts`, `snowflake-channel.ts` | SHELL. |
+| File                                                                            | Verdict                                                                                     |
+| ------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------- |
+| `microdesc-cache.ts`, `consensus-cache.ts`                                      | SPLIT — the freshness-check + serialization half is pure; the `localStorage` half is shell. |
+| `shims/*`, `client.ts`, `bootstrap.ts`, `http-fetch.ts`, `snowflake-channel.ts` | SHELL.                                                                                      |
 
 **Yield:** small (~200 LOC). Not worth optimizing for.
 
@@ -233,11 +233,11 @@ Almost entirely platform glue: WebSocket shims, TLS shims wrapping
 
 After the refactor, the rough line-count breakdown becomes:
 
-| Category | LOC | What it is |
-|---|---|---|
-| Thales-eligible (PURE + extracted cores) | ~6–8k | Codecs, parsers, validators, key-derivation, protocol step-functions |
-| Thales-eligible declared FFI (Lean `extern`) | ~50 | Crypto primitives (`sha256`, `x25519`, `ed25519Verify`, etc.), `Date.now`, `randomBytes` |
-| TS-only adapter shell | ~14k | Sockets, timers, EventEmitter wiring, async drivers, orchestration |
+| Category                                     | LOC   | What it is                                                                               |
+| -------------------------------------------- | ----- | ---------------------------------------------------------------------------------------- |
+| Thales-eligible (PURE + extracted cores)     | ~6–8k | Codecs, parsers, validators, key-derivation, protocol step-functions                     |
+| Thales-eligible declared FFI (Lean `extern`) | ~50   | Crypto primitives (`sha256`, `x25519`, `ed25519Verify`, etc.), `Date.now`, `randomBytes` |
+| TS-only adapter shell                        | ~14k  | Sockets, timers, EventEmitter wiring, async drivers, orchestration                       |
 
 So **roughly a third of the codebase** can plausibly land inside Thales,
 concentrated where the security-critical correctness lives: cell parsing,
@@ -252,16 +252,18 @@ before committing.
 ### 6.1 Streaming hashes (`Sha1Hash`, `Sha3_256Hash`)
 
 Tor relay-cell digest computation accumulates bytes incrementally and
-*forks* the hash mid-stream (`copy()`) to produce a digest while continuing
+_forks_ the hash mid-stream (`copy()`) to produce a digest while continuing
 to feed bytes. Today this is implemented as a class that stores all chunks
 and re-hashes on `digest()`.
 
 Functional shape:
+
 ```ts
 type ShaState = { acc: ReadonlyArray<number> };
 function update(s: ShaState, data: ReadonlyArray<number>): ShaState;
-function digest(s: ShaState): ReadonlyArray<number>;  // calls FFI sha
+function digest(s: ShaState): ReadonlyArray<number>; // calls FFI sha
 ```
+
 This is fine. The `copy()` operation is free in the immutable model — pass
 the same state value twice. **Easy.**
 
@@ -289,9 +291,10 @@ returns "produce output" / "signal high-water mark" decisions.
 
 TH0010 forbids `for`/`while`. Many of the parsers use `for-of` over
 `parts.split(',')` or similar. The canonical Thales replacement is `.map`
-+ `.filter` + `.reduce`. For multi-output parsing (split into `accepted`
-*and* rejected halves) we either fold over a single accumulator
-`{ accepted: T[], rejected: U[] }` or split into two passes. Both work.
+
+- `.filter` + `.reduce`. For multi-output parsing (split into `accepted`
+  _and_ rejected halves) we either fold over a single accumulator
+  `{ accepted: T[], rejected: U[] }` or split into two passes. Both work.
 
 For genuine variable-length descents (cell parsing where each step decides
 how much to consume next), structural recursion on the byte cursor with
@@ -366,20 +369,20 @@ verification path is verified.
 This is where the work gets real. Each item below is "extract pure core,
 leave behaviour identical via the adapter":
 
-16. `channel.ts`           → `channel-core.ts` + `channel-tls.ts`
-17. `circuit.ts`           → `circuit-core.ts` + `circuit-driver.ts`
+16. `channel.ts` → `channel-core.ts` + `channel-tls.ts`
+17. `circuit.ts` → `circuit-core.ts` + `circuit-driver.ts`
 18. `snowflake/kcp/session.ts` → `kcp-core.ts` + `kcp-driver.ts`
 19. `snowflake/smux/session.ts`→ `smux-core.ts` + `smux-driver.ts`
 20. `consensus-manager.ts` → core + adapter
 21. `microdesc-manager.ts` → core + adapter
-22. `directory-client.ts`  → request-builder/validator + fetch driver
+22. `directory-client.ts` → request-builder/validator + fetch driver
 
 Each is a multi-PR refactor; do them one at a time so the existing test
 suite catches regressions on each split.
 
 ### Phase 4 — the hidden-service stack
 
-23. `hidden-service.ts`      → `hs-client-core.ts` + driver
+23. `hidden-service.ts` → `hs-client-core.ts` + driver
 24. `hidden-service-host.ts` → `hs-host-core.ts` + driver
 
 These are the largest files and the most security-critical; they go last
@@ -404,14 +407,14 @@ The following are **not** worth trying to coerce into Thales:
   They sit at the bottom of our stack as opaque byte channels.
 - **Socket I/O** (`net.Socket`, `WebSocket`, `fetch`). Effects.
 - **Timer-driven liveness** (netflow padding, KCP retransmit, circuit-build
-  timeouts, IPT rotation). The *decision* of when to fire is pure
-  (`step` returns `armTimer { deadlineMs }`); the *firing* is shell.
+  timeouts, IPT rotation). The _decision_ of when to fire is pure
+  (`step` returns `armTimer { deadlineMs }`); the _firing_ is shell.
 - **The `EventEmitter`-shaped public API.** The user-facing `Circuit`,
   `CircuitStream`, `SocksProxyServer`, `HiddenServiceHost`, `TorClient`
   classes are part of the package's contract. We keep them; they delegate
   to a Thales-verified core.
 - **Tests** (`*.spec.ts`, `*.test.ts`). Vitest depends on async/Promise.
-  We can have *additional* Thales-side conformance tests, but the existing
+  We can have _additional_ Thales-side conformance tests, but the existing
   suite stays as-is.
 
 ## 9. Open questions to resolve before Phase 1
