@@ -1,4 +1,5 @@
 import test from 'ava';
+import { aes256CtrXor } from 'tor-crypto';
 import {
   parseOnionV3Address,
   isOnionAddress,
@@ -15,8 +16,12 @@ import {
   hsBuildHsIndex,
   hsBuildHsdirIndex,
   isHsDebugEnabled,
+  buildIntroduce1Payload,
+  hsNtorDeriveEncAndMac,
   type HsdirCandidate,
 } from './hidden-service.ts';
+import { LinkSpecifierTypes } from './messaging.ts';
+import type { PeerInfo } from './circuit.ts';
 
 // Facebook's v3 onion address (well-known, used for testing)
 const FACEBOOK_ONION = 'facebookwkhpilnemxj7asaniu7vnjjbiltxjqhye3mhbshg7kx5tfyd';
@@ -752,4 +757,62 @@ test('isHsDebugEnabled: honors the TOR_TS_HS_DEBUG env var', (t) => {
     if (prevEnv === undefined) delete process.env.TOR_TS_HS_DEBUG;
     else process.env.TOR_TS_HS_DEBUG = prevEnv;
   }
+});
+
+// =========================================================================
+// INTRODUCE1 proof-of-work extension serialization
+// =========================================================================
+// Pins the exact wire bytes of the PoW extension (proposal 327): the service
+// parses EXT_FIELD_TYPE=2 || EXT_FIELD_LEN || POW_VERSION(1) || POW_NONCE(16) ||
+// POW_EFFORT(4, big-endian) || POW_SEED(4) || POW_SOLUTION(16). A regression in
+// field order/size/endianness would silently break every PoW-enabled intro and
+// surface only as a rendezvous timeout, so assert the decrypted plaintext here.
+test('buildIntroduce1Payload: serializes the PoW extension per spec', async (t) => {
+  const proofOfWork = {
+    scheme: 1,
+    nonce: Buffer.from('0123456789abcdef0123456789abcdef', 'hex'),
+    effort: 1000000, // 0x000f4240
+    seed: Buffer.from('deadbeef', 'hex'),
+    solution: Buffer.from('00112233445566778899aabbccddeeff', 'hex'),
+  };
+  const rendezvousPoint: PeerInfo = {
+    onionKey: Buffer.alloc(32, 7),
+    rsaIdDigest: Buffer.alloc(20, 3),
+    linkSpecifiers: [{ type: LinkSpecifierTypes.LegacyId, data: Buffer.alloc(20, 3) }],
+  };
+
+  const { payload, state } = await buildIntroduce1Payload({
+    introAuthKeyEd25519: Buffer.alloc(32, 1),
+    serviceEncKey: Buffer.alloc(32, 2),
+    N_hs_subcred: Buffer.alloc(32, 4),
+    rendezvousCookie: Buffer.alloc(20, 9),
+    rendezvousPoint,
+    proofOfWork,
+  });
+
+  // payload = header(56) | CLIENT_PK/X(32) | ciphertext | MAC(32)
+  const headerLen = 20 + 1 + 2 + 32 + 1;
+  const ciphertext = payload.subarray(headerLen + 32, payload.length - 32);
+
+  // Re-derive ENC_KEY from the handshake state and decrypt the ENCRYPTED section.
+  const { ENC_KEY } = hsNtorDeriveEncAndMac(state);
+  const plain = Buffer.from(await aes256CtrXor(ENC_KEY, Buffer.alloc(16, 0), ciphertext));
+
+  let o = 0;
+  o += 20; // RENDEZVOUS_COOKIE
+  const nExt = plain[o]!;
+  o += 1;
+  t.is(nExt, 1, 'exactly one extension (PoW)');
+  const extType = plain[o]!;
+  o += 1;
+  const extLen = plain[o]!;
+  o += 1;
+  t.is(extType, 0x02, 'EXT_FIELD_TYPE = PROOF_OF_WORK');
+  t.is(extLen, 41, 'EXT_FIELD_LEN = 1+16+4+4+16');
+  const body = plain.subarray(o, o + extLen);
+  t.is(body[0], 1, 'POW_VERSION = 1');
+  t.deepEqual(body.subarray(1, 17), proofOfWork.nonce, 'POW_NONCE');
+  t.is(body.readUInt32BE(17), proofOfWork.effort, 'POW_EFFORT (big-endian)');
+  t.deepEqual(body.subarray(21, 25), proofOfWork.seed, 'POW_SEED (4-byte seed head)');
+  t.deepEqual(body.subarray(25, 41), proofOfWork.solution, 'POW_SOLUTION');
 });

@@ -21,6 +21,7 @@ import {
   solveHsPow,
   verifyHsPow,
   randomBytes,
+  blake2b,
 } from 'tor-crypto';
 
 // Only run the full Equi-X solve (~a few seconds of BigInt work) under Node, so
@@ -191,6 +192,36 @@ describe('hspow client (C Tor test vectors)', () => {
           solution: sol!.solution,
         })
       ).toBe(true);
+    },
+    30_000
+  );
+
+  it.runIf(NODE)(
+    'rejects a structurally-valid Equi-X solution that misses the effort target',
+    () => {
+      // Distinct from the corrupted-nonce case (which fails at the Equi-X stage):
+      // here the solution IS a valid Equi-X solution (equixVerify == OK) but its
+      // R*E exceeds UINT32_MAX, so the effort check must reject it. Use the max
+      // effort so essentially every solution for the nonce misses the target.
+      const seed = Buffer.from('aa'.repeat(32), 'hex');
+      const blindedId = Buffer.from('11'.repeat(32), 'hex');
+      const nonce = Buffer.from('55'.repeat(16), 'hex');
+      const effort = 0xffffffff;
+      const ch = challenge('11'.repeat(32), 'aa'.repeat(32), '55'.repeat(16), effort);
+      const prog = hashxMake(ch)!;
+      let found = false;
+      for (const s of equixSolve(prog)) {
+        if (equixVerify(prog, s) !== EquixResult.OK) continue;
+        const solBytes = packEquixSolution(s);
+        const R = BigInt(blake2b(Buffer.concat([ch, solBytes]), { dkLen: 4 }).readUInt32BE(0));
+        if (R * BigInt(effort) <= 0xffffffffn) continue; // this one happens to meet the target
+        // Valid Equi-X solution, but effort target missed -> verifyHsPow must reject.
+        expect(equixVerify(prog, s)).toBe(EquixResult.OK);
+        expect(verifyHsPow({ seed, blindedId, nonce, effort, solution: solBytes })).toBe(false);
+        found = true;
+        break;
+      }
+      expect(found).toBe(true);
     },
     30_000
   );

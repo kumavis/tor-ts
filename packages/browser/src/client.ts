@@ -138,12 +138,14 @@ export async function makeBrowserTorClient(
 ): Promise<BrowserTorClientResult> {
   const { onStatus, onMicrodescProgress } = options;
 
-  // Turn on verbose HS diagnostics for the whole process when requested. The
-  // core HS code reads this flag at call time via isHsDebugEnabled(), so the
-  // extra `dlog` lines then flow through the `log` callback below (and thus
-  // out through `onStatus`) without any other wiring.
-  if (options.debug) {
-    (globalThis as { __TOR_TS_HS_DEBUG__?: boolean }).__TOR_TS_HS_DEBUG__ = true;
+  // Turn on/off verbose HS diagnostics when the option is given. The core HS
+  // code reads this flag at call time via isHsDebugEnabled(), so the extra
+  // `dlog` lines then flow through the `log` callback below (and thus out
+  // through `onStatus`). Set it symmetrically — an explicit `debug: false` must
+  // turn it back off (the flag is process-global), and omitting `debug` leaves
+  // any existing setting (e.g. the TOR_TS_HS_DEBUG env var) untouched.
+  if (options.debug !== undefined) {
+    (globalThis as { __TOR_TS_HS_DEBUG__?: boolean }).__TOR_TS_HS_DEBUG__ = options.debug;
   }
 
   const log = (msg: string) => {
