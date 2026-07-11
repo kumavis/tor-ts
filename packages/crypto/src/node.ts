@@ -21,6 +21,10 @@ export * from './aes.ts';
 // platforms; consumed by the `tor` package's hidden-service client + host).
 export * from './hs-crypto.ts';
 
+// Re-export the hidden-service proof-of-work primitives (HashX + Equi-X +
+// hspow client, proposal 327). Pure computation, identical on both platforms.
+export * from './pow/index.ts';
+
 // Import sha1 for use in computeRsaKeyFingerprint
 import { sha1 } from './hashes.ts';
 

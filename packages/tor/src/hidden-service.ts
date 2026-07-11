@@ -13,6 +13,8 @@ import {
   dMac,
   bytesToBigIntLE,
   createSha3_256Hash,
+  // rend-spec-v3 hidden-service proof-of-work (proposal 327 / hspow-spec):
+  solveHsPow,
 } from 'tor-crypto';
 import { BytesReader, shuffleInPlace } from './util.ts';
 import { type LinkSpecifier, LinkSpecifierTypes, RELAY_PAYLOAD_LEN } from './messaging.ts';
@@ -303,6 +305,25 @@ export interface HsConnectionOptions {
    * If provided, descriptors will be cached and reused across connection attempts.
    */
   descriptorCache?: HsDescriptorCache;
+  /**
+   * Disable the proof-of-work client. When a service advertises `pow-params`
+   * with a non-zero suggested effort, the client solves an Equi-X puzzle
+   * (proposal 327) and attaches it to INTRODUCE1. Set this to skip that — the
+   * introduction is then sent without a PoW token (likely dropped by a service
+   * actively enforcing PoW).
+   */
+  disablePow?: boolean;
+  /**
+   * Upper bound on the PoW effort to attempt, regardless of the service's
+   * suggested effort. Solving cost scales roughly linearly with effort, so this
+   * caps worst-case CPU time. Default: the descriptor's suggested effort.
+   */
+  maxPowEffort?: number;
+  /**
+   * Wall-clock budget for solving the PoW, in ms (default 60000). If exceeded,
+   * the introduction is sent without a PoW token rather than blocking forever.
+   */
+  powTimeoutMs?: number;
 }
 
 /**
@@ -1983,6 +2004,9 @@ export async function connectToHiddenServiceCore(
     randomBytes: randomBytesOpt = randomBytes,
     iptExperienceTracker,
     descriptorCache,
+    disablePow = false,
+    maxPowEffort,
+    powTimeoutMs = 60_000,
   } = options;
   const dlog = makeHsDebugLog(log);
 
@@ -2178,24 +2202,26 @@ export async function connectToHiddenServiceCore(
 
   log(`Found ${descriptor.introPoints.length} introduction point(s)`);
 
-  // Proof-of-work gate (proposal 327 / rend-spec-v3 §3.4.1). When a service is
-  // under DoS defense it advertises `pow-params` with a non-zero suggested
-  // effort and its intro points prioritise the pending-rendezvous queue by the
-  // client's PoW effort. We parse pow-params but do NOT yet solve the Equi-X
-  // puzzle, so our INTRODUCE1 carries no PoW token. Against a service that is
-  // actively enforcing PoW this means the introduction is deprioritised and,
-  // under real load, dropped — surfacing later as a RENDEZVOUS2 timeout. This
-  // is the most likely reason a service reachable in Tor Browser (which solves
-  // the puzzle) fails here. Surface it loudly so it's diagnosable rather than a
-  // silent timeout. See https://spec.torproject.org/hspow-spec.
-  if (descriptor.powParams && descriptor.powParams.suggestedEffort > 0) {
+  // Proof-of-work gate (proposal 327 / hspow-spec v1). When a service is under
+  // DoS defense it advertises `pow-params` with a non-zero suggested effort and
+  // its intro points prioritise the pending-rendezvous queue by the client's
+  // PoW effort. We solve the Equi-X puzzle (below, per intro attempt) and attach
+  // it to INTRODUCE1. A request arriving with no PoW token — or too little
+  // effort — is deprioritised and, under real load, dropped, surfacing as a
+  // RENDEZVOUS2 timeout. See https://spec.torproject.org/hspow-spec.
+  const powRequired =
+    !disablePow && descriptor.powParams !== undefined && descriptor.powParams.suggestedEffort > 0;
+  if (descriptor.powParams && descriptor.powParams.suggestedEffort > 0 && disablePow) {
     log(
-      `WARNING: hidden service advertises proof-of-work (scheme=${descriptor.powParams.scheme}, ` +
-        `suggested-effort=${descriptor.powParams.suggestedEffort}). tor-ts does not implement the ` +
-        `Equi-X PoW client yet, so INTRODUCE1 will be sent without a PoW token. If the service is ` +
-        `enforcing PoW under load the introduction may be dropped, causing a rendezvous timeout. ` +
-        `This is a known limitation (services under active DoS protection connect in Tor Browser ` +
-        `but not here).`
+      `Hidden service requests proof-of-work (suggested-effort=` +
+        `${descriptor.powParams.suggestedEffort}) but PoW is disabled; sending introduction ` +
+        `without a PoW token (may be dropped by a service enforcing PoW).`
+    );
+  } else if (powRequired) {
+    log(
+      `Hidden service requests proof-of-work (scheme=${descriptor.powParams!.scheme}, ` +
+        `suggested-effort=${descriptor.powParams!.suggestedEffort}); will solve an Equi-X puzzle ` +
+        `for each introduction attempt.`
     );
   }
 
@@ -2264,6 +2290,40 @@ export async function connectToHiddenServiceCore(
       const introPeer = peerInfoFromIntroPoint(intro);
       introCircuit = await buildCircuit(introPeer, { avoid: [rendezvousPoint] });
 
+      // Solve proof-of-work for this attempt (fresh nonce each time, so a retry
+      // to another intro point is never rejected as a replay by the service).
+      let proofOfWork: BuildIntroduce1Params['proofOfWork'] | undefined;
+      if (powRequired && descriptor.powParams) {
+        const effort =
+          maxPowEffort !== undefined
+            ? Math.min(descriptor.powParams.suggestedEffort, maxPowEffort)
+            : descriptor.powParams.suggestedEffort;
+        const powStart = Date.now();
+        log(`Solving proof-of-work (effort=${effort})...`);
+        const solved = await solveHsPow({
+          seed: descriptor.powParams.seed,
+          blindedId: blindedPublicKey,
+          effort,
+          randomBytes: randomBytesOpt,
+          timeoutMs: powTimeoutMs,
+        });
+        if (solved) {
+          log(`Proof-of-work solved in ${Date.now() - powStart}ms (effort=${solved.effort})`);
+          proofOfWork = {
+            scheme: 1, // v1 (Equi-X)
+            nonce: solved.nonce,
+            effort: solved.effort,
+            seed: solved.seedHead,
+            solution: solved.solution,
+          };
+        } else {
+          log(
+            `Proof-of-work not solved within ${powTimeoutMs}ms; sending introduction without a ` +
+              `PoW token (may be dropped by a service enforcing PoW).`
+          );
+        }
+      }
+
       log(`Sending introduction (attempt ${attempt + 1}/${maxIntroAttempts})...`);
       const { payload: introducePayload, state } = await buildIntroduce1Payload({
         introAuthKeyEd25519: intro.authKeyEd25519,
@@ -2271,6 +2331,7 @@ export async function connectToHiddenServiceCore(
         N_hs_subcred: subcred,
         rendezvousCookie,
         rendezvousPoint,
+        ...(proofOfWork && { proofOfWork }),
       });
 
       await introCircuit.sendRelayMessage({
