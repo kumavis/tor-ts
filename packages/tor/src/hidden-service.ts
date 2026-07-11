@@ -36,6 +36,15 @@ const S_KEY_LEN = 32; // AES-256 key
 const S_IV_LEN = 16; // AES block/iv length
 
 /**
+ * Default ceiling on the proof-of-work effort the client will attempt, even if
+ * a (signed) descriptor suggests more. Solving cost scales with effort, so an
+ * unbounded suggested-effort from a hostile service could peg the client's CPU
+ * for minutes. Mirrors C Tor's CLIENT_MAX_POW_EFFORT (hs_client.c). Callers can
+ * raise or lower it via HsConnectionOptions.maxPowEffort.
+ */
+const CLIENT_MAX_POW_EFFORT = 10000;
+
+/**
  * Target length for the INTRODUCE1 encrypted section (CLIENT_PK + ciphertext + MAC) per the spec.
  * The spec recommends 490 octets for v3; the relay cell payload limit is RELAY_PAYLOAD_LEN (498),
  * so we cap the encrypted section at (498 - header length) so the full INTRODUCE1 fits in one cell.
@@ -316,7 +325,8 @@ export interface HsConnectionOptions {
   /**
    * Upper bound on the PoW effort to attempt, regardless of the service's
    * suggested effort. Solving cost scales roughly linearly with effort, so this
-   * caps worst-case CPU time. Default: the descriptor's suggested effort.
+   * caps worst-case CPU time. Defaults to CLIENT_MAX_POW_EFFORT (10000, matching
+   * C Tor) so a hostile service's suggested effort can't peg the client's CPU.
    */
   maxPowEffort?: number;
   /**
@@ -2209,12 +2219,23 @@ export async function connectToHiddenServiceCore(
   // it to INTRODUCE1. A request arriving with no PoW token — or too little
   // effort — is deprioritised and, under real load, dropped, surfacing as a
   // RENDEZVOUS2 timeout. See https://spec.torproject.org/hspow-spec.
-  const powRequired =
-    !disablePow && descriptor.powParams !== undefined && descriptor.powParams.suggestedEffort > 0;
-  if (descriptor.powParams && descriptor.powParams.suggestedEffort > 0 && disablePow) {
+  const powAdvertised =
+    descriptor.powParams !== undefined && descriptor.powParams.suggestedEffort > 0;
+  // Only the v1 (Equi-X + Blake2b) scheme is implemented. Matching C Tor
+  // (decode_pow_params skips any non-"v1" type), we ignore unknown/future
+  // schemes rather than sending a bogus POW_SCHEME=1 token the service can't
+  // validate while burning solve time.
+  const powSupported = powAdvertised && descriptor.powParams!.scheme === 'v1';
+  const powRequired = !disablePow && powSupported;
+  if (powAdvertised && !powSupported) {
+    log(
+      `Hidden service requests proof-of-work with unsupported scheme ` +
+        `"${descriptor.powParams!.scheme}"; sending introduction without a PoW token.`
+    );
+  } else if (powAdvertised && disablePow) {
     log(
       `Hidden service requests proof-of-work (suggested-effort=` +
-        `${descriptor.powParams.suggestedEffort}) but PoW is disabled; sending introduction ` +
+        `${descriptor.powParams!.suggestedEffort}) but PoW is disabled; sending introduction ` +
         `without a PoW token (may be dropped by a service enforcing PoW).`
     );
   } else if (powRequired) {
@@ -2265,14 +2286,23 @@ export async function connectToHiddenServiceCore(
   // The observer helper also runs from here so "0 cells received" in the
   // error path means the cell truly never arrived, not that we missed it.
   const rendezvousObserver = rendCircuit.observeRelayTraffic();
-  const rendezvous2Promise = waitForRelayCommand(
-    rendCircuit,
-    RelayCell.RENDEZVOUS2,
-    rendezvousTimeoutMs
-  );
-  // Swallow any unhandled rejection on the promise until we await it below;
-  // the final try/catch in step 7 is what surfaces the failure.
-  rendezvous2Promise.catch(() => {});
+  // Capture RENDEZVOUS2 the instant it arrives (it can beat us on fast
+  // networks), but do NOT start the rendezvous timeout clock here: the
+  // per-attempt proof-of-work solve below can take many seconds, and counting
+  // that against the rendezvous budget would cause spurious timeouts precisely
+  // when PoW is enabled. The timeout is started in step 7, after INTRODUCE1 is
+  // actually sent, so the budget is measured from send time.
+  type RelayEvt = { streamId: number; relayCommand: number; data: Buffer };
+  let rendezvous2Resolve: ((evt: RelayEvt) => void) | undefined;
+  const rendezvous2Latch = new Promise<RelayEvt>((resolve) => {
+    rendezvous2Resolve = resolve;
+  });
+  const onRendezvous2 = (evt: RelayEvt): void => {
+    if (evt.relayCommand !== RelayCell.RENDEZVOUS2) return;
+    rendCircuit.off('relay', onRendezvous2);
+    rendezvous2Resolve?.(evt);
+  };
+  rendCircuit.on('relay', onRendezvous2);
 
   // Step 6: Try intro points until one succeeds
   const introErrors: Error[] = [];
@@ -2294,10 +2324,10 @@ export async function connectToHiddenServiceCore(
       // to another intro point is never rejected as a replay by the service).
       let proofOfWork: BuildIntroduce1Params['proofOfWork'] | undefined;
       if (powRequired && descriptor.powParams) {
-        const effort =
-          maxPowEffort !== undefined
-            ? Math.min(descriptor.powParams.suggestedEffort, maxPowEffort)
-            : descriptor.powParams.suggestedEffort;
+        // Clamp the (signed but service-controlled) suggested effort to a
+        // ceiling so a hostile service can't force unbounded client CPU.
+        const effortCap = maxPowEffort ?? CLIENT_MAX_POW_EFFORT;
+        const effort = Math.min(descriptor.powParams.suggestedEffort, effortCap);
         const powStart = Date.now();
         log(`Solving proof-of-work (effort=${effort})...`);
         const solved = await solveHsPow({
@@ -2406,9 +2436,22 @@ export async function connectToHiddenServiceCore(
     // Use a dedicated rendezvous timeout (default 60s) rather than the overall timeout.
     // If the hidden service received our introduction, it should respond within this window.
     log(`Waiting for rendezvous completion (timeout: ${rendezvousTimeoutMs}ms)...`);
-    let r2: { streamId: number; relayCommand: number; data: Buffer };
+    let r2: RelayEvt;
+    // Start the rendezvous timeout HERE (after INTRODUCE1 was sent), so time
+    // spent solving proof-of-work is not charged against the rendezvous budget.
+    // The listener was already armed (step 6a) so an ultra-fast reply that
+    // arrived during solving is captured in rendezvous2Latch and returns at once.
+    let rendezvousTimer: ReturnType<typeof setTimeout> | undefined;
     try {
-      r2 = await rendezvous2Promise;
+      r2 = await Promise.race([
+        rendezvous2Latch,
+        new Promise<never>((_resolve, reject) => {
+          rendezvousTimer = setTimeout(
+            () => reject(new Error(`Timed out waiting for relayCommand=${RelayCell.RENDEZVOUS2}`)),
+            rendezvousTimeoutMs
+          );
+        }),
+      ]);
     } catch (err) {
       const observed = rendezvousObserver.snapshot();
       rendCircuit.destroy();
@@ -2421,6 +2464,8 @@ export async function connectToHiddenServiceCore(
           `${observed.totalCells} (${observed.commandSummary || 'none'}). ` +
           `Original error: ${msg}`
       );
+    } finally {
+      if (rendezvousTimer) clearTimeout(rendezvousTimer);
     }
     if (r2.data.length < 64) {
       rendCircuit.destroy();
@@ -2437,6 +2482,7 @@ export async function connectToHiddenServiceCore(
 
     return { circuit: rendCircuit, descriptor };
   } finally {
+    rendCircuit.off('relay', onRendezvous2);
     rendezvousObserver.detach();
   }
 }
