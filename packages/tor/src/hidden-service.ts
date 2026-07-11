@@ -55,15 +55,32 @@ const INTRO1_TARGET_LEN = Math.min(
  * for the case where the caller *did* wire a log sink and we want to keep
  * routine flows quiet there too.
  */
-const HS_DEBUG_ENABLED = ((): boolean => {
+/**
+ * Whether verbose HS diagnostics are currently enabled.
+ *
+ * Evaluated per-call (not cached at module load) so it can be toggled at
+ * runtime. This matters in the browser / service-worker, where there is no
+ * `process.env`: the browser Tor client sets `globalThis.__TOR_TS_HS_DEBUG__`
+ * when created with `{ debug: true }`, which turns these logs on without a
+ * rebuild.
+ *
+ * Enabled when either:
+ *   - Node:    `process.env.TOR_TS_HS_DEBUG` is `'1'` or `'true'`, or
+ *   - Browser: `globalThis.__TOR_TS_HS_DEBUG__ === true`.
+ */
+export function isHsDebugEnabled(): boolean {
+  const g = globalThis as { __TOR_TS_HS_DEBUG__?: boolean };
+  if (g.__TOR_TS_HS_DEBUG__ === true) return true;
   const v =
     typeof process !== 'undefined' && process?.env ? process.env.TOR_TS_HS_DEBUG : undefined;
   if (v === undefined) return false;
   return v === '1' || v.toLowerCase() === 'true';
-})();
+}
 
 function makeHsDebugLog(log: (msg: string) => void): (msg: string) => void {
-  return HS_DEBUG_ENABLED ? log : () => {};
+  return (msg: string) => {
+    if (isHsDebugEnabled()) log(msg);
+  };
 }
 
 // ============================================================================
@@ -457,7 +474,13 @@ export function computeTimePeriodInfo(
     throw new Error('Consensus missing valid-after; cannot compute HS time period');
   }
 
-  const hsdirInterval = consensus.params['hsdir-interval'] ?? 1440;
+  // Consensus params use underscores (`hsdir_interval`), matching C Tor's
+  // networkstatus param names. An earlier hyphenated lookup (`hsdir-interval`)
+  // always missed and silently fell back to 1440 — harmless while authorities
+  // never voted a non-default value, but a latent correctness bug that would
+  // pick the wrong time period (and thus the wrong blinded key / HSDirs) the
+  // moment they did.
+  const hsdirInterval = consensus.params['hsdir_interval'] ?? 1440;
 
   // Use CURRENT time for period calculation, but consensus for voting interval derivation
   const timeArgs: Parameters<typeof computeTimePeriod>[0] = { validAfter: currentTime };
@@ -467,10 +490,10 @@ export function computeTimePeriodInfo(
     timeArgs.freshUntil = new Date(currentTime.getTime() + votingIntervalMs);
   }
 
-  // On mainnet, hsdir-interval == derived (votingIntervalSec * 24)/60 because the voting interval is 1h.
-  // On testing networks (including Chutney), Tor ignores hsdir-interval and derives the period length from
+  // On mainnet, hsdir_interval == derived (votingIntervalSec * 24)/60 because the voting interval is 1h.
+  // On testing networks (including Chutney), Tor ignores hsdir_interval and derives the period length from
   // the voting interval, which is typically much shorter than 1h. To match Tor behavior across both cases,
-  // only pass hsdir-interval when it matches the derived value; otherwise let computeTimePeriod derive it.
+  // only pass hsdir_interval when it matches the derived value; otherwise let computeTimePeriod derive it.
   const votingIntervalSec = consensus.freshUntil
     ? Math.floor((consensus.freshUntil.getTime() - consensus.validAfter.getTime()) / 1000)
     : 3600;
@@ -2154,6 +2177,27 @@ export async function connectToHiddenServiceCore(
   const rendezvousPoint = await rendezvousPointPromise;
 
   log(`Found ${descriptor.introPoints.length} introduction point(s)`);
+
+  // Proof-of-work gate (proposal 327 / rend-spec-v3 §3.4.1). When a service is
+  // under DoS defense it advertises `pow-params` with a non-zero suggested
+  // effort and its intro points prioritise the pending-rendezvous queue by the
+  // client's PoW effort. We parse pow-params but do NOT yet solve the Equi-X
+  // puzzle, so our INTRODUCE1 carries no PoW token. Against a service that is
+  // actively enforcing PoW this means the introduction is deprioritised and,
+  // under real load, dropped — surfacing later as a RENDEZVOUS2 timeout. This
+  // is the most likely reason a service reachable in Tor Browser (which solves
+  // the puzzle) fails here. Surface it loudly so it's diagnosable rather than a
+  // silent timeout. See https://spec.torproject.org/hspow-spec.
+  if (descriptor.powParams && descriptor.powParams.suggestedEffort > 0) {
+    log(
+      `WARNING: hidden service advertises proof-of-work (scheme=${descriptor.powParams.scheme}, ` +
+        `suggested-effort=${descriptor.powParams.suggestedEffort}). tor-ts does not implement the ` +
+        `Equi-X PoW client yet, so INTRODUCE1 will be sent without a PoW token. If the service is ` +
+        `enforcing PoW under load the introduction may be dropped, causing a rendezvous timeout. ` +
+        `This is a known limitation (services under active DoS protection connect in Tor Browser ` +
+        `but not here).`
+    );
+  }
 
   // Step 4: Order intro points (by experience if available, otherwise shuffled)
   let introPoints = shuffleInPlace([...descriptor.introPoints]);

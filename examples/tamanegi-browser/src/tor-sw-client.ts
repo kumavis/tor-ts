@@ -18,6 +18,7 @@ export class TorServiceWorkerClient {
     string,
     { resolve: (r: FetchResult) => void; reject: (e: Error) => void }
   >();
+  private pendingLogs: Array<(entries: string[]) => void> = [];
   private messageHandler: (e: MessageEvent) => void;
 
   constructor(sw: ServiceWorker | null) {
@@ -81,13 +82,41 @@ export class TorServiceWorkerClient {
       case 'state':
         // Optional: could expose state for UI
         break;
+      case 'logs': {
+        const waiters = this.pendingLogs.splice(0);
+        for (const resolve of waiters) {
+          resolve(msg.entries);
+        }
+        break;
+      }
       default:
         break;
     }
   }
 
-  connect(options?: { relayUrl?: string; skipConsensusCache?: boolean }): void {
+  connect(options?: { relayUrl?: string; skipConsensusCache?: boolean; debug?: boolean }): void {
     this.post({ type: 'connect', ...(options !== undefined ? { options } : {}) });
+  }
+
+  /**
+   * Pull the full captured debug-log buffer from the service worker. Resolves
+   * with an empty array if the SW never responds within the timeout (e.g. no
+   * active controller).
+   */
+  getLogs(timeoutMs = 5000): Promise<string[]> {
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        const idx = this.pendingLogs.indexOf(settle);
+        if (idx !== -1) this.pendingLogs.splice(idx, 1);
+        resolve([]);
+      }, timeoutMs);
+      const settle = (entries: string[]): void => {
+        clearTimeout(timer);
+        resolve(entries);
+      };
+      this.pendingLogs.push(settle);
+      this.post({ type: 'getLogs' });
+    });
   }
 
   fetch(url: string, opts?: { timeout?: number }): Promise<FetchResult> {
@@ -116,6 +145,9 @@ export class TorServiceWorkerClient {
       reject(new Error('Tor client destroyed'));
     }
     this.pendingFetch.clear();
+    for (const resolve of this.pendingLogs.splice(0)) {
+      resolve([]);
+    }
     this.controller = null;
   }
 

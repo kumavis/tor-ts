@@ -841,12 +841,23 @@ export class Circuit extends EventEmitter {
         stream.connectionLatch.resolve();
         return;
       }
+      // Hidden-service relay commands are handled by callers (client or host)
+      // listening on the circuit's 'relay' event, which is emitted above before
+      // this switch runs. Enumerating them here as explicit no-ops keeps the
+      // `default` branch for genuinely unknown commands — otherwise a hosting
+      // circuit receiving INTRODUCE2 / RENDEZVOUS1 / a rendezvous-side BEGIN
+      // throws "unknown relay message type", which is caught and logged but
+      // reads like a real failure in the logs.
+      case RelayCell.BEGIN: // service opens app streams on the rendezvous circuit
+      case RelayCell.ESTABLISH_INTRO:
+      case RelayCell.ESTABLISH_RENDEZVOUS:
+      case RelayCell.INTRODUCE1:
+      case RelayCell.INTRODUCE2:
+      case RelayCell.RENDEZVOUS1:
       case RelayCell.RENDEZVOUS_ESTABLISHED:
       case RelayCell.RENDEZVOUS2:
       case RelayCell.INTRODUCE_ACK:
       case RelayCell.INTRO_ESTABLISHED: {
-        // Hidden service relay commands are handled by callers listening on
-        // the circuit's 'relay' event.
         return;
       }
       case RelayCell.RESOLVED: {

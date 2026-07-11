@@ -751,6 +751,12 @@ body {
   letter-spacing: 0.5px;
 }
 
+.log-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .log-clear {
   background: transparent;
   border: 1px solid var(--border-subtle);
@@ -767,6 +773,11 @@ body {
 .log-clear:hover {
   color: var(--text-primary);
   border-color: var(--text-muted);
+}
+
+.log-clear:disabled {
+  opacity: 0.5;
+  cursor: default;
 }
 
 .log-content {

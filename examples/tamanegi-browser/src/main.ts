@@ -69,6 +69,7 @@ const progressEta = document.getElementById('progress-eta') as HTMLElement;
 // Log panel
 const logContent = document.getElementById('log-content') as HTMLElement;
 const logClear = document.getElementById('log-clear') as HTMLButtonElement;
+const logDownload = document.getElementById('log-download') as HTMLButtonElement;
 
 // Browser panel (iframe persists across mode switches)
 const contentIframe = document.getElementById('content-iframe') as HTMLIFrameElement;
@@ -535,7 +536,10 @@ async function getClient(): Promise<void> {
     connectedResolve = resolve;
   });
 
-  swClient.connect();
+  // Enable verbose hidden-service diagnostics so the downloadable debug log
+  // contains the SRV / time-period / HSDir-ring / per-intro-point detail needed
+  // to analyse a failed .onion connection.
+  swClient.connect({ debug: true });
   return connectedPromise;
 }
 
@@ -1013,6 +1017,44 @@ function clearLog(): void {
   logContent.innerHTML = '';
 }
 
+// Pull the full captured debug log from the service worker and save it as a
+// timestamped .txt file. This is the primary way to get verbose hidden-service
+// diagnostics (which run in the SW, out of reach of the page console) out for
+// analysis.
+async function downloadDebugLog(): Promise<void> {
+  if (!swClient) {
+    log('Service worker not ready; cannot export logs', 'error');
+    return;
+  }
+  logDownload.disabled = true;
+  try {
+    const entries = await swClient.getLogs();
+    const header = [
+      `# TamanegiBrowser debug log`,
+      `# generated: ${new Date().toISOString()}`,
+      `# userAgent: ${navigator.userAgent}`,
+      `# entries: ${entries.length}`,
+      '',
+    ].join('\n');
+    const blob = new Blob([header + entries.join('\n') + '\n'], {
+      type: 'text/plain;charset=utf-8',
+    });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `tamanegi-debug-${new Date().toISOString().replace(/[:.]/g, '-')}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    URL.revokeObjectURL(url);
+    log(`Debug log exported (${entries.length} entries)`, 'success');
+  } catch (err) {
+    log(`Failed to export debug log: ${err instanceof Error ? err.message : String(err)}`, 'error');
+  } finally {
+    logDownload.disabled = false;
+  }
+}
+
 // Event listeners
 browseBtn.addEventListener('click', () => {
   const url = urlInput.value.trim();
@@ -1044,6 +1086,7 @@ backBtn.addEventListener('click', navigateBack);
 forwardBtn.addEventListener('click', navigateForward);
 
 logClear.addEventListener('click', clearLog);
+logDownload.addEventListener('click', () => void downloadDebugLog());
 warningDismiss.addEventListener('click', () => {
   warningBanner.hidden = true;
 });
