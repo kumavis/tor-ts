@@ -25,7 +25,10 @@ import {
 
 // Only run the full Equi-X solve (~a few seconds of BigInt work) under Node, so
 // the browser suite stays fast. The verification-only tests run everywhere.
-const NODE = typeof process !== 'undefined' && !!process.versions?.node;
+// Require the absence of `window` too: the browser build polyfills `process`,
+// so `process.versions.node` alone can be truthy there.
+const NODE =
+  typeof window === 'undefined' && typeof process !== 'undefined' && !!process.versions?.node;
 
 const P = Buffer.from('Tor hs intro v1\0', 'ascii');
 function challenge(idHex: string, seedHex: string, nonceHex: string, effort: number): Buffer {
