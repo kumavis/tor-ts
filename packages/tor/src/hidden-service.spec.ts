@@ -14,6 +14,7 @@ import {
   toBase64NoPad,
   hsBuildHsIndex,
   hsBuildHsdirIndex,
+  isHsDebugEnabled,
   type HsdirCandidate,
 } from './hidden-service.ts';
 
@@ -708,4 +709,47 @@ test('computeDisasterSrv: format matches spec', (t) => {
     periodNum: 43n,
   });
   t.notDeepEqual(srv, srv3, 'different period should give different disaster SRV');
+});
+
+test('isHsDebugEnabled: honors the browser-style globalThis flag', (t) => {
+  const g = globalThis as { __TOR_TS_HS_DEBUG__?: boolean };
+  const prev = g.__TOR_TS_HS_DEBUG__;
+  const prevEnv = process.env.TOR_TS_HS_DEBUG;
+  // Isolate from any ambient env var so we exercise the globalThis path.
+  delete process.env.TOR_TS_HS_DEBUG;
+  try {
+    delete g.__TOR_TS_HS_DEBUG__;
+    t.false(isHsDebugEnabled(), 'disabled when neither env nor global flag set');
+
+    g.__TOR_TS_HS_DEBUG__ = true;
+    t.true(isHsDebugEnabled(), 'enabled when global flag is true (browser/service-worker path)');
+
+    g.__TOR_TS_HS_DEBUG__ = false;
+    t.false(isHsDebugEnabled(), 'disabled when global flag is false');
+  } finally {
+    if (prev === undefined) delete g.__TOR_TS_HS_DEBUG__;
+    else g.__TOR_TS_HS_DEBUG__ = prev;
+    if (prevEnv === undefined) delete process.env.TOR_TS_HS_DEBUG;
+    else process.env.TOR_TS_HS_DEBUG = prevEnv;
+  }
+});
+
+test('isHsDebugEnabled: honors the TOR_TS_HS_DEBUG env var', (t) => {
+  const g = globalThis as { __TOR_TS_HS_DEBUG__?: boolean };
+  const prevGlobal = g.__TOR_TS_HS_DEBUG__;
+  const prevEnv = process.env.TOR_TS_HS_DEBUG;
+  delete g.__TOR_TS_HS_DEBUG__;
+  try {
+    process.env.TOR_TS_HS_DEBUG = '1';
+    t.true(isHsDebugEnabled(), "enabled for '1'");
+    process.env.TOR_TS_HS_DEBUG = 'true';
+    t.true(isHsDebugEnabled(), "enabled for 'true'");
+    process.env.TOR_TS_HS_DEBUG = '0';
+    t.false(isHsDebugEnabled(), "disabled for '0'");
+  } finally {
+    if (prevGlobal === undefined) delete g.__TOR_TS_HS_DEBUG__;
+    else g.__TOR_TS_HS_DEBUG__ = prevGlobal;
+    if (prevEnv === undefined) delete process.env.TOR_TS_HS_DEBUG;
+    else process.env.TOR_TS_HS_DEBUG = prevEnv;
+  }
 });

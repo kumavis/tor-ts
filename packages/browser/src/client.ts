@@ -79,6 +79,17 @@ export type BrowserTorClientOptions = {
   microdescStorage?: MicrodescStorage;
   /** Callback when consensus is updated. Passed to bootstrap. */
   onConsensusUpdate?: (rawContent: string) => void;
+  /**
+   * Enable verbose hidden-service diagnostics (SRV / time-period candidates,
+   * blinded keys, HSDir ring selection, per-intro-point attempts). These are
+   * routed through the same `onStatus` callback as normal status lines, so a
+   * host app can capture them for analysis.
+   *
+   * In Node these logs are gated behind the `TOR_TS_HS_DEBUG` env var; the
+   * browser has no `process.env`, so this option sets the equivalent runtime
+   * flag (`globalThis.__TOR_TS_HS_DEBUG__`).
+   */
+  debug?: boolean;
 };
 
 /**
@@ -127,6 +138,14 @@ export async function makeBrowserTorClient(
 ): Promise<BrowserTorClientResult> {
   const { onStatus, onMicrodescProgress } = options;
 
+  // Turn on verbose HS diagnostics for the whole process when requested. The
+  // core HS code reads this flag at call time via isHsDebugEnabled(), so the
+  // extra `dlog` lines then flow through the `log` callback below (and thus
+  // out through `onStatus`) without any other wiring.
+  if (options.debug) {
+    (globalThis as { __TOR_TS_HS_DEBUG__?: boolean }).__TOR_TS_HS_DEBUG__ = true;
+  }
+
   const log = (msg: string) => {
     console.log(`[tor-client] ${msg}`);
     onStatus?.(msg);
@@ -155,11 +174,23 @@ export async function makeBrowserTorClient(
   channelManager.add(entryPeerInfo.rsaIdDigest, channel);
 
   // Build circuit to a specific target (for hidden services)
-  const buildCircuitToTarget: BuildCircuitFn = async (target) => {
+  const buildCircuitToTarget: BuildCircuitFn = async (target, opts) => {
+    // Exclude the target, our fixed entry (Snowflake bridge), and any relays
+    // the caller asked to avoid. The HS flow passes `{ avoid: [rendezvousPoint] }`
+    // when building the introduction circuit so the rendezvous point can't also
+    // appear as the middle hop — reusing it makes the service silently drop the
+    // introduction, which previously surfaced only as a rendezvous timeout.
+    // We also require Fast + Stable so the middle hop is actually usable for
+    // relaying (the old empty-flags selection could pick an unsuitable relay
+    // and fail the whole HS connection).
+    const avoidDigests = (opts?.avoid ?? []).map((p) => p.rsaIdDigest);
     const candidateRelays = consensus.relays.filter(
-      (r) => !r.rsaIdDigest.equals(target.rsaIdDigest)
+      (r) =>
+        !r.rsaIdDigest.equals(target.rsaIdDigest) &&
+        !r.rsaIdDigest.equals(entryPeerInfo.rsaIdDigest) &&
+        !avoidDigests.some((d) => d.equals(r.rsaIdDigest))
     );
-    const middleNode = pickRelayWithFlags(candidateRelays, [], []);
+    const middleNode = pickRelayWithFlags(candidateRelays, ['Fast', 'Stable'], []);
     const middlePeerInfo = await lookupPeerInfo(dirClient, middleNode);
 
     const circuit = new Circuit({

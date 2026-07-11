@@ -15,12 +15,14 @@ export const TOR_PROXY_PATH_SEGMENT = 'tor/';
 export type MainToSW =
   | {
       type: 'connect';
-      options?: { relayUrl?: string; skipConsensusCache?: boolean };
+      options?: { relayUrl?: string; skipConsensusCache?: boolean; debug?: boolean };
     }
   | { type: 'fetch'; requestId: string; url: string; timeout?: number }
   | { type: 'refreshConsensus' }
   | { type: 'destroy' }
-  | { type: 'getState' };
+  | { type: 'getState' }
+  /** Request the full captured debug-log buffer (for download / analysis). */
+  | { type: 'getLogs' };
 
 // ---------------------------------------------------------------------------
 // Service worker -> Main page
@@ -47,4 +49,6 @@ export type SWToMain =
     }
   | { type: 'fetchError'; requestId: string; error: string }
   | { type: 'error'; error: string }
-  | { type: 'state'; state: 'idle' | 'connecting' | 'connected' | 'disconnected' };
+  | { type: 'state'; state: 'idle' | 'connecting' | 'connected' | 'disconnected' }
+  /** Full captured debug-log buffer, in response to a `getLogs` request. */
+  | { type: 'logs'; entries: string[] };

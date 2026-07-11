@@ -17,6 +17,28 @@ import { consensusIDB, microdescIDB } from './idb-cache.ts';
 
 let client: BrowserTorClient | null = null;
 
+// ---------------------------------------------------------------------------
+// Debug log capture
+// ---------------------------------------------------------------------------
+//
+// The Tor client runs here in the service worker, whose console is awkward to
+// reach from devtools and impossible to hand off for analysis. So we tee every
+// status/error line into an in-memory ring buffer that the page can pull via
+// the `getLogs` message and offer as a download. Verbose HS diagnostics (SRV /
+// time-period / HSDir-ring / per-intro-point detail) are enabled by passing
+// `debug: true` to the browser client on connect, so they land here too.
+
+const MAX_LOG_ENTRIES = 10_000;
+const logBuffer: string[] = [];
+
+function captureLog(line: string): void {
+  const ts = new Date().toISOString();
+  logBuffer.push(`${ts} ${line}`);
+  if (logBuffer.length > MAX_LOG_ENTRIES) {
+    logBuffer.splice(0, logBuffer.length - MAX_LOG_ENTRIES);
+  }
+}
+
 /**
  * Full proxy path prefix derived from the SW scope so it works under any
  * deployment base path (e.g. "/" locally, "/tor-ts/" on GitHub Pages).
@@ -57,6 +79,28 @@ function mapToHeaders(map: Map<string, string>): Headers {
 // ---------------------------------------------------------------------------
 
 async function broadcast(msg: SWToMain): Promise<void> {
+  // Tee human-readable messages into the debug-log buffer. Progress spam
+  // (consensus/microdesc byte counts) and the log dump itself are skipped.
+  switch (msg.type) {
+    case 'status':
+      captureLog(`[status] ${msg.message}`);
+      break;
+    case 'error':
+      captureLog(`[error] ${msg.error}`);
+      break;
+    case 'fetchError':
+      captureLog(`[fetchError:${msg.requestId}] ${msg.error}`);
+      break;
+    case 'connected':
+      captureLog('[connected]');
+      break;
+    case 'disconnected':
+      captureLog(`[disconnected] ${msg.reason}`);
+      break;
+    default:
+      break;
+  }
+
   const clients = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
   for (const c of clients) {
     c.postMessage(msg);
@@ -132,7 +176,7 @@ self.addEventListener('activate', (e: ExtendableEvent) => {
 // Message handling
 // ---------------------------------------------------------------------------
 
-type ConnectOptions = { relayUrl?: string; skipConsensusCache?: boolean };
+type ConnectOptions = { relayUrl?: string; skipConsensusCache?: boolean; debug?: boolean };
 
 async function handleConnect(options?: ConnectOptions): Promise<void> {
   if (client) {
@@ -140,7 +184,12 @@ async function handleConnect(options?: ConnectOptions): Promise<void> {
     return;
   }
 
+  // Default debug on: this is a diagnostic tool and the verbose HS logs are the
+  // whole point of the log capture. Callers can pass debug: false to quiet it.
+  const debug = options?.debug ?? true;
+
   try {
+    captureLog(`[connect] starting (debug=${debug}, relayUrl=${options?.relayUrl ?? 'default'})`);
     await broadcast({ type: 'state', state: 'connecting' });
 
     const [cachedConsensus, microdescMap] = await Promise.all([
@@ -152,6 +201,7 @@ async function handleConnect(options?: ConnectOptions): Promise<void> {
 
     const { client: c, channel: ch } = await makeBrowserTorClient({
       ...(options?.relayUrl !== undefined ? { relayUrl: options.relayUrl } : {}),
+      debug,
       skipConsensusCache: options?.skipConsensusCache ?? false,
       ...(cachedConsensus !== undefined ? { cachedConsensusText: cachedConsensus } : {}),
       microdescStorage,
@@ -201,8 +251,10 @@ async function handleFetch(requestId: string, url: string, timeout?: number): Pr
     await broadcast({ type: 'fetchError', requestId, error: 'Tor client not connected' });
     return;
   }
+  captureLog(`[fetch:${requestId}] ${url} (timeout=${timeout ?? 'default'})`);
   try {
     const response = await client.fetch(url, timeout !== undefined ? { timeout } : {});
+    captureLog(`[fetch:${requestId}] ${response.status} ${response.statusText}`);
     await broadcast({
       type: 'fetchResult',
       requestId,
@@ -236,6 +288,11 @@ function handleDestroy(): void {
 function handleGetState(): void {
   const state: 'idle' | 'connecting' | 'connected' | 'disconnected' = client ? 'connected' : 'idle';
   void broadcast({ type: 'state', state });
+}
+
+function handleGetLogs(): void {
+  // Snapshot the buffer so the page gets a stable copy.
+  void broadcast({ type: 'logs', entries: [...logBuffer] });
 }
 
 // ---------------------------------------------------------------------------
@@ -315,6 +372,9 @@ self.addEventListener('message', (e: ExtendableMessageEvent) => {
         break;
       case 'getState':
         void handleGetState();
+        break;
+      case 'getLogs':
+        handleGetLogs();
         break;
       default:
         break;

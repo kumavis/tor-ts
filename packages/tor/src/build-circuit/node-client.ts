@@ -127,11 +127,18 @@ export async function makeNodejsTorClient(
   channelManager.add(guardPeerInfo.rsaIdDigest, guardChannel);
 
   // Build circuit to a specific target (for hidden services)
-  const buildCircuitToTarget: BuildCircuitFn = async (target) => {
+  const buildCircuitToTarget: BuildCircuitFn = async (target, opts) => {
+    // Honor the caller's avoid list. The HS flow builds the introduction
+    // circuit with `{ avoid: [rendezvousPoint] }` so the same relay can't serve
+    // as both the rendezvous point and a hop on the intro circuit — reusing it
+    // makes the service drop the introduction. Also exclude the target itself
+    // and our fixed guard so the middle hop is always distinct.
+    const avoidDigests = (opts?.avoid ?? []).map((p) => p.rsaIdDigest);
     const candidateRelays = consensus.relays.filter(
       (r) =>
         !r.rsaIdDigest.equals(target.rsaIdDigest) &&
-        !r.rsaIdDigest.equals(guardPeerInfo.rsaIdDigest)
+        !r.rsaIdDigest.equals(guardPeerInfo.rsaIdDigest) &&
+        !avoidDigests.some((d) => d.equals(r.rsaIdDigest))
     );
     const middleNode = pickRelayWithFlags(candidateRelays, ['Stable'], []);
     const middlePeerInfo = await lookupPeerInfo(dirClient, middleNode);

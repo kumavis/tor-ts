@@ -13,7 +13,7 @@ valid-after 2024-01-01 00:00:00
 fresh-until 2024-01-01 01:00:00
 valid-until 2024-01-01 03:00:00
 voting-delay 300 300
-params bwweightscale=10000 hsdir-interval=1440
+params bwweightscale=10000 hsdir_interval=1440
 shared-rand-previous-value 3 AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=
 shared-rand-current-value 3 BBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB=
 r TestRelay1 AB+0S6hvSEnm7ifzqh3QaYOxsm0 2024-01-01 00:00:00 192.168.1.1 9001 9030
@@ -82,7 +82,7 @@ test('parseMicroDescConsensus: parses consensus metadata', (t) => {
   t.truthy(consensus.validUntil);
 
   t.is(consensus.params['bwweightscale'], 10000);
-  t.is(consensus.params['hsdir-interval'], 1440);
+  t.is(consensus.params['hsdir_interval'], 1440);
 
   t.truthy(consensus.sharedRandPreviousValue);
   t.truthy(consensus.sharedRandCurrentValue);
