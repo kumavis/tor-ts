@@ -72,7 +72,11 @@ export type FetchOptions = {
   method?: string;
   /** HTTP headers */
   headers?: Record<string, string>;
-  /** Request timeout in ms */
+  /**
+   * Request timeout in ms. For .onion URLs this also bounds the hidden-service
+   * connection setup (descriptor fetch, introduction, rendezvous), not just
+   * the HTTP response read.
+   */
   timeout?: number;
 };
 
@@ -280,7 +284,14 @@ export class TorClient<TChannel extends ChannelConnection = ChannelConnection> {
         ? 443
         : 80;
 
-    const hs = await this.connectToHiddenService(parsedUrl.hostname, port);
+    // Without this, options.timeout only bounded the HTTP response read and
+    // the connection setup ran on its own (much longer) default budget — a
+    // caller-side 120s fetch could sit in intro attempts for many minutes.
+    const hs = await this.connectToHiddenService(
+      parsedUrl.hostname,
+      port,
+      options?.timeout !== undefined ? { overallTimeoutMs: options.timeout } : {}
+    );
     try {
       return await this.fetchOverCircuitFn(hs.circuit, parsedUrl.href, options);
     } finally {

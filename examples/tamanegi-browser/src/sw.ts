@@ -9,7 +9,7 @@ declare const self: ServiceWorkerGlobalScope;
 import { makeBrowserTorClient } from 'browser';
 import type { BrowserTorClient, CachedMicrodesc, MicrodescStorage } from 'browser';
 import { type MainToSW, type SWToMain, TOR_PROXY_PATH_SEGMENT } from './sw-messages.ts';
-import { consensusIDB, microdescIDB } from './idb-cache.ts';
+import { consensusIDB, debugLogIDB, microdescIDB } from './idb-cache.ts';
 
 // ---------------------------------------------------------------------------
 // State
@@ -29,7 +29,21 @@ let client: BrowserTorClient | null = null;
 // `debug: true` to the browser client on connect, so they land here too.
 
 const MAX_LOG_ENTRIES = 10_000;
-const logBuffer: string[] = [];
+let logBuffer: string[] = [];
+let logFlushTimer: ReturnType<typeof setTimeout> | undefined;
+
+/**
+ * Persist the buffer to IndexedDB (debounced). The buffer alone dies with the
+ * SW instance — and the browser killing the SW is precisely the event we most
+ * need the log to survive.
+ */
+function scheduleLogFlush(): void {
+  if (logFlushTimer !== undefined) return;
+  logFlushTimer = setTimeout(() => {
+    logFlushTimer = undefined;
+    debugLogIDB.save([...logBuffer]).catch(() => {});
+  }, 1000);
+}
 
 function captureLog(line: string): void {
   const ts = new Date().toISOString();
@@ -37,7 +51,25 @@ function captureLog(line: string): void {
   if (logBuffer.length > MAX_LOG_ENTRIES) {
     logBuffer.splice(0, logBuffer.length - MAX_LOG_ENTRIES);
   }
+  scheduleLogFlush();
 }
+
+// Restore the log persisted by any previous SW instance, so an exported log
+// includes history from before a restart instead of coming back empty.
+const logsRestored: Promise<void> = debugLogIDB
+  .load()
+  .then((persisted) => {
+    if (persisted.length > 0) {
+      logBuffer = [...persisted, ...logBuffer].slice(-MAX_LOG_ENTRIES);
+    }
+  })
+  .catch(() => {});
+
+// Startup marker: a restart mid-session means the browser killed the previous
+// instance (taking the Tor client with it) — make that visible in the log and
+// tell any open pages so they can reset instead of waiting forever.
+captureLog('[sw] service worker instance started');
+void broadcast({ type: 'swStarted' });
 
 /**
  * Full proxy path prefix derived from the SW scope so it works under any
@@ -290,9 +322,11 @@ function handleGetState(): void {
   void broadcast({ type: 'state', state });
 }
 
-function handleGetLogs(): void {
-  // Snapshot the buffer so the page gets a stable copy.
-  void broadcast({ type: 'logs', entries: [...logBuffer] });
+async function handleGetLogs(): Promise<void> {
+  // Make sure any log persisted by a previous SW instance has been merged in
+  // before answering, then snapshot the buffer so the page gets a stable copy.
+  await logsRestored;
+  await broadcast({ type: 'logs', entries: [...logBuffer] });
 }
 
 // ---------------------------------------------------------------------------
@@ -350,21 +384,27 @@ self.addEventListener('message', (e: ExtendableMessageEvent) => {
   if (!msg || typeof msg !== 'object' || !('type' in msg)) return;
 
   try {
+    // Long-running work goes through e.waitUntil: without it the handler
+    // returns immediately and the browser is free to terminate the SW ~30s
+    // later, killing the Tor client mid-connect/fetch (the page then hangs on
+    // a reply that will never come, and the in-memory log dies with us).
     switch (msg.type) {
       case 'connect':
-        void handleConnect(msg.options);
+        e.waitUntil(handleConnect(msg.options));
         break;
       case 'fetch':
-        void handleFetch(msg.requestId, msg.url, msg.timeout);
+        e.waitUntil(handleFetch(msg.requestId, msg.url, msg.timeout));
         break;
       case 'refreshConsensus':
         if (client) {
-          client.refreshConsensus().catch((err) => {
-            broadcast({
-              type: 'error',
-              error: err instanceof Error ? err.message : String(err),
-            });
-          });
+          e.waitUntil(
+            client.refreshConsensus().catch((err) => {
+              return broadcast({
+                type: 'error',
+                error: err instanceof Error ? err.message : String(err),
+              });
+            })
+          );
         }
         break;
       case 'destroy':
@@ -374,7 +414,11 @@ self.addEventListener('message', (e: ExtendableMessageEvent) => {
         void handleGetState();
         break;
       case 'getLogs':
-        handleGetLogs();
+        e.waitUntil(handleGetLogs());
+        break;
+      case 'ping':
+        // Keepalive from the page: the event itself resets the SW idle timer.
+        e.waitUntil(broadcast({ type: 'pong' }));
         break;
       default:
         break;

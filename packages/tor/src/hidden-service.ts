@@ -283,7 +283,13 @@ export class IptExperienceTracker {
  * Options for the core hidden service connection flow.
  */
 export interface HsConnectionOptions {
-  /** Overall timeout in milliseconds (default: 120000) */
+  /**
+   * Overall budget for the whole connection flow in milliseconds (default:
+   * 120000). Enforced as a hard deadline: introduction attempts stop and the
+   * rendezvous wait is capped once it is exhausted, so a connection can never
+   * run for maxIntroAttempts × (circuit build + PoW solve + ACK wait) — which
+   * unbounded is tens of minutes — while the caller believes it timed out.
+   */
   overallTimeoutMs?: number;
   /** Timeout per handshake operation (default: min of overallTimeoutMs, 120000) */
   perHandshakeTimeoutMs?: number;
@@ -2020,6 +2026,11 @@ export async function connectToHiddenServiceCore(
   } = options;
   const dlog = makeHsDebugLog(log);
 
+  // Hard deadline for the whole flow. Individual steps already have their own
+  // timeouts, but without a shared deadline the intro-attempt loop alone can
+  // run for maxIntroAttempts × (60s circuit build + PoW solve + ACK wait).
+  const overallDeadline = Date.now() + overallTimeoutMs;
+
   const { consensus, dirClient, microdescManager, buildCircuit } = ctx;
 
   if (!consensus.validAfter) {
@@ -2311,6 +2322,12 @@ export async function connectToHiddenServiceCore(
     | undefined;
 
   for (let attempt = 0; attempt < maxIntroAttempts; attempt++) {
+    if (Date.now() >= overallDeadline) {
+      introErrors.push(
+        new Error(`overall timeout (${overallTimeoutMs}ms) exceeded after ${attempt} attempt(s)`)
+      );
+      break;
+    }
     const intro = introPoints[attempt % introPoints.length]!;
 
     let introCircuit: Circuit | undefined;
@@ -2335,7 +2352,7 @@ export async function connectToHiddenServiceCore(
           blindedId: blindedPublicKey,
           effort,
           randomBytes: randomBytesOpt,
-          timeoutMs: powTimeoutMs,
+          timeoutMs: Math.min(powTimeoutMs, Math.max(1, overallDeadline - Date.now())),
         });
         if (solved) {
           log(`Proof-of-work solved in ${Date.now() - powStart}ms (effort=${solved.effort})`);
@@ -2373,7 +2390,7 @@ export async function connectToHiddenServiceCore(
       const ack = await waitForRelayCommand(
         introCircuit,
         RelayCell.INTRODUCE_ACK,
-        perHandshakeTimeoutMs
+        Math.min(perHandshakeTimeoutMs, Math.max(1, overallDeadline - Date.now()))
       );
       if (ack.data.length < 2) throw new Error('INTRODUCE_ACK too short');
       const status = ack.data.readUInt16BE(0);
@@ -2422,7 +2439,7 @@ export async function connectToHiddenServiceCore(
       }
 
       const errorSummary = introErrors.map((e) => e.message).join('; ');
-      throw new Error(`All ${maxIntroAttempts} introduction attempts failed: ${errorSummary}`);
+      throw new Error(`All ${introErrors.length} introduction attempt(s) failed: ${errorSummary}`);
     }
 
     const { introCircuit, state } = successfulIntro;
@@ -2435,7 +2452,14 @@ export async function connectToHiddenServiceCore(
     // Step 7: Await RENDEZVOUS2 (listener was armed before introduction in 6a).
     // Use a dedicated rendezvous timeout (default 60s) rather than the overall timeout.
     // If the hidden service received our introduction, it should respond within this window.
-    log(`Waiting for rendezvous completion (timeout: ${rendezvousTimeoutMs}ms)...`);
+    // The dedicated rendezvous budget still applies, but never past the
+    // overall deadline — a successful introduction must not extend the total
+    // connection time beyond what the caller asked for.
+    const rendezvousWaitMs = Math.min(
+      rendezvousTimeoutMs,
+      Math.max(1, overallDeadline - Date.now())
+    );
+    log(`Waiting for rendezvous completion (timeout: ${rendezvousWaitMs}ms)...`);
     let r2: RelayEvt;
     // Start the rendezvous timeout HERE (after INTRODUCE1 was sent), so time
     // spent solving proof-of-work is not charged against the rendezvous budget.
@@ -2448,7 +2472,7 @@ export async function connectToHiddenServiceCore(
         new Promise<never>((_resolve, reject) => {
           rendezvousTimer = setTimeout(
             () => reject(new Error(`Timed out waiting for relayCommand=${RelayCell.RENDEZVOUS2}`)),
-            rendezvousTimeoutMs
+            rendezvousWaitMs
           );
         }),
       ]);
@@ -2458,7 +2482,7 @@ export async function connectToHiddenServiceCore(
       const msg = err instanceof Error ? err.message : String(err);
       throw new Error(
         `Rendezvous failed: timed out waiting for hidden service response ` +
-          `(${rendezvousTimeoutMs}ms). The service may be offline, overloaded, ` +
+          `(${rendezvousWaitMs}ms). The service may be offline, overloaded, ` +
           `or unable to decrypt the introduction. ` +
           `Cells received on rendezvous circuit during the wait: ` +
           `${observed.totalCells} (${observed.commandSummary || 'none'}). ` +
