@@ -89,8 +89,28 @@ export class TorServiceWorkerClient {
         }
         break;
       }
+      case 'pong':
+        // Keepalive reply; nothing to do.
+        break;
+      case 'swStarted':
+        // A fresh SW instance started. Any Tor client and in-flight requests
+        // in the previous instance are gone — fail them now instead of
+        // leaving their promises (and the UI) hanging forever.
+        if (this.pendingFetch.size > 0) {
+          this.failAllPendingFetches('Tor service worker restarted; connection lost');
+        }
+        this.onSwRestarted?.();
+        break;
       default:
         break;
+    }
+  }
+
+  private failAllPendingFetches(reason: string): void {
+    const pending = [...this.pendingFetch.values()];
+    this.pendingFetch.clear();
+    for (const { reject } of pending) {
+      reject(new Error(reason));
     }
   }
 
@@ -122,7 +142,26 @@ export class TorServiceWorkerClient {
   fetch(url: string, opts?: { timeout?: number }): Promise<FetchResult> {
     return new Promise((resolve, reject) => {
       const requestId = crypto.randomUUID();
-      this.pendingFetch.set(requestId, { resolve, reject });
+      // Watchdog: the real timeout runs inside the SW, but if the browser
+      // kills the SW mid-request the reply never arrives at all. Give the SW
+      // its full budget plus a grace period, then fail the promise so the UI
+      // can't hang indefinitely.
+      const watchdogMs = (opts?.timeout ?? 120_000) + 30_000;
+      const timer = setTimeout(() => {
+        if (this.pendingFetch.delete(requestId)) {
+          reject(new Error(`No response from Tor service worker after ${watchdogMs}ms`));
+        }
+      }, watchdogMs);
+      this.pendingFetch.set(requestId, {
+        resolve: (r) => {
+          clearTimeout(timer);
+          resolve(r);
+        },
+        reject: (err) => {
+          clearTimeout(timer);
+          reject(err);
+        },
+      });
       this.post({
         type: 'fetch',
         requestId,
@@ -130,6 +169,14 @@ export class TorServiceWorkerClient {
         ...(opts?.timeout !== undefined ? { timeout: opts.timeout } : {}),
       });
     });
+  }
+
+  /**
+   * Keepalive ping. Browsers terminate idle service workers after ~30s; each
+   * ping is an event that resets that timer, keeping the Tor client alive.
+   */
+  ping(): void {
+    this.post({ type: 'ping' });
   }
 
   refreshConsensus(): void {
@@ -141,10 +188,7 @@ export class TorServiceWorkerClient {
       navigator.serviceWorker.removeEventListener('message', this.messageHandler);
     }
     this.post({ type: 'destroy' });
-    for (const [, { reject }] of this.pendingFetch) {
-      reject(new Error('Tor client destroyed'));
-    }
-    this.pendingFetch.clear();
+    this.failAllPendingFetches('Tor client destroyed');
     for (const resolve of this.pendingLogs.splice(0)) {
       resolve([]);
     }
@@ -163,4 +207,6 @@ export class TorServiceWorkerClient {
   onConnected?: () => void;
   onDisconnected?: (reason: string) => void;
   onError?: (error: string) => void;
+  /** Called when a new SW instance starts while this page is open (i.e. the previous one was killed). */
+  onSwRestarted?: () => void;
 }

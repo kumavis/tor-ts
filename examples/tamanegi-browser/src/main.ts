@@ -1048,6 +1048,13 @@ async function downloadDebugLog(): Promise<void> {
     a.remove();
     URL.revokeObjectURL(url);
     log(`Debug log exported (${entries.length} entries)`, 'success');
+    if (entries.length === 0) {
+      log(
+        'Debug log came back empty: the service worker that held the logs was likely ' +
+          'terminated by the browser and a fresh instance answered.',
+        'error'
+      );
+    }
   } catch (err) {
     log(`Failed to export debug log: ${err instanceof Error ? err.message : String(err)}`, 'error');
   } finally {
@@ -1164,6 +1171,28 @@ async function initServiceWorker(): Promise<void> {
     log(`Error: ${error}`, 'error');
     setStatus('error', 'Error');
   };
+  swClient.onSwRestarted = () => {
+    // The browser killed the SW that held the Tor client. Reset the UI so the
+    // page doesn't sit on "connecting" forever; the next browse reconnects.
+    if (!connectedPromise && !isConnecting) return;
+    connectedPromise = null;
+    connectedResolve = null;
+    setLoading(false);
+    resetCircuitVisualization();
+    setStatus('disconnected', 'Disconnected');
+    log(
+      'Tor service worker was restarted by the browser; connection lost. Retry to reconnect.',
+      'error'
+    );
+  };
+
+  // Keepalive: the Tor client lives in the service worker, and browsers
+  // terminate service workers that receive no events for ~30s. Ping while a
+  // connection exists (or is being established) so the client survives long
+  // silent stretches such as hidden-service intro attempts.
+  setInterval(() => {
+    if (connectedPromise) swClient?.ping();
+  }, 20_000);
 }
 
 void initServiceWorker();

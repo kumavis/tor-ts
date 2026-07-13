@@ -6,10 +6,12 @@
 import type { CachedMicrodesc } from 'browser';
 
 const DB_NAME = 'tor-cache';
-const DB_VERSION = 1;
+const DB_VERSION = 2;
 const CONSENSUS_STORE = 'consensus';
 const MICRODESCS_STORE = 'microdescs';
+const DEBUG_LOG_STORE = 'debuglog';
 const CONSENSUS_KEY = 'current';
+const DEBUG_LOG_KEY = 'current';
 
 // Serializable shape for CachedMicrodesc (Buffers as base64 strings)
 type StoredMicrodesc = {
@@ -33,6 +35,9 @@ function openDB(): Promise<IDBDatabase> {
       }
       if (!db.objectStoreNames.contains(MICRODESCS_STORE)) {
         db.createObjectStore(MICRODESCS_STORE, { keyPath: null });
+      }
+      if (!db.objectStoreNames.contains(DEBUG_LOG_STORE)) {
+        db.createObjectStore(DEBUG_LOG_STORE);
       }
     };
   });
@@ -108,6 +113,57 @@ export const consensusIDB = {
 // ---------------------------------------------------------------------------
 // Microdescriptors
 // ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Debug log
+// ---------------------------------------------------------------------------
+//
+// The service worker's debug-log ring buffer is in-memory, and the browser is
+// free to kill an idle SW at any time — which is exactly the failure mode the
+// log exists to diagnose. Persisting it means a freshly restarted SW can still
+// hand the page the history from the instance that died.
+
+export const debugLogIDB = {
+  async load(): Promise<string[]> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(DEBUG_LOG_STORE, 'readonly');
+      const req = tx.objectStore(DEBUG_LOG_STORE).get(DEBUG_LOG_KEY);
+      req.onerror = () => reject(req.error);
+      req.onsuccess = () => {
+        db.close();
+        const value = req.result as unknown;
+        resolve(Array.isArray(value) ? (value as string[]) : []);
+      };
+    });
+  },
+
+  async save(entries: string[]): Promise<void> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(DEBUG_LOG_STORE, 'readwrite');
+      tx.objectStore(DEBUG_LOG_STORE).put(entries, DEBUG_LOG_KEY);
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+
+  async clear(): Promise<void> {
+    const db = await openDB();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(DEBUG_LOG_STORE, 'readwrite');
+      tx.objectStore(DEBUG_LOG_STORE).clear();
+      tx.oncomplete = () => {
+        db.close();
+        resolve();
+      };
+      tx.onerror = () => reject(tx.error);
+    });
+  },
+};
 
 export const microdescIDB = {
   async loadAll(): Promise<Map<string, CachedMicrodesc>> {
