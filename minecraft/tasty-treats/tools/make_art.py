@@ -33,6 +33,8 @@ PALETTE = {
     "G": (96, 205, 88, 255),    # green (sprinkle, green onion)
     "O": (255, 163, 55, 255),   # orange candy ring
     "V": (186, 104, 224, 255),  # violet candy ring
+    "e": (108, 112, 120, 255),  # appliance gray
+    "E": (66, 70, 78, 255),     # appliance gray dark
 }
 
 # ---------------------------------------------------------------- item sprites
@@ -227,10 +229,17 @@ SMOOTHIE = [
     "................",
 ]
 
+# The smoothie sprite is recolored per flavor (body color swapped for "q")
+SMOOTHIE_FLAVORS = {
+    "smoothie": "q",        # berry pink
+    "melon_smoothie": "L",  # melon green
+    "choco_smoothie": "P",  # chocolate brown
+    "glow_smoothie": "C",   # glowing yellow
+}
+
 ITEMS = {
     "cheeseburger": CHEESEBURGER,
     "sushi": SUSHI,
-    "smoothie": SMOOTHIE,
     "rainbow_candy": RAINBOW_CANDY,
     "ramen": RAMEN,
     "cereal": CEREAL,
@@ -320,6 +329,30 @@ SALMON_TOP = ["RRRR", "RxxR", "RxxR", "rRRr"]
 RICE_SIDE = ["RRRR", "WxxW", "WxxW"]
 RICE_BOTTOM = ["WWWW"] * 4
 
+# Blender atlas regions (geometry.demo_blender):
+#   ( 0, 0) 8x4  motor base sides    ( 0, 8) 8x8  base top/bottom
+#   (16, 0) 6x7  jar sides           (16, 8) 6x6  jar top/bottom
+#   (24, 0) 4x1  lid sides           (24, 4) 4x4  lid top/bottom
+BLENDER_BASE_SIDE = [
+    "EEEEEEEE",
+    "EeeeeeeE",
+    "EeRGeeeE",
+    "EEEEEEEE",
+]
+BLENDER_BASE_TOP = ["EEEEEEEE"] + ["EeeeeeeE"] * 6 + ["EEEEEEEE"]
+BLENDER_JAR_SIDE = [
+    "mmmmmm",
+    "mWmmWm",
+    "qqqqqq",
+    "qqqqqq",
+    "qqqqqq",
+    "qqqqqq",
+    "qqqqqq",
+]
+BLENDER_JAR_TOP = ["mmmmmm", "mqqqqm", "mqqqqm", "mqqqqm", "mqqqqm", "mmmmmm"]
+BLENDER_LID_SIDE = ["EEEE"]
+BLENDER_LID_TOP = ["EEEE", "EeeE", "EeeE", "EEEE"]
+
 # ------------------------------------------------------------------ plumbing
 
 def parse(rows, w=16, h=16):
@@ -370,6 +403,19 @@ def main(base):
     blit(grid, RICE_SIDE, 16, 4)
     blit(grid, RICE_BOTTOM, 24, 0)
     write_png(f"{base}/tasty_treats_rp/textures/blocks/sushi_board.png", grid)
+
+    for name, color in SMOOTHIE_FLAVORS.items():
+        rows = [row.replace("q", color) for row in SMOOTHIE]
+        write_png(f"{base}/tasty_treats_rp/textures/items/{name}.png", parse(rows))
+
+    grid = [[PALETTE["."]] * 32 for _ in range(32)]
+    blit(grid, BLENDER_BASE_SIDE, 0, 0)
+    blit(grid, BLENDER_BASE_TOP, 0, 8)
+    blit(grid, BLENDER_JAR_SIDE, 16, 0)
+    blit(grid, BLENDER_JAR_TOP, 16, 8)
+    blit(grid, BLENDER_LID_SIDE, 24, 0)
+    blit(grid, BLENDER_LID_TOP, 24, 4)
+    write_png(f"{base}/tasty_treats_rp/textures/blocks/blender.png", grid)
 
     icon = parse(CHEESEBURGER)
     write_png(f"{base}/tasty_treats_rp/pack_icon.png", icon, scale=8)

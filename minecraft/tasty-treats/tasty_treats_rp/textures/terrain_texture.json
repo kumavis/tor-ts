@@ -7,6 +7,7 @@
     "demo_ramen_bowl": { "textures": "textures/blocks/ramen_bowl" },
     "demo_cereal_bowl": { "textures": "textures/blocks/cereal_bowl" },
     "demo_ice_cream_bowl": { "textures": "textures/blocks/ice_cream_bowl" },
-    "demo_sushi_board": { "textures": "textures/blocks/sushi_board" }
+    "demo_sushi_board": { "textures": "textures/blocks/sushi_board" },
+    "demo_blender": { "textures": "textures/blocks/blender" }
   }
 }
