@@ -4,6 +4,7 @@
   "texture_data": {
     "cheeseburger": { "textures": "textures/items/cheeseburger" },
     "sushi": { "textures": "textures/items/sushi" },
+    "smoothie": { "textures": "textures/items/smoothie" },
     "rainbow_candy": { "textures": "textures/items/rainbow_candy" },
     "ramen": { "textures": "textures/items/ramen" },
     "cereal": { "textures": "textures/items/cereal" },

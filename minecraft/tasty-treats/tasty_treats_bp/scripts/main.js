@@ -19,6 +19,10 @@ const FOOD_EFFECTS = {
     effects: [{ effect: "slowness", duration: 60, amplifier: 0 }],
     message: "§bBrain freeze!!",
   },
+  "demo:smoothie": {
+    effects: [{ effect: "regeneration", duration: 100, amplifier: 1 }],
+    message: "§dBerry blast! Regeneration!",
+  },
 };
 
 world.afterEvents.itemCompleteUse.subscribe((event) => {

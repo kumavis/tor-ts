@@ -193,10 +193,10 @@ SUSHI = [
     "................",
     "................",
     "...xxxxx........",
-    "..xoooaax.xxxx..",
-    ".xoooooaaxWWWWx.",
-    ".xaoooooaxWoWWx.",
-    ".xWWWWWWxxWooWx.",
+    "..xRRRrrx.xxxx..",
+    ".xRRRRRrrxWWWWx.",
+    ".xrRRRRRrxWRWWx.",
+    ".xWWWWWWxxWRRWx.",
     ".xWWmWWWxxWWWWx.",
     "..xWWWWx.xmmmx..",
     "xTTTTTTTTTTTTTTx",
@@ -208,9 +208,29 @@ SUSHI = [
     "................",
 ]
 
+SMOOTHIE = [
+    "...........WR...",
+    "..........WR....",
+    "..........WR....",
+    "..xxxxxxxxWRxx..",
+    "..xmWWWWWWWWmx..",
+    "..xqqqqWqqqqqx..",
+    "..xqqqWqqqqqqx..",
+    "..xqqqqWqqqqqx..",
+    "..xqqqqqWqqqqx..",
+    "..xqqqqqqWqqqx..",
+    "...xqqqqqqqqx...",
+    "...xqqqqqqqqx...",
+    "....xxxxxxxx....",
+    "................",
+    "................",
+    "................",
+]
+
 ITEMS = {
     "cheeseburger": CHEESEBURGER,
     "sushi": SUSHI,
+    "smoothie": SMOOTHIE,
     "rainbow_candy": RAINBOW_CANDY,
     "ramen": RAMEN,
     "cereal": CEREAL,
@@ -296,8 +316,8 @@ BOARD_TOP = [
     "tttttttttttt",
 ]
 BOARD_EDGE = ["tttttttttttt"]
-SALMON_TOP = ["oooo", "oxxo", "oxxo", "aooa"]
-RICE_SIDE = ["oooo", "WxxW", "WxxW"]
+SALMON_TOP = ["RRRR", "RxxR", "RxxR", "rRRr"]
+RICE_SIDE = ["RRRR", "WxxW", "WxxW"]
 RICE_BOTTOM = ["WWWW"] * 4
 
 # ------------------------------------------------------------------ plumbing

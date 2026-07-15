@@ -20,6 +20,7 @@ back when you finish eating, exactly like mushroom stew (`using_converts_to`).
 | §6Cheeseburger | hand | 8 | bread / cooked beef / bread (shaped) | — |
 | §dRainbow Candy | hand | 2 | 2 sugar + glow berries → 4 | 30s Speed II + Jump Boost II; edible when full |
 | §aSushi | hand | 5 | salmon + dried kelp + wheat → 2 | placeable on a cutting board |
+| §dBerry Smoothie | drink | 4 | glass bottle + 2 sweet berries + snowball | 5s Regeneration II; returns the bottle; drinkable when full |
 
 (Sweet berries stand in for tomatoes; milk stands in for cheese; wheat for rice.)
 
@@ -79,7 +80,7 @@ zip -r TastyTreats.mcaddon tasty_treats_bp tasty_treats_rp
 ```
 
 Bump the `version` in both manifests when you ship changes so devices that
-imported an older copy pick up the update (this pack is at 1.2.0).
+imported an older copy pick up the update (this pack is at 1.3.0).
 
 ## Ideas to extend it
 
