@@ -1,0 +1,20 @@
+{
+  "format_version": "1.21.30",
+  "minecraft:item": {
+    "description": {
+      "identifier": "demo:zap_wand",
+      "menu_category": {
+        "category": "equipment"
+      }
+    },
+    "components": {
+      "minecraft:icon": "zap_wand",
+      "minecraft:display_name": {
+        "value": "§bZap Wand"
+      },
+      "minecraft:max_stack_size": 1,
+      "minecraft:hand_equipped": true,
+      "minecraft:glint": true
+    }
+  }
+}
