@@ -35,6 +35,10 @@ const FOOD_EFFECTS = {
     effects: [{ effect: "night_vision", duration: 1200, amplifier: 0 }],
     message: "§eGlow up! Night Vision!",
   },
+  "demo:milkshake": {
+    effects: [{ effect: "resistance", duration: 600, amplifier: 0 }],
+    message: "§fSo creamy! Resistance!",
+  },
 };
 
 world.afterEvents.itemCompleteUse.subscribe((event) => {
@@ -74,6 +78,7 @@ const BLENDER_RECIPES = {
   "minecraft:melon_slice": "demo:melon_smoothie",
   "minecraft:cocoa_beans": "demo:choco_smoothie",
   "minecraft:glow_berries": "demo:glow_smoothie",
+  "demo:ice_cream": "demo:milkshake",
 };
 
 function takeOne(container, slot) {
@@ -132,6 +137,7 @@ world.afterEvents.itemUseOn.subscribe((event) => {
 world.afterEvents.itemUseOn.subscribe((event) => {
   const blockId = PLACEABLE[event.itemStack?.typeId];
   if (!blockId) return;
+  if (event.block.typeId === "demo:blender") return; // blender handler owns this tap
 
   const player = event.source;
   if (!player.isSneaking) return; // normal use still eats

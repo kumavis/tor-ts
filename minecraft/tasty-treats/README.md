@@ -24,6 +24,8 @@ back when you finish eating, exactly like mushroom stew (`using_converts_to`).
 | §aMelon Smoothie | drink | 4 | glass bottle + 2 melon slices + snowball | 30s Absorption II |
 | §6Choco Smoothie | drink | 4 | glass bottle + 2 cocoa beans + snowball | 30s Strength |
 | §eGlow Smoothie | drink | 4 | glass bottle + 2 glow berries + snowball | 60s Night Vision |
+| §fMilkshake | drink | 6 | glass bottle + ice cream sundae + sugar | 30s Resistance |
+| §fChef's Hat | wear | — | white wool over paper, hat-shaped | wearable 3D hat (head slot) |
 
 (Sweet berries stand in for tomatoes; milk stands in for cheese; wheat for rice.)
 
@@ -33,7 +35,8 @@ Craft a **Blender** (3 glass in a jar shape over 3 iron ingots) and place
 it. Tap the blender with a fruit in hand — sweet berries, a melon slice,
 cocoa beans, or glow berries — and if you have a glass bottle anywhere in
 your inventory, it whirrs and hands you that fruit's smoothie (one fruit +
-one bottle, cheaper than the crafting-table recipes). All smoothies use
+one bottle, cheaper than the crafting-table recipes). Tapping it with an
+**ice cream sundae** blends a Milkshake. All smoothies use
 the drink animation and return their bottle when finished. Mine the
 blender to pick it back up.
 
@@ -66,6 +69,8 @@ tasty_treats_bp/                    Behavior pack (game logic)
   loot_tables/blocks/*.json         Mining a dish drops its food back
   scripts/main.js                   Effects table + sneak-to-place handler
 tasty_treats_rp/                    Resource pack (visuals)
+  attachables/chefs_hat.json        Worn-on-head model binding
+  models/entity/chefs_hat.geo.json  3D hat geometry (head bone)
   models/blocks/food_blocks.geo.json  3D bowl + sushi board geometry
   textures/items/*.png              16x16 pixel-art sprites
   textures/item_texture.json        Maps icon names to sprites
@@ -93,7 +98,7 @@ zip -r TastyTreats.mcaddon tasty_treats_bp tasty_treats_rp
 ```
 
 Bump the `version` in both manifests when you ship changes so devices that
-imported an older copy pick up the update (this pack is at 1.4.0).
+imported an older copy pick up the update (this pack is at 1.5.0).
 
 ## Ideas to extend it
 

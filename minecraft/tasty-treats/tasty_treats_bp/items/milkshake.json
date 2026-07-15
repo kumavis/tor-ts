@@ -1,0 +1,30 @@
+{
+  "format_version": "1.21.30",
+  "minecraft:item": {
+    "description": {
+      "identifier": "demo:milkshake",
+      "menu_category": {
+        "category": "nature",
+        "group": "itemGroup.name.drinks"
+      }
+    },
+    "components": {
+      "minecraft:icon": "milkshake",
+      "minecraft:display_name": {
+        "value": "§fMilkshake"
+      },
+      "minecraft:max_stack_size": 16,
+      "minecraft:food": {
+        "nutrition": 6,
+        "saturation_modifier": 0.6,
+        "can_always_eat": true,
+        "using_converts_to": "minecraft:glass_bottle"
+      },
+      "minecraft:use_animation": "drink",
+      "minecraft:use_modifiers": {
+        "use_duration": 2.0,
+        "movement_modifier": 0.33
+      }
+    }
+  }
+}

@@ -237,9 +237,49 @@ SMOOTHIE_FLAVORS = {
     "glow_smoothie": "C",   # glowing yellow
 }
 
+MILKSHAKE = [
+    "...........WR...",
+    "..........WR....",
+    "..........WR....",
+    "..xxxxxxxxWRxx..",
+    "..xWWWWRWWWWWx..",
+    "..xWWWWWWWWWWx..",
+    "..xWmWWWWWmWWx..",
+    "..xWWWWWWWWWWx..",
+    "..xWWWWWWWWWWx..",
+    "..xWWWWWWWWWWx..",
+    "...xWWWWWWWWx...",
+    "...xmWWWWWWmx...",
+    "....xxxxxxxx....",
+    "................",
+    "................",
+    "................",
+]
+
+CHEFS_HAT = [
+    "................",
+    "....xxxxxxx.....",
+    "...xWWWWWWWx....",
+    "..xWWWWWWWWWx...",
+    "..xWWWWWWWWWx...",
+    "..xWWmWWWWWWx...",
+    "..xWWWWWWmWWx...",
+    "...xWWWWWWWx....",
+    "...xmmmmmmmx....",
+    "...xWWWWWWWx....",
+    "...xWWWWWWWx....",
+    "...xxxxxxxxx....",
+    "................",
+    "................",
+    "................",
+    "................",
+]
+
 ITEMS = {
     "cheeseburger": CHEESEBURGER,
     "sushi": SUSHI,
+    "milkshake": MILKSHAKE,
+    "chefs_hat": CHEFS_HAT,
     "rainbow_candy": RAINBOW_CANDY,
     "ramen": RAMEN,
     "cereal": CEREAL,
@@ -353,6 +393,28 @@ BLENDER_JAR_TOP = ["mmmmmm", "mqqqqm", "mqqqqm", "mqqqqm", "mqqqqm", "mmmmmm"]
 BLENDER_LID_SIDE = ["EEEE"]
 BLENDER_LID_TOP = ["EEEE", "EeeE", "EeeE", "EEEE"]
 
+# Chef's hat attachable atlas (geometry.demo_chefs_hat):
+#   (0, 0) 9x2  band sides        (0, 4) 9x9  band top/bottom
+#   (16, 0) 8x4 puff sides        (16, 8) 8x8 puff top/bottom
+HAT_BAND_SIDE = ["WWWWWWWWW", "mmmmmmmmm"]
+HAT_BAND_TOP = ["mmmmmmmmm"] + ["mWWWWWWWm"] * 7 + ["mmmmmmmmm"]
+HAT_PUFF_SIDE = [
+    "WWWWWWWW",
+    "WmWWWWmW",
+    "WWWWWWWW",
+    "mWWmmWWm",
+]
+HAT_PUFF_TOP = [
+    "mWWWWWWm",
+    "WWWmWWWW",
+    "WWWWWWWW",
+    "WmWWWWmW",
+    "WWWWWWWW",
+    "WWWWmWWW",
+    "WmWWWWWW",
+    "mWWWWWWm",
+]
+
 # ------------------------------------------------------------------ plumbing
 
 def parse(rows, w=16, h=16):
@@ -416,6 +478,14 @@ def main(base):
     blit(grid, BLENDER_LID_SIDE, 24, 0)
     blit(grid, BLENDER_LID_TOP, 24, 4)
     write_png(f"{base}/tasty_treats_rp/textures/blocks/blender.png", grid)
+
+    os.makedirs(f"{base}/tasty_treats_rp/textures/models", exist_ok=True)
+    grid = [[PALETTE["."]] * 32 for _ in range(32)]
+    blit(grid, HAT_BAND_SIDE, 0, 0)
+    blit(grid, HAT_BAND_TOP, 0, 4)
+    blit(grid, HAT_PUFF_SIDE, 16, 0)
+    blit(grid, HAT_PUFF_TOP, 16, 8)
+    write_png(f"{base}/tasty_treats_rp/textures/models/chefs_hat.png", grid)
 
     icon = parse(CHEESEBURGER)
     write_png(f"{base}/tasty_treats_rp/pack_icon.png", icon, scale=8)
