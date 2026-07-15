@@ -1,22 +1,22 @@
 {
   "format_version": 2,
   "header": {
-    "name": "Zap Wand (Behavior)",
-    "description": "Adds a craftable Zap Wand that strikes lightning where you point it.",
-    "uuid": "140fb68e-a510-4273-82c6-acd06b99e5fe",
+    "name": "Tasty Treats (Behavior)",
+    "description": "Adds a Cheeseburger and a magic Rainbow Candy.",
+    "uuid": "d3c903a6-b807-4ee2-bc73-42a8861caa11",
     "version": [1, 0, 0],
     "min_engine_version": [1, 21, 0]
   },
   "modules": [
     {
       "type": "data",
-      "uuid": "6fa43c68-12dc-4ba8-b582-261131c8884a",
+      "uuid": "a9564dfe-aeca-4e3c-83f3-1044fba0a91d",
       "version": [1, 0, 0]
     },
     {
       "type": "script",
       "language": "javascript",
-      "uuid": "5c79516c-45ec-4236-bea8-419f0ef8b002",
+      "uuid": "11d98c74-5527-46ed-8fa8-c7a42d559361",
       "version": [1, 0, 0],
       "entry": "scripts/main.js"
     }
@@ -27,7 +27,7 @@
       "version": "1.9.0"
     },
     {
-      "uuid": "57f339a6-97ac-4b31-a8f7-23405c45b3e4",
+      "uuid": "56ba40e7-61d0-4bf0-9e0e-37bf7f3badb3",
       "version": [1, 0, 0]
     }
   ]

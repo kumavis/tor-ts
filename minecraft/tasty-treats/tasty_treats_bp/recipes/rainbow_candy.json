@@ -1,0 +1,21 @@
+{
+  "format_version": "1.20.10",
+  "minecraft:recipe_shapeless": {
+    "description": {
+      "identifier": "demo:rainbow_candy_recipe"
+    },
+    "tags": ["crafting_table"],
+    "ingredients": [
+      { "item": "minecraft:sugar" },
+      { "item": "minecraft:sugar" },
+      { "item": "minecraft:glow_berries" }
+    ],
+    "unlock": [
+      { "item": "minecraft:sugar" }
+    ],
+    "result": {
+      "item": "demo:rainbow_candy",
+      "count": 4
+    }
+  }
+}

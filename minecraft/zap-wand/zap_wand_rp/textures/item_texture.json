@@ -1,9 +1,0 @@
-{
-  "resource_pack_name": "zap_wand_rp",
-  "texture_name": "atlas.items",
-  "texture_data": {
-    "zap_wand": {
-      "textures": "textures/items/zap_wand"
-    }
-  }
-}

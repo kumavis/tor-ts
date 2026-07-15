@@ -1,0 +1,17 @@
+{
+  "format_version": 2,
+  "header": {
+    "name": "Tasty Treats (Resources)",
+    "description": "Textures and names for the Tasty Treats foods.",
+    "uuid": "56ba40e7-61d0-4bf0-9e0e-37bf7f3badb3",
+    "version": [1, 0, 0],
+    "min_engine_version": [1, 21, 0]
+  },
+  "modules": [
+    {
+      "type": "resources",
+      "uuid": "d0108bbc-a05f-4015-935d-326749bb732b",
+      "version": [1, 0, 0]
+    }
+  ]
+}

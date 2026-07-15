@@ -1,0 +1,12 @@
+{
+  "resource_pack_name": "tasty_treats_rp",
+  "texture_name": "atlas.items",
+  "texture_data": {
+    "cheeseburger": {
+      "textures": "textures/items/cheeseburger"
+    },
+    "rainbow_candy": {
+      "textures": "textures/items/rainbow_candy"
+    }
+  }
+}
