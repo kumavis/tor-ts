@@ -1,0 +1,28 @@
+{
+  "format_version": "1.21.30",
+  "minecraft:item": {
+    "description": {
+      "identifier": "demo:pizza_slice",
+      "menu_category": {
+        "category": "nature",
+        "group": "itemGroup.name.cookedFood"
+      }
+    },
+    "components": {
+      "minecraft:icon": "pizza_slice",
+      "minecraft:display_name": {
+        "value": "\u00a7cPizza Slice"
+      },
+      "minecraft:max_stack_size": 64,
+      "minecraft:food": {
+        "nutrition": 6,
+        "saturation_modifier": 0.6
+      },
+      "minecraft:use_animation": "eat",
+      "minecraft:use_modifiers": {
+        "use_duration": 1.6,
+        "movement_modifier": 0.33
+      }
+    }
+  }
+}

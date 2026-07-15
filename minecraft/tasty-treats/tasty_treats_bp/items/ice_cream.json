@@ -1,0 +1,30 @@
+{
+  "format_version": "1.21.30",
+  "minecraft:item": {
+    "description": {
+      "identifier": "demo:ice_cream",
+      "menu_category": {
+        "category": "nature",
+        "group": "itemGroup.name.cookedFood"
+      }
+    },
+    "components": {
+      "minecraft:icon": "ice_cream",
+      "minecraft:display_name": {
+        "value": "\u00a7bIce Cream Sundae"
+      },
+      "minecraft:max_stack_size": 1,
+      "minecraft:food": {
+        "nutrition": 4,
+        "saturation_modifier": 0.3,
+        "can_always_eat": true,
+        "using_converts_to": "minecraft:bowl"
+      },
+      "minecraft:use_animation": "eat",
+      "minecraft:use_modifiers": {
+        "use_duration": 1.2,
+        "movement_modifier": 0.33
+      }
+    }
+  }
+}

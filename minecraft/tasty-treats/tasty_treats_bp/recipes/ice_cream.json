@@ -1,0 +1,33 @@
+{
+  "format_version": "1.20.10",
+  "minecraft:recipe_shapeless": {
+    "description": {
+      "identifier": "demo:ice_cream_recipe"
+    },
+    "tags": [
+      "crafting_table"
+    ],
+    "ingredients": [
+      {
+        "item": "minecraft:bowl"
+      },
+      {
+        "item": "minecraft:milk_bucket"
+      },
+      {
+        "item": "minecraft:snowball"
+      },
+      {
+        "item": "minecraft:sugar"
+      }
+    ],
+    "unlock": [
+      {
+        "item": "minecraft:snowball"
+      }
+    ],
+    "result": {
+      "item": "demo:ice_cream"
+    }
+  }
+}

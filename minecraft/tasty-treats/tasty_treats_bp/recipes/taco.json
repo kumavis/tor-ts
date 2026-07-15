@@ -1,0 +1,31 @@
+{
+  "format_version": "1.20.10",
+  "minecraft:recipe_shapeless": {
+    "description": {
+      "identifier": "demo:taco_recipe"
+    },
+    "tags": [
+      "crafting_table"
+    ],
+    "ingredients": [
+      {
+        "item": "minecraft:wheat"
+      },
+      {
+        "item": "minecraft:cooked_beef"
+      },
+      {
+        "item": "minecraft:sweet_berries"
+      }
+    ],
+    "unlock": [
+      {
+        "item": "minecraft:cooked_beef"
+      }
+    ],
+    "result": {
+      "item": "demo:taco",
+      "count": 2
+    }
+  }
+}

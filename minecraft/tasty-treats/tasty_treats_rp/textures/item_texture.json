@@ -2,11 +2,13 @@
   "resource_pack_name": "tasty_treats_rp",
   "texture_name": "atlas.items",
   "texture_data": {
-    "cheeseburger": {
-      "textures": "textures/items/cheeseburger"
-    },
-    "rainbow_candy": {
-      "textures": "textures/items/rainbow_candy"
-    }
+    "cheeseburger": { "textures": "textures/items/cheeseburger" },
+    "rainbow_candy": { "textures": "textures/items/rainbow_candy" },
+    "ramen": { "textures": "textures/items/ramen" },
+    "cereal": { "textures": "textures/items/cereal" },
+    "ice_cream": { "textures": "textures/items/ice_cream" },
+    "pizza_slice": { "textures": "textures/items/pizza_slice" },
+    "taco": { "textures": "textures/items/taco" },
+    "donut": { "textures": "textures/items/donut" }
   }
 }
