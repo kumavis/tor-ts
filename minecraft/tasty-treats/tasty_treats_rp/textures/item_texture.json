@@ -3,6 +3,7 @@
   "texture_name": "atlas.items",
   "texture_data": {
     "cheeseburger": { "textures": "textures/items/cheeseburger" },
+    "sushi": { "textures": "textures/items/sushi" },
     "rainbow_candy": { "textures": "textures/items/rainbow_candy" },
     "ramen": { "textures": "textures/items/ramen" },
     "cereal": { "textures": "textures/items/cereal" },

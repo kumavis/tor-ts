@@ -1,2 +1,6 @@
 pack.name=Tasty Treats (Resources)
 pack.description=Textures and names for the Tasty Treats foods.
+tile.demo:ramen_bowl.name=Bowl of Ramen
+tile.demo:cereal_bowl.name=Bowl of Cereal
+tile.demo:ice_cream_bowl.name=Bowl of Ice Cream
+tile.demo:sushi_board.name=Sushi Board
