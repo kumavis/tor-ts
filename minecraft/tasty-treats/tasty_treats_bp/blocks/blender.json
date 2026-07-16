@@ -8,6 +8,10 @@
       }
     },
     "components": {
+      "minecraft:crafting_table": {
+        "crafting_tags": ["blender"],
+        "table_name": "Blender"
+      },
       "minecraft:geometry": "geometry.demo_blender",
       "minecraft:material_instances": {
         "*": {

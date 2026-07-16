@@ -4,15 +4,27 @@
     "description": {
       "identifier": "demo:smoothie_recipe"
     },
-    "tags": ["crafting_table"],
+    "tags": [
+      "blender"
+    ],
     "ingredients": [
-      { "item": "minecraft:glass_bottle" },
-      { "item": "minecraft:sweet_berries" },
-      { "item": "minecraft:sweet_berries" },
-      { "item": "minecraft:snowball" }
+      {
+        "item": "minecraft:glass_bottle"
+      },
+      {
+        "item": "minecraft:sweet_berries"
+      },
+      {
+        "item": "minecraft:sweet_berries"
+      },
+      {
+        "item": "minecraft:snowball"
+      }
     ],
     "unlock": [
-      { "item": "minecraft:sweet_berries" }
+      {
+        "item": "minecraft:sweet_berries"
+      }
     ],
     "result": {
       "item": "demo:smoothie"

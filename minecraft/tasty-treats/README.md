@@ -20,11 +20,11 @@ back when you finish eating, exactly like mushroom stew (`using_converts_to`).
 | §6Cheeseburger | hand | 8 | bread / cooked beef / bread (shaped) | — |
 | §dRainbow Candy | hand | 2 | 2 sugar + glow berries → 4 | 30s Speed II + Jump Boost II; edible when full |
 | §aSushi | hand | 5 | salmon + dried kelp + wheat → 2 | placeable on a cutting board |
-| §dBerry Smoothie | drink | 4 | glass bottle + 2 sweet berries + snowball | 5s Regeneration II; returns the bottle; drinkable when full |
-| §aMelon Smoothie | drink | 4 | glass bottle + 2 melon slices + snowball | 30s Absorption II |
-| §6Choco Smoothie | drink | 4 | glass bottle + 2 cocoa beans + snowball | 30s Strength |
-| §eGlow Smoothie | drink | 4 | glass bottle + 2 glow berries + snowball | 60s Night Vision |
-| §fMilkshake | drink | 6 | glass bottle + ice cream sundae + sugar | 30s Resistance |
+| §dBerry Smoothie | drink | 4 | blender: bottle + 2 sweet berries + snowball | 5s Regeneration II; returns the bottle; drinkable when full |
+| §aMelon Smoothie | drink | 4 | blender: bottle + 2 melon slices + snowball | 30s Absorption II |
+| §6Choco Smoothie | drink | 4 | blender: bottle + 2 cocoa beans + snowball | 30s Strength |
+| §eGlow Smoothie | drink | 4 | blender: bottle + 2 glow berries + snowball | 60s Night Vision |
+| §fMilkshake | drink | 6 | blender: bottle + ice cream sundae + sugar | 30s Resistance |
 | §fChef's Hat | wear | — | white wool over paper, hat-shaped | wearable 3D hat (head slot) |
 
 (Sweet berries stand in for tomatoes; milk stands in for cheese; wheat for rice.)
@@ -32,13 +32,12 @@ back when you finish eating, exactly like mushroom stew (`using_converts_to`).
 ## The smoothie bar
 
 Craft a **Blender** (3 glass in a jar shape over 3 iron ingots) and place
-it. Tap the blender with a fruit in hand — sweet berries, a melon slice,
-cocoa beans, or glow berries — and if you have a glass bottle anywhere in
-your inventory, it whirrs and hands you that fruit's smoothie (one fruit +
-one bottle, cheaper than the crafting-table recipes). Tapping it with an
-**ice cream sundae** blends a Milkshake. All smoothies use
-the drink animation and return their bottle when finished. Mine the
-blender to pick it back up.
+it. Tapping it opens a real crafting menu titled "Blender" — same UI as a
+crafting table, but it's the only place drink recipes appear: the four
+smoothies and the milkshake are tagged `blender` and cannot be made at a
+regular crafting table. All drinks use the drink animation and return
+their bottle when finished. Mine the blender to pick it back up.
+(`minecraft:crafting_table` block component + recipe `tags: ["blender"]`.)
 
 ## Placing food in the world
 
@@ -98,7 +97,7 @@ zip -r TastyTreats.mcaddon tasty_treats_bp tasty_treats_rp
 ```
 
 Bump the `version` in both manifests when you ship changes so devices that
-imported an older copy pick up the update (this pack is at 1.5.0).
+imported an older copy pick up the update (this pack is at 1.6.0).
 
 ## Ideas to extend it
 

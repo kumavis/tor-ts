@@ -1,4 +1,4 @@
-import { world, ItemStack } from "@minecraft/server";
+import { world } from "@minecraft/server";
 
 // ---------------------------------------------------------------- effects
 // Granted when a food finishes being eaten. Durations are in ticks
@@ -70,74 +70,10 @@ const FACE_OFFSETS = {
   East: { x: 1, y: 0, z: 0 },
 };
 
-// ---------------------------------------------------------------- blender
-// Tap the blender block with a fruit in hand (glass bottle somewhere in
-// your inventory) and it blends a smoothie on the spot.
-const BLENDER_RECIPES = {
-  "minecraft:sweet_berries": "demo:smoothie",
-  "minecraft:melon_slice": "demo:melon_smoothie",
-  "minecraft:cocoa_beans": "demo:choco_smoothie",
-  "minecraft:glow_berries": "demo:glow_smoothie",
-  "demo:ice_cream": "demo:milkshake",
-};
-
-function takeOne(container, slot) {
-  const stack = container.getItem(slot);
-  if (!stack) return;
-  if (stack.amount > 1) {
-    stack.amount -= 1;
-    container.setItem(slot, stack);
-  } else {
-    container.setItem(slot, undefined);
-  }
-}
-
-world.afterEvents.itemUseOn.subscribe((event) => {
-  if (event.block.typeId !== "demo:blender") return;
-  const result = BLENDER_RECIPES[event.itemStack?.typeId];
-  if (!result) return;
-
-  const player = event.source;
-  const container = player.getComponent("inventory")?.container;
-  if (!container) return;
-
-  let creative = false;
-  try {
-    creative = player.getGameMode() === "creative";
-  } catch {}
-
-  if (!creative) {
-    let bottleSlot = -1;
-    for (let i = 0; i < container.size; i++) {
-      if (container.getItem(i)?.typeId === "minecraft:glass_bottle") {
-        bottleSlot = i;
-        break;
-      }
-    }
-    if (bottleSlot < 0) {
-      player.onScreenDisplay.setActionBar("§7The blender needs a glass bottle!");
-      return;
-    }
-    takeOne(container, bottleSlot);
-    if (container.getItem(player.selectedSlot)?.typeId === event.itemStack.typeId) {
-      takeOne(container, player.selectedSlot);
-    }
-  }
-
-  const leftover = container.addItem(new ItemStack(result, 1));
-  if (leftover) {
-    const loc = event.block.location;
-    player.dimension.spawnItem(leftover, { x: loc.x + 0.5, y: loc.y + 1, z: loc.z + 0.5 });
-  }
-  player.playSound("random.click");
-  player.playSound("random.pop");
-  player.onScreenDisplay.setActionBar("§bWhirrrr! Smoothie ready!");
-});
-
 world.afterEvents.itemUseOn.subscribe((event) => {
   const blockId = PLACEABLE[event.itemStack?.typeId];
   if (!blockId) return;
-  if (event.block.typeId === "demo:blender") return; // blender handler owns this tap
+  if (event.block.typeId === "demo:blender") return; // that tap opens the blender menu
 
   const player = event.source;
   if (!player.isSneaking) return; // normal use still eats

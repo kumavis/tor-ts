@@ -4,14 +4,24 @@
     "description": {
       "identifier": "demo:milkshake_recipe"
     },
-    "tags": ["crafting_table"],
+    "tags": [
+      "blender"
+    ],
     "ingredients": [
-      { "item": "minecraft:glass_bottle" },
-      { "item": "demo:ice_cream" },
-      { "item": "minecraft:sugar" }
+      {
+        "item": "minecraft:glass_bottle"
+      },
+      {
+        "item": "demo:ice_cream"
+      },
+      {
+        "item": "minecraft:sugar"
+      }
     ],
     "unlock": [
-      { "item": "minecraft:sugar" }
+      {
+        "item": "minecraft:sugar"
+      }
     ],
     "result": {
       "item": "demo:milkshake"
