@@ -9,7 +9,7 @@ package «tor-core» where
 --   2. Run `bash packages/core/scripts/verify.sh` (regenerates lake-manifest.json).
 --   3. Update THALES_REV in scripts/verify.sh and the CI cache key.
 require thales from git
-  "https://github.com/jessealama/thales.git" @ "31f300449ea4514e1975fa559011d18793ee1a7a"
+  "https://github.com/jessealama/thales.git" @ "3c7191328c824390be95591c0844ea52eaadb3c2"
 
 /-- The Thales-emitted sidecars. Populated by `scripts/verify.sh` before
 `lake build` is invoked; the directory exists in-tree as `Generated/`

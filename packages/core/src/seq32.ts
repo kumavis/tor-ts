@@ -13,13 +13,27 @@
 const TWO32: bigint = 4294967296n; // 2^32
 const TWO31: bigint = 2147483648n; // 2^31
 
+/**
+ * Truncated remainder — the value `a % b` would have.
+ *
+ * Written without `%` because Thales 0.7 lowers `%` on `bigint` to the
+ * Float helper `jsMod`, which produces uncompilable Lean (see
+ * MIGRATION.md F2 / thales-issues.md #13). Both TS `bigint /` and Lean
+ * `Int./` truncate toward zero, so `a - (a / b) * b` is exactly the
+ * truncated remainder on both paths. `Spec/Seq32.lean` pins this to
+ * the mathematical identity so the workaround is itself verified.
+ */
+/** @total */
+function truncMod(a: bigint, b: bigint): bigint {
+  return a - (a / b) * b;
+}
+
 /** Normalize an integer to the unsigned 32-bit range [0, 2^32). */
 /** @total */
 function uint32(x: bigint): bigint {
-  // `%` on TS bigints truncates toward zero (so `-1n % 4n === -1n`),
-  // which matches Lean's `Int.mod`. The branch normalizes the negative
-  // case into the canonical `[0, 2^32)` range.
-  const r = x % TWO32;
+  // Truncated remainder (so `-1n` maps to `-1n`, not `4294967295n`);
+  // the branch then normalizes the negative case into `[0, 2^32)`.
+  const r = truncMod(x, TWO32);
   if (r < 0n) {
     return r + TWO32;
   }

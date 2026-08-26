@@ -25,7 +25,7 @@ set -euo pipefail
 
 PKG_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 # Keep this SHA in sync with `require thales` in lakefile.lean.
-THALES_REV="${THALES_REV:-31f300449ea4514e1975fa559011d18793ee1a7a}"
+THALES_REV="${THALES_REV:-3c7191328c824390be95591c0844ea52eaadb3c2}"
 THALES_REPO="${THALES_REPO:-${PKG_DIR}/.thales}"
 THALES_BIN="${THALES_REPO}/.lake/build/bin/thales"
 

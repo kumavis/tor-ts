@@ -39,9 +39,25 @@ type ParsePrefixResult =
   | { kind: 'too_long' };
 
 // ----------------------------------------------------------------------------
-// Bit-extraction helpers (arithmetic only — no bitwise operators because
-// Thales 0.5 doesn't lower them on bigint).
+// Bit-extraction helpers.
+//
+// Arithmetic only — Thales does not lower bitwise operators on `bigint`,
+// so masks are expressed as remainders and shifts as multiplications.
 // ----------------------------------------------------------------------------
+
+/**
+ * Truncated remainder — the value `a % b` would have.
+ *
+ * Written without `%` because Thales 0.7 lowers `%` on `bigint` to the
+ * Float helper `jsMod`, which produces uncompilable Lean (see
+ * MIGRATION.md F2 / thales-issues.md #13). Both TS `bigint /` and Lean
+ * `Int./` truncate toward zero, so `a - (a / b) * b` is exactly the
+ * truncated remainder on both paths.
+ */
+/** @total */
+function truncMod(a: bigint, b: bigint): bigint {
+  return a - (a / b) * b;
+}
 
 /** Whether the high bit (0x80) of a byte is set. Assumes 0 ≤ b < 256. */
 /** @total */
@@ -52,20 +68,20 @@ function highBitSet(b: bigint): boolean {
 /** The low 7 bits (0x7f) of a byte. */
 /** @total */
 function low7Bits(b: bigint): bigint {
-  return b % 128n;
+  return truncMod(b, 128n);
 }
 
 /** Whether the second-highest bit (0x40) of a byte is set, given the
     byte. Equivalent to `(b mod 128) >= 64`. */
 /** @total */
 function secondHighBitSet(b: bigint): boolean {
-  return b % 128n >= 64n;
+  return truncMod(b, 128n) >= 64n;
 }
 
 /** The low 6 bits (0x3f) of a byte. */
 /** @total */
 function low6Bits(b: bigint): bigint {
-  return b % 64n;
+  return truncMod(b, 64n);
 }
 
 // ----------------------------------------------------------------------------

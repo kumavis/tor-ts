@@ -16,12 +16,25 @@ deriving instance DecidableEq for ParsePrefixResult
 -- Bit helpers
 ----------------------------------------------------------------------------
 
+/-- `truncMod` exists only because Thales 0.7 cannot lower `%` on
+    `bigint` (MIGRATION.md F2). These pin it to Lean's `Int` remainder
+    at the two divisors this module uses, so the workaround is itself
+    verified and the bit-extraction theorems below read as before.
+    `omega` needs a literal divisor, hence one lemma per constant. -/
+@[simp] theorem truncMod_128 (b : Int) : truncMod b 128 = b % 128 := by
+  unfold truncMod; omega
+
+@[simp] theorem truncMod_64 (b : Int) : truncMod b 64 = b % 64 := by
+  unfold truncMod; omega
+
 theorem highBitSet_iff (b : Int) : highBitSet b = true ↔ b ≥ 128 := by
   simp [highBitSet]
 
-theorem low7Bits_eq (b : Int) : low7Bits b = b % 128 := rfl
+theorem low7Bits_eq (b : Int) : low7Bits b = b % 128 := by
+  simp [low7Bits]
 
-theorem low6Bits_eq (b : Int) : low6Bits b = b % 64 := rfl
+theorem low6Bits_eq (b : Int) : low6Bits b = b % 64 := by
+  simp [low6Bits]
 
 theorem secondHighBitSet_iff (b : Int) :
     secondHighBitSet b = true ↔ b % 128 ≥ 64 := by

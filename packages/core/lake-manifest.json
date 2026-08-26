@@ -1,5 +1,5 @@
 {
-  "version": "1.1.0",
+  "version": "1.2.0",
   "packagesDir": ".lake/packages",
   "packages": [
     {
@@ -7,10 +7,10 @@
       "type": "git",
       "subDir": null,
       "scope": "",
-      "rev": "31f300449ea4514e1975fa559011d18793ee1a7a",
+      "rev": "3c7191328c824390be95591c0844ea52eaadb3c2",
       "name": "thales",
       "manifestFile": "lake-manifest.json",
-      "inputRev": "31f300449ea4514e1975fa559011d18793ee1a7a",
+      "inputRev": "3c7191328c824390be95591c0844ea52eaadb3c2",
       "inherited": false,
       "configFile": "lakefile.lean"
     },
@@ -31,7 +31,7 @@
       "type": "git",
       "subDir": null,
       "scope": "",
-      "rev": "756e3321fd3b02a85ffda19fef789916223e578c",
+      "rev": "f207b55ca9b784af029b6183f885b3efc2ed7688",
       "name": "batteries",
       "manifestFile": "lake-manifest.json",
       "inputRev": "main",
@@ -40,5 +40,6 @@
     }
   ],
   "name": "«tor-core»",
-  "lakeDir": ".lake"
+  "lakeDir": ".lake",
+  "fixedToolchain": false
 }
