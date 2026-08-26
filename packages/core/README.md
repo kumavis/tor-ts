@@ -17,6 +17,7 @@ and Lean 4.33.0.
 | ------------------------------------------------------------------------------ | ----------------------------------------------------------------- |
 | [`docs/PATTERNS.md`](docs/PATTERNS.md)                                         | Conventions and recipes for adding a module. **Read this first.** |
 | [`docs/MIGRATION.md`](docs/MIGRATION.md)                                       | Thales 0.5 → 0.7 findings and the staged plan                     |
+| [`docs/NEXT-STEPS.md`](docs/NEXT-STEPS.md)                                     | Ordered next actions for picking this work back up                |
 | [`docs/thales-issues.md`](docs/thales-issues.md)                               | Upstream bug tracker (downstream view)                            |
 | [`../../docs/thales-conversion-plan.md`](../../docs/thales-conversion-plan.md) | Seam strategy and per-package roadmap                             |
 
