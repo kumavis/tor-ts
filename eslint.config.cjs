@@ -14,6 +14,12 @@ module.exports = [
       '**/coverage/**',
       'consensus/**',
       'eslint.config.cjs',
+      // Build artifacts of `packages/core/scripts/verify.sh`: the cloned
+      // Thales checkout and Lake's dependency tree. Both are gitignored,
+      // but they appear locally after a verify run and carry hundreds of
+      // TypeScript fixtures that are deliberately malformed.
+      '**/.thales/**',
+      '**/.lake/**',
     ],
   },
   {

@@ -107,16 +107,20 @@ New in 0.6: `@thales/prelude` exports `Integer`, `Natural`, `Byte`
 refinement comes from a guard (`isByte(x)`), a throwing constructor
 (`asByte(x)`), or an in-range literal.
 
-Our `ByteList` currently carries "each element is a `bigint` in
-`[0, 256)`" as a _comment_. `Byte` would make that a type. Two caveats
-before adopting it wholesale:
+**Do not reach for these on wire values.** Our `ByteList` carries "each
+element is a `bigint` in `[0, 256)`" as a _comment_, and `Byte` would
+make it a type — but the refinements are `Float` subtypes
+(`Byte := { x : Float // isByte x = true }`), so adopting one moves the
+value off `Int`, and `omega` does not apply to `Float` at all. Every
+arithmetic theorem in `Spec/` is `Int` + `omega`. Arithmetic also widens
+back to `number`, so each operation needs re-narrowing via a guard or
+constructor.
 
-- Refinements are `Float` subtypes, so they do **not** compose with
-  `bigint`; adopting `Byte` means moving byte values off `bigint`.
-- Arithmetic always widens back to `number` — re-narrow with a guard or
-  constructor after every operation.
+That is a TS-side correctness gain paid for with a Lean-side proof
+collapse, and the Lean side is the whole point. Measured and rejected —
+see [`MIGRATION.md` F5](MIGRATION.md).
 
-Prototype on one module before committing the whole byte layer.
+They remain reasonable for values that never enter a proof.
 
 ### Tuples: still avoid
 
@@ -222,15 +226,34 @@ Admitted inside do-mode-lowerable declared functions:
 Module-level loops are still TH0010, as are loops in class
 constructors/methods.
 
-For `@total` code, prefer the canonical `for` or structural recursion.
+For `@total` code, **prefer structural recursion over loops** — and not
+just for termination. A loop lowers into `Id.run do` with `let mut`, and
+the canonical `for` additionally shims its index to `Float`
+(`let i : Float := i.toFloat`). Neither is reachable by `omega`, and
+without Mathlib there is no loop-invariant machinery to fall back on. A
+loop that Lean accepts as terminating can still be a function you cannot
+prove anything about. See `src/byteEncode.ts` for the escape hatch when
+the thing you are recursing on is a count rather than a structure.
 
-### Arrays are usable now
+### Arrays are usable now — but you cannot split one
 
-`map`, `filter`, `reduce`, `concat`, `length`, `slice` are in the
-subset. `join`, `indexOf`, `includes`, `lastIndexOf`, `some`, `every`,
+`map`, `filter`, `reduce`, `forEach`, `length` are in the subset.
+`join`, `indexOf`, `includes`, `lastIndexOf`, `some`, `every`,
 `findIndex` lower **only** when the receiver is an identifier the
 emitter statically resolves to `number[]` or `string[]` (TH0085) — a
 call result or a `boolean[]` receiver is rejected.
+
+**`slice` and `concat` do not exist on arrays**, on any element type,
+despite `subset.md` listing both. Verified against the builtin table;
+see [issue 15](thales-issues.md). So there is no array `trySplit` — no
+way to take a prefix and keep the remainder — which is why core's byte
+buffers are a cons-cell DU and not `Byte[]`
+([`MIGRATION.md` F5](MIGRATION.md)).
+
+Arrays do have one property our DUs lack: **an exported array-typed
+alias can be imported and used**, including `.length` and indexing, so
+arrays sidestep the exported-DU gap entirely. Worth remembering for a
+type that is never pattern-matched.
 
 `arr[i]` is `T | undefined` (TH0083 for non-array bracket access). Bind
 then narrow:
@@ -328,11 +351,48 @@ proof. `@total` opts into Lean's checker and emits a plain `def`.
   Lean sees no structural decrease. It is fine as a `partial def`.
 - **No `termination_by` / `decreasing_by` is emitted**, and `@decreasing`
   is documented inconsistently upstream — treat it as not working until
-  measured. For a bounded numeric loop, prefer the canonical `for`
-  shape, which _is_ `@total`-friendly.
+  measured.
 
 `@total` also forbids `@throws` (TH0066), uncaught throws (TH0067), and
 `while`/`do-while` (TH0068).
+
+### Recursing on a count: make the count a unary DU
+
+The rule above says numeric-only recursion is not `@total`-provable.
+The canonical `for` loop is the obvious escape, but it buys termination
+at the cost of provability (see "Loops"). There is a better move when
+the count is small and known: **turn the number into a structure.**
+
+```ts
+type Width = { kind: 'zero' } | { kind: 'succ'; pred: Width };
+```
+
+Recursion on `Width` is structural, so Lean's checker takes it and the
+function emits as a plain `def`. In Lean you get an induction principle
+for free, which is exactly what a round-trip proof wants:
+
+```ts
+/** @total */
+function encodeUintLE(value: bigint, w: Width): ByteList {
+  switch (w.kind) {
+    case 'zero':
+      return { kind: 'nil' };
+    case 'succ': {
+      const pred = w.pred;
+      const lo = truncMod(value, 256n);
+      const hi = value / 256n;
+      return { kind: 'cons', head: lo, tail: encodeUintLE(hi, pred) };
+    }
+  }
+}
+```
+
+Pair it with a `widthValue(w): bigint` so theorems can talk about the
+count, and expose named constructors (`width1()`, `width2()`, `width4()`)
+so callers never build one by hand. Unary is only viable for genuinely
+small counts — Tor's field widths are 1, 2 and 4 bytes, so it costs
+nothing. This is what unblocked `byteEncode.ts` after the note at the
+bottom of `bytes.ts` had written the encoders off as unreachable.
 
 ---
 

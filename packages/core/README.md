@@ -8,7 +8,7 @@ so it can be transpiled to Lean 4 and kernel-checked. Specification
 theorems live under `Spec/` and are checked by `lake build` in CI. If a
 file in this package fails either step, the build fails.
 
-**20 modules / 365 theorems**, against Thales `3c71913` (0.7-forthcoming)
+**21 modules / 411 theorems**, against Thales `3c71913` (0.7-forthcoming)
 and Lean 4.33.0.
 
 ## Docs
@@ -77,11 +77,21 @@ code ⇄ constructor round-trip and range/classifier theorems.
 | `cellHeader.ts`          | circuit ID, command byte, length prefix, payload             |       25 |
 | `kcpHeader.ts`           | KCP little-endian uint8/16/32 field decoders                 |       15 |
 | `encapsulationPrefix.ts` | Snowflake 1–3 byte variable-length prefix                    |       13 |
+| `byteEncode.ts`          | BE/LE integer **encoders**, circuit-ID serialization         |       46 |
 
 Headline: `trySplit_concat` — when the splitter succeeds, gluing the
 pieces back recovers the input exactly. Every parser built on it
 inherits that, and each parser has its own byte-counting invariant
 (`parseCircId_consumes_correctly`, `parsePayload_consumes_n`, …).
+
+`byteEncode.ts` supplies the missing direction, and with it the only
+**round-trip** theorems in core: `decode (encode v w) = v` for both
+endiannesses, and the stream-shaped
+`trySplit (encode v w ++ rest) = ok (encode v w) rest` — the field comes
+back _and_ the remainder is untouched. Field widths are a unary DU
+rather than a `bigint`, which is what makes the encoders structurally
+recursive and therefore `@total`; see the module header for why the
+obvious signature cannot work.
 
 ### Protocol state machines
 

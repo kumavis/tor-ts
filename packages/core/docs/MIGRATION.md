@@ -10,18 +10,23 @@ docs — the probe procedure is at the bottom so it can be re-run.
 
 ## TL;DR
 
-|                                                          |                         |
-| -------------------------------------------------------- | ----------------------- |
-| Modules that still **emit**                              | **20 / 20**             |
-| Modules that fully **build** (emit + all `Spec/` proofs) | **18 / 20**             |
-| Proof changes needed for Lean 4.29 → 4.33                | **zero**                |
-| Blocking regressions                                     | **1** (`%` on `bigint`) |
-| Headline win (deduplicate `ByteList` via imports)        | **blocked** — see F3    |
+|                                                          |                               |
+| -------------------------------------------------------- | ----------------------------- |
+| Modules that still **emit**                              | **20 / 20**                   |
+| Modules that fully **build** (emit + all `Spec/` proofs) | **18 / 20**                   |
+| Proof changes needed for Lean 4.29 → 4.33                | **zero**                      |
+| Blocking regressions                                     | **1** (`%` on `bigint`)       |
+| Headline win (deduplicate `ByteList` via imports)        | **blocked** — see F3          |
+| Byte representation                                      | **stays `ByteList`** — see F5 |
 
 The migration is cheap. The _payoff_ is smaller than the upstream
 changelog suggests, because the one feature we most wanted — sharing a
 discriminated-union type across modules — does not work for types we
 pattern-match on.
+
+Post-migration the package sits at **21 modules / 411 theorems**: the
+0.7 subset did unlock one substantial addition, `byteEncode.ts`, which
+brought core its first round-trip theorems (see "Harvest", Stage 3.3).
 
 ---
 
@@ -148,6 +153,72 @@ level), TH0041 (one lowerable `switch` shape), TH0092 (no `typeof`) —
 **all pass on our existing 20 modules unchanged.** The house style we
 converged on at 0.5 happened to already satisfy them.
 
+### F5 — Decision: keep `ByteList`, do not adopt `Byte[]` or `Byte`
+
+NEXT-STEPS §3 and §4 asked whether to move byte buffers from the
+hand-rolled cons-cell DU to `Byte[]`, now that arrays and refinement
+types exist. **Both answers are no.** Measured against `3c71913`:
+
+**1. There is no way to split an array.** `.slice` and `.concat` do not
+exist on any array type — not `bigint[]`, not `number[]`. The array
+builtin table in `Thales/TypeCheck/Builtins.lean` has arms for
+`length`, `forEach`, `map`, `filter`, `reduce`, `join`, `indexOf`,
+`includes`, `lastIndexOf`, `some`, `every`, `findIndex` — and nothing
+else. `subset.md` claims otherwise in three places; that mismatch is
+[issue 15](thales-issues.md).
+
+This is decisive on its own. Core's parsers are built on `trySplit`:
+take `n` bytes, hand back the remainder. `map`/`filter`/`reduce` cannot
+express it. Without `slice`, the array representation cannot support
+incremental parsing at all.
+
+**2. `@total` does not survive array recursion.** Even given `slice`,
+`subset.md` states Lean cannot prove a sliced array is smaller, so a
+recursive array parser would be `partial def` — outside the kernel's
+termination check, which is most of what we are buying.
+
+**3. Loops are proof-hostile here.** The remaining iteration route is
+`for-of` / canonical `for`, which lower into `Id.run do` with `let mut`.
+The canonical form also shims the loop index to **`Float`**
+(`let i : Float := i.toFloat`). Our 411 theorems are `Int` + `omega`;
+`omega` does not apply to `Float` at all, and without Mathlib we have no
+loop-invariant machinery to fall back on.
+
+**4. `Byte` is a `Float` subtype.** `@thales/prelude` defines
+`Byte = number`, mirrored in Lean as `{ x : Float // isByte x = true }`.
+Adopting it would move every byte value off `Int`, which is exactly the
+`omega` cliff again — its own `Inhabited` instance needs
+`native_decide`. So §4 is answered by §3's evidence: **`Byte` is a
+correctness upgrade on the TS side and a proof downgrade on the Lean
+side**, and the Lean side is the point.
+
+**What arrays genuinely do win**, and it is real: an exported
+array-typed alias _can_ be imported and used — `.length` and computed
+index access both work across a module boundary. Verified directly:
+
+```ts
+// lib.ts
+export type Buf = bigint[];
+export function bufLen(b: Buf): number {
+  return b.length;
+}
+
+// app.ts — emits and compiles
+import { bufLen, type Buf } from './lib';
+export function twiceLen(b: Buf): number {
+  return bufLen(b) + b.length;
+}
+```
+
+So arrays sidestep F3/#14 entirely, as NEXT-STEPS §3 predicted. But the
+prize for sidestepping #14 is deduplicating ~200 lines, and the price is
+giving up structural recursion, `@total`, and `omega`. Not close.
+
+**Consequence:** `ByteList` stays. The duplication stays with it until
+#14 lands upstream. Indexed reads under `noUncheckedIndexedAccess` are
+`T | undefined` and need bind-then-narrow, which is one more small tax
+on the array route, though not one that mattered to the decision.
+
 ---
 
 ## Plan
@@ -167,10 +238,11 @@ converged on at 0.5 happened to already satisfy them.
 
 No proof edits. No module rewrites.
 
-### Stage 2 — File the two new bugs upstream
+### Stage 2 — File the new bugs upstream
 
-Both are accept-then-uncompilable emit holes; TH9005's own message asks
-for a report. Drafts go in [`thales-issues.md`](thales-issues.md).
+The first two are accept-then-uncompilable emit holes; TH9005's own
+message asks for a report. Drafts go in
+[`thales-issues.md`](thales-issues.md).
 
 - **`%` on `bigint` routes through the Float `jsMod`** (F2). Minimal
   repro is four lines; the fix is presumably to select `Int.emod` (or
@@ -179,6 +251,10 @@ for a report. Drafts go in [`thales-issues.md`](thales-issues.md).
   report with the full matrix above, since the two symptoms
   (TH0041/TH9005 on `switch`, bad `.kind` projection on `if`) are the
   same underlying gap seen from two directions.
+- **Array `.slice`/`.concat` are documented but absent** (F5). A doc/
+  surface mismatch rather than an emit hole, but it is what decided the
+  byte-representation question, and TH0002's remedy text currently
+  recommends a method that does not exist.
 
 Landing F3 upstream is the single highest-leverage thing for this
 project: it unblocks module composition, which unblocks the full cell
@@ -189,25 +265,26 @@ parser, which is the next substantive verification target.
 Independent of F3, several things are newly reachable and worth doing in
 priority order:
 
-1. **`Byte` refinement type.** Our `ByteList` carries "a `bigint` in
-   `[0, 256)`" as a comment-level convention. `@thales/prelude`'s `Byte`
-   makes it a compile-time-enforced type. This is a real correctness
-   upgrade to the most-used type in core, and it does not depend on F3.
-2. **Arrays instead of cons-cell lists.** `map`/`filter`/`reduce`/
-   `slice`/`concat` are genuinely callable now. Modelling byte buffers
-   as `Byte[]` rather than a hand-rolled inductive would make the seam
-   adapter's job trivial (no list↔array marshalling) — but it changes
-   every proof in `Spec/Bytes.lean`, `Spec/CellHeader.lean`,
-   `Spec/KcpHeader.lean`. Worth prototyping on one module before
-   committing.
-3. **Loops for encoders.** The canonical `for (let i = 0; i < n; i++)`
-   shape is `@total`-friendly, which unblocks the length-recursive
-   encoders (`bigIntToBytesLE`, `encodeUintBE`) that Issues 9/10 blocked
-   at 0.5.
+1. ~~**`Byte` refinement type.**~~ **Rejected — see F5.** `Byte` is a
+   `Float` subtype, so adopting it moves byte values off `Int` and out
+   of `omega`'s reach.
+2. ~~**Arrays instead of cons-cell lists.**~~ **Rejected — see F5.**
+   `slice`/`concat` do not exist on arrays, so `trySplit` has no array
+   equivalent, and `@total` does not survive array recursion anyway.
+3. **Encoders.** ✅ **Done** — `byteEncode.ts`, 46 theorems, core's
+   first round-trip results. Not via loops, though: the canonical `for`
+   shape emits into `Id.run do` with a `Float`-shimmed index, which is
+   proof-hostile without Mathlib. What worked instead was making the
+   _width_ a unary DU, so recursion on it is structural and every
+   encoder is `@total`. `Spec/ByteEncode.lean` proves
+   `decode (encode v w) = v` for both endiannesses, plus the
+   stream-shaped `trySplit (encode v w ++ rest) = ok (encode v w) rest`.
+   See the header of `src/byteEncode.ts` for why the obvious
+   `width: bigint` signature cannot work.
 4. **`string.split`.** The string surface is still tiny (`length`,
    `startsWith`, `endsWith`, `split`) — but `split` alone is most of
    `parsePortList`, so the parsing half of `exit-policy.ts` is worth
-   re-examining.
+   re-examining. Still open.
 
 ### Stage 4 — Rebase onto `tor-ts` main
 

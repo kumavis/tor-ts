@@ -156,12 +156,11 @@ function bytesToBigIntLE(bs: ByteList): bigint {
   }
 }
 
-// Note: a `bigIntToBytesLE(n, length)` encoder is the natural inverse,
-// but it recurses on `length` (an `Int`) which neither structural
-// recursion nor Thales 0.5's `@decreasing` annotation handle yet.
-// Lean rejects the resulting `partial def` because `ByteList` doesn't
-// auto-derive `Nonempty`. Once Thales 0.5+ either honours
-// `@decreasing` or emits `deriving Nonempty` for inductives, the
-// encoder can land here and the round-trip theorem
-// `bytesToBigIntLE (bigIntToBytesLE n l) = n mod 256^l` becomes
-// reachable.
+// The inverses live in `byteEncode.ts`. A `bigIntToBytesLE(n, length)`
+// that recurses on `length` (an `Int`) is still not `@total` — there is
+// no structural decrease, which is what this note originally got stuck
+// on. The way through was to make the width a unary DU rather than a
+// number, so the recursion becomes structural; see that module's header.
+// The round-trip theorems it was waiting for
+// (`bytesToBigIntLE (encodeUintLE v w) = v`, and the same for the
+// big-endian pair) are proved in `Spec/ByteEncode.lean`.
