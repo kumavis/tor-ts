@@ -1,0 +1,2 @@
+# Thales emits sidecars into this directory.
+# Files matching `*.lean` here are generated and not committed to git.

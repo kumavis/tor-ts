@@ -14,6 +14,12 @@ module.exports = [
       '**/coverage/**',
       'consensus/**',
       'eslint.config.cjs',
+      // Build artifacts of `packages/core/scripts/verify.sh`: the cloned
+      // Thales checkout and Lake's dependency tree. Both are gitignored,
+      // but they appear locally after a verify run and carry hundreds of
+      // TypeScript fixtures that are deliberately malformed.
+      '**/.thales/**',
+      '**/.lake/**',
     ],
   },
   {
@@ -87,6 +93,21 @@ module.exports = [
     files: ['**/*.spec.ts'],
     rules: {
       '@typescript-eslint/no-explicit-any': 'off',
+    },
+  },
+  {
+    // Thales 0.5's parser rejects `export` declarations
+    // (https://github.com/jessealama/thales filed as Issue 5 in
+    // packages/core/docs/thales-issues.md), so every top-level
+    // function and `const` in `packages/core/src/` is module-local
+    // and appears "unused" to ESLint. The Lean side IS using these
+    // — they're consumed by the emitted Generated/*.lean and
+    // referenced in Spec/*.lean — so disable the rule for this
+    // tree until Thales gains export support and the seam can
+    // re-`export` properly.
+    files: ['packages/core/src/**/*.ts'],
+    rules: {
+      '@typescript-eslint/no-unused-vars': 'off',
     },
   },
   {
