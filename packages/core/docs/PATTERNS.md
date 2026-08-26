@@ -1,29 +1,45 @@
 # `tor-core` patterns
 
-Conventions, recipes, and workarounds for adding to the verified core.
-This file captures what 20 modules of trial-and-error converged on so
-the next contributor doesn't re-discover them.
+Conventions and recipes for adding to the verified core.
 
-Where a convention is a workaround for a Thales 0.5 limitation, the
-relevant draft in [`docs/thales-issues.md`](thales-issues.md) is cited
-in parentheses.
+**Target: Thales 0.7-forthcoming (`3c71913`), Lean 4.33.0.** This file
+was rewritten for 0.7; most of the 0.5-era workarounds it used to
+document are obsolete because upstream fixed them. Where a rule is a
+workaround for a _current_ limitation, the finding is cited from
+[`MIGRATION.md`](MIGRATION.md) or the draft in
+[`thales-issues.md`](thales-issues.md).
+
+---
+
+## The two rules that shape everything
+
+Most of the house style falls out of these:
+
+1. **A discriminated union you pattern-match on must stay module-local.**
+   Exporting it breaks matching in both available forms (MIGRATION F3).
+   You may `export` the _functions_; the type becomes a `private
+inductive` in the emitted Lean, which is fine.
+2. **Don't use `%` on `bigint`.** It lowers to the Float `jsMod` and
+   produces uncompilable Lean (MIGRATION F2). Use the `truncMod` helper
+   pattern below.
+
+Everything else is either ordinary Thales-subset discipline or a
+now-lifted restriction you no longer have to think about.
 
 ---
 
 ## File layout
 
 ```
-src/<camelCase>.ts         ← Thales subset, also valid TS
+src/<camelCase>.ts          ← Thales subset, also valid TS
 Generated/<PascalCase>.lean ← emitted by Thales (gitignored)
 Spec/<PascalCase>.lean      ← hand-written theorems
 ```
 
-Filename → Lean-module-name conversion: Thales pascalises the source
-basename (`exitPolicy.ts` → `ExitPolicy.lean`, `kcpHeader.ts` →
-`KcpHeader.lean`). Mirror that pascalisation when naming the matching
-`Spec/` file.
+Thales pascalises the source basename (`exitPolicy.ts` →
+`ExitPolicy.lean`). Mirror that when naming the `Spec/` file.
 
-In `Spec/<X>.lean`:
+`Spec/<X>.lean` boilerplate:
 
 ```lean
 import Generated.<X>
@@ -31,404 +47,370 @@ import Thales.TS.Runtime
 open Thales.TS
 
 namespace Spec.<X>
-open _root_.<X>           -- `_root_` is needed; `open <X>` would collide
-                          -- with the surrounding `Spec.<X>` namespace.
+open _root_.<X>   -- `_root_` required; bare `open <X>` collides with
+                  -- the enclosing `Spec.<X>` namespace
 
-deriving instance DecidableEq for <Type1>
-deriving instance DecidableEq for <Type2>
--- ... etc, one for each emitted inductive you'll prove against
+deriving instance DecidableEq for <EachEmittedType>
 ```
 
-`deriving instance DecidableEq` is required for every emitted type that
-appears in a `decide`-closed theorem. Thales emits `deriving Repr` only;
-without explicit `DecidableEq`, `decide` can't reduce equalities.
+Thales emits inductives with `deriving Repr` only. Add `DecidableEq`
+yourself for any type that appears in a `decide`-closed equality or in a
+`cases h : … with` over its constructors.
 
 ---
 
-## Type shapes
+## Types
 
-### Discriminated unions, not interfaces, for anything you construct
+### Discriminated unions for anything you match on — and keep them local
 
-```ts
-// ✗ broken: single-record `type` aliases collapse to `abbrev := Unit`
-//   in the emitted Lean (Issue 2). Object literals on `interface`
-//   types emit `(unsupported expr)` (Issue 3).
-type PortRange = { start: bigint; endPort: bigint };
-
-// ✓ works for *consuming* the value but not for constructing it
-interface PortRange {
-  start: bigint;
-  endPort: bigint;
-}
-
-// ✓ works for both — the emitter handles DU constructor expressions
-type PortRange = { kind: 'range'; start: bigint; endPort: bigint };
-```
-
-Rule of thumb: if any function in the verified core needs to build a
-value of the type, use a multi-arm DU. Single-arm DU `type X = { kind:
-'…'; … }` collapses to `Unit` just like the bare `type X = { … }`
-form.
-
-### Multi-output return types: DUs, not tuples
+The DU + `switch (x.kind)` shape is still the workhorse, and it is the
+_only_ shape whose Lean output we can reason about comfortably. But as
+of 0.7 the type must not be exported:
 
 ```ts
-// ✗ tuples emit as Lean `Array`, not `Prod` (Issue 7)
-function trySplit(n: bigint, bs: ByteList): [ByteList, ByteList] | null {
-  ...
-}
+// ✓ local type, exported functions — the type becomes `private
+//   inductive` in Lean and the functions are importable
+type ByteList = { kind: 'nil' } | { kind: 'cons'; head: bigint; tail: ByteList };
 
-// ✓ DU result with named fields
-type SplitResult =
-  | { kind: 'ok'; taken: ByteList; rest: ByteList }
-  | { kind: 'short' };
+export function byteListLength(bs: ByteList): bigint { … }
 ```
 
-The DU shape is also self-documenting in proofs — every theorem
-mentions `.ok` / `.short` instead of "the first element of the
-returned tuple".
+```ts
+// ✗ TH0041 (subset check) or TH9005 (emit) — see MIGRATION F3
+export type ByteList = { kind: 'nil' } | { kind: 'cons'; … };
+function byteListLength(bs: ByteList): bigint {
+  switch (bs.kind) { … }
+}
+```
 
-### Avoid Lean reserved-keyword field names
+The consequence: a DU that several modules need still has to be
+**redeclared per module**, with a `// Mirrored from <file> — keep in
+sync` header. That is what `cellHeader.ts`, `kcpHeader.ts`, and
+`encapsulationPrefix.ts` do for `ByteList`. It is annoying and it is
+tracked — when F3 lands upstream, those duplicates collapse.
 
-Thales emits TS field names verbatim into Lean structs. The 11 known
-collisions are: `match`, `where`, `mut`, `fun`, `structure`,
-`inductive`, `theorem`, `section`, `namespace`, `then`, `end` (Issue
-1). Rename on the TS side. Example: `endPort` not `end` for a port
-range's upper bound.
+`export interface` **does** work, including field reads, so
+non-matched record types can be shared.
+
+### `bigint` for wire integers
+
+`number` → Lean `Float`; `bigint` → Lean `Int`. Bit-exact wire
+arithmetic over `Float` is wrong. Use `bigint` for every wire integer
+field, byte value, sequence number, length, and code point. The TS-side
+seam adapter does `BigInt(x)` at the boundary.
+
+### Consider `Byte` / `Natural` for range-carrying values
+
+New in 0.6: `@thales/prelude` exports `Integer`, `Natural`, `Byte`
+(`0..255`), and `Bit`, as compile-time-enforced refinements of `number`
+(chain `Bit ⊆ Byte ⊆ Natural ⊆ Integer ⊆ number`). Evidence to enter a
+refinement comes from a guard (`isByte(x)`), a throwing constructor
+(`asByte(x)`), or an in-range literal.
+
+Our `ByteList` currently carries "each element is a `bigint` in
+`[0, 256)`" as a _comment_. `Byte` would make that a type. Two caveats
+before adopting it wholesale:
+
+- Refinements are `Float` subtypes, so they do **not** compose with
+  `bigint`; adopting `Byte` means moving byte values off `bigint`.
+- Arithmetic always widens back to `number` — re-narrow with a guard or
+  constructor after every operation.
+
+Prototype on one module before committing the whole byte layer.
+
+### Tuples: still avoid
+
+`[A, B]` is nominally in the subset and maps to `Prod`, but tuple
+_indexing_ is explicitly deferred out of 0.7 and the docs specify
+nothing else about them. Keep using a result DU:
+
+```ts
+type SplitResult = { kind: 'ok'; taken: ByteList; rest: ByteList } | { kind: 'short' };
+```
+
+This also reads better in proofs — theorems mention `.ok` / `.short`
+rather than "the first component".
 
 ---
 
-## Function shapes
+## Functions
 
-### `bigint`, not `number`, for integer arithmetic
+### `switch` on a parameter; one lowerable shape (TH0041)
 
-`number` maps to Lean `Float`; `bigint` maps to `Int`. Bit-exact wire
-arithmetic is wrong over `Float`. Use `bigint` for every wire integer
-field, byte value, sequence number, length, code point.
-
-The TS-side seam adapter does `BigInt(x)` at the boundary.
-
-### Avoid bitwise operators on bigint
-
-Thales 0.5 doesn't lower `&`, `|`, `<<`, `>>` on bigint. Use
-arithmetic equivalents:
+Exactly one `switch` shape lowers: a non-computed `ident.field`
+scrutinee resolving to a discriminated union keyed on that field, with
+**every** arm — including any `default` — returning on every path.
 
 ```ts
-// b is a byte (0..255); extract the high bit
-const highBit = b >= 128n;
-// b's low 7 bits
-const low7 = b % 128n;
-// b's low 6 bits
-const low6 = b % 64n;
-// shift left by 7 = multiply by 128
-const shifted = x * 128n;
-```
-
-See `encapsulationPrefix.ts` for a worked example with non-trivial
-bit packing.
-
-### Switch only on a parameter
-
-Switching on anything else fails or silently emits `()`:
-
-```ts
-// ✗ silent emit failure (Issue 6) — the switch body becomes `()`
-//   and Lean rejects with a type mismatch
-function isRetryable(r: RelayEndReason): boolean {
-  switch (getStreamRetryBehavior(r).kind) {
-    case 'retry_circuit': return true;
-    ...
-  }
-}
-
-// ✗ same — `const x = …` then `switch (x.kind)` is also broken
-function f(r: T): U {
-  const x = compute(r);
-  switch (x.kind) { ... }
-}
-
-// ✓ switch on the parameter directly; if you need to dispatch on a
-//   computed result, hoist into a helper that takes the result as a
-//   parameter
-function helper(b: Behavior): boolean { switch (b.kind) { ... } }
-function isRetryable(r: RelayEndReason): boolean {
-  return helper(getStreamRetryBehavior(r));
+// ✓
+switch (state.kind) {
+  case 'open': return …;
+  case 'closed': return …;
 }
 ```
 
-### Bind to `const` before constructing a DU value
+Rejected: plain-identifier scrutinee (`switch (s)` on a string),
+non-union scrutinee, switch on a non-discriminator field, and any arm
+that falls through via `break` or an empty grouped `case`.
 
-Field access on a switch-narrowed DU works fine in arithmetic and
-direct return positions, but **inside a DU constructor expression** the
-emitted Lean has the wrong shape (Issue 8):
+Spell out one `return` per case; don't group labels.
+
+Dispatching on a _computed_ DU (`switch (f(x).kind)`) was broken at 0.5
+and is fixed — but prefer a helper taking the value as a parameter
+anyway, since it reads better and keeps the emitted `match` flat.
+
+### Declare before use (TH0105)
+
+tsc lets a function call one declared below it. Thales does not — the
+emitted Lean is in source order. **Order top-level declarations
+declare-before-use.** Inside a class, the same rule applies to methods
+(TH0101).
+
+### Conditions must be `boolean` (TH0026)
+
+Every condition position — `if`, `while`, `do`/`while`, `for` test,
+ternary — **and the operands of `!`, `&&`, `||`** must be `boolean`.
 
 ```ts
-// ✗ emitted Lean has `r.value` where it should have the bound name
-function bumpVal(r: Result): Result {
-  switch (r.kind) {
-    case 'ok':
-      return { kind: 'ok', value: r.value + 1n }; // ← broken
-    case 'err':
-      return { kind: 'err' };
-  }
-}
+if (n) …            // ✗ TH0026
+if (n !== 0n) …     // ✓
+s || 'fallback'     // ✗ TH0026
+s !== '' ? s : 'fallback'  // ✓
+x ?? y              // ✓ (Option handling, not truthiness)
+```
 
-// ✓ bind first, then construct using the const
-function bumpVal(r: Result): Result {
-  switch (r.kind) {
-    case 'ok': {
-      const v = r.value;
-      return { kind: 'ok', value: v + 1n };
-    }
-    case 'err':
-      return { kind: 'err' };
-  }
+### No `typeof` / `void` / `delete` (TH0092)
+
+Anywhere, including in guards. Use discriminated unions.
+
+### No shadowing declarations (TH0032)
+
+An inner `const n` shadowing an outer `n` inside the same function is
+rejected — the emitter flattens blocks, so the shadow would capture
+outer references. Nested function/arrow params and `catch` params are
+fine (genuinely fresh scopes).
+
+### Local mutation is fine now
+
+Since upstream #24, a binding whose every reference stays inside the
+declaring function may be reassigned; the function lowers to `Id.run do`
+with `let mut`. Parameters count as locals.
+
+Still rejected (TH0001): module-level reassignment; `&&=`/`||=`/`??=`;
+reassigning a `let` with no initializer; reassigning a variable whose
+narrowing the emitter relies on; mutation inside arrow/function-expression
+bodies (only _declared_ functions take the do-mode path); mutation in a
+function containing `try`/`catch` or an unlowerable `switch`.
+
+Also: TH0006 — assignment only in statement position (`return n++` is
+out; write `n++; return n - 1;`). TH0005 — a binding is mutable only if
+no nested function even _mentions_ it.
+
+### Loops are fine now — mind `@total` (TH0068)
+
+Admitted inside do-mode-lowerable declared functions:
+
+- **`for-of`** over an array identifier or literal; loop var is a simple
+  `const`/`let` identifier, not reassigned in the body. Lowers to
+  `for x in xs do`.
+- **Canonical `for`** — exactly `for (let i = 0; i < B; i++)` where `B`
+  is a non-negative integer literal or `arr.length` for an array-typed
+  binding. Lowers to `for i in [0:B] do`. **`@total`-friendly.**
+- **`while` / `do-while`** — any boolean test. Backed by a partial
+  combinator, so **mutually exclusive with `@total`** (TH0068).
+
+Module-level loops are still TH0010, as are loops in class
+constructors/methods.
+
+For `@total` code, prefer the canonical `for` or structural recursion.
+
+### Arrays are usable now
+
+`map`, `filter`, `reduce`, `concat`, `length`, `slice` are in the
+subset. `join`, `indexOf`, `includes`, `lastIndexOf`, `some`, `every`,
+`findIndex` lower **only** when the receiver is an identifier the
+emitter statically resolves to `number[]` or `string[]` (TH0085) — a
+call result or a `boolean[]` receiver is rejected.
+
+`arr[i]` is `T | undefined` (TH0083 for non-array bracket access). Bind
+then narrow:
+
+```ts
+const hit = xs[i];
+if (hit !== undefined) {
+  /* hit : T */
 }
 ```
 
-This pattern is mechanical: any time a `case` body builds a DU value
-from a field of the discriminant, bind the field first.
+Using a possibly-undefined value in arithmetic or a comparison is
+TH0082; equality is exempt because that's the narrowing primitive.
 
-### Don't return `T | null` from a function-call composition
+Mutating methods remain TH0004 and `arr[i] = v` remains TH0002.
 
-Thales wraps the call site in an extra `.some` (Issue 12):
+### Strings are still nearly unusable
+
+`length`, `startsWith`, `endsWith`, `split` — and nothing else
+(TH0087). No `indexOf`, `slice`, `charCodeAt`, `trim`, `toLowerCase`,
+`replace`. `parseFloat` exists in the runtime; **`parseInt` and
+`Number()` do not**. `s[0]` is TH0083.
+
+`split` alone covers a surprising amount of simple list parsing — but
+check the method surface before planning any parser.
+
+### Nullable narrowing
+
+`T | null` / `T | undefined` → `Option T`. Working narrowing is an
+explicit equality guard on a **variable**:
 
 ```ts
-// ✗ unwrap returns `bigint | null`; the call site is wrapped again
-function unwrap(acc: MaxAcc): bigint | null { ... }
-function f(): bigint | null {
-  return unwrap(compute());  // ← emits `(.some (unwrap …))`, wrong type
-}
+if (x === null) { … } else { /* x : T */ }
+```
 
-// ✓ either expose the DU directly to the seam (let it unwrap) or
-//   inline the unwrap with direct narrowing
-function f(): bigint | null {
-  const acc = compute();
-  if (acc.kind === 'none') return null;
-  return acc.value;
+Not working:
+
+- truthiness (`if (x)`) — does not narrow, and is TH0026 anyway;
+- **post-`if` control-flow narrowing** — after `if (x === null) return;`
+  the checker still sees `Option T`. This is why accumulator helpers use
+  a `{ kind: 'none' } | { kind: 'some'; value: T }` DU instead of
+  `T | null` (see `versionNegotiation.ts`);
+- a definedness test whose subject is a call or member access (TH0086) —
+  bind it to a variable first;
+- a definedness test on an unannotated local whose type the emitter
+  can't record (TH0084) — annotate it.
+
+`const u = undefined;` needs an annotation (TH0104), and `undefined` may
+not be used as a binding name (TH0103).
+
+### `bigint` modulo: use `truncMod`
+
+`%` on `bigint` is broken (MIGRATION F2). Both TS `bigint /` and Lean
+`Int./` truncate toward zero, so:
+
+```ts
+/** Truncated remainder. Replaces `a % b`, which Thales 0.7 lowers to
+    the Float `jsMod` and cannot compile for `bigint`. */
+/** @total */
+function truncMod(a: bigint, b: bigint): bigint {
+  return a - (a / b) * b;
 }
 ```
 
-### Don't use `T | null` as an _intermediate_ accumulator
+Give it a `Spec` theorem pinning it to the mathematical remainder so the
+workaround is itself verified, then call it everywhere `%` was wanted.
 
-Null-narrowing through `if (x === null) return …` doesn't propagate
-to subsequent comparisons (Issue 11):
+### Classes: available, rarely what you want
 
-```ts
-// ✗ even with the early return, Thales sees `current` as
-//   `bigint | null` at the comparison
-function updateMax(current: bigint | null, c: bigint): bigint {
-  if (current === null) return c;
-  if (current >= c) return current; // ← TS2322
-  return c;
-}
+Immutable class declarations lower to a Lean `structure` plus a
+`namespace` of receiver-first functions. The shape is narrow: no
+`extends`/generics/`abstract`/`implements`; every field `readonly x: T`
+with no initializer; exactly one constructor whose body is only
+`this.f = …` assignments; methods must be public, non-static, annotated,
+and may only reference methods declared earlier; **no loops in
+constructors or methods**; a method may never be read as a value
+(TH0102, checked name-wise across the whole program).
 
-// ✓ use a DU accumulator, switch on its kind, do the comparison in
-//   the inline value-bearing branch
-type MaxAcc = { kind: 'none' } | { kind: 'some'; value: bigint };
-function updateMax(current: MaxAcc, c: bigint): MaxAcc {
-  switch (current.kind) {
-    case 'none':
-      return { kind: 'some', value: c };
-    case 'some': {
-      const v = current.value;
-      if (v >= c) return current;
-      return { kind: 'some', value: c };
-    }
-  }
-}
-```
-
-### Per-state helpers for state-machine `step` functions
-
-A multi-state, multi-input transition function nested as one big
-`switch (state.kind) { case: switch (input.kind) { ... } }` hits
-Issue 6. Factor into one helper per state and let `step` dispatch:
-
-```ts
-function stepFromOpen(input: Input): State { switch (input.kind) { ... } }
-function stepFromClosed(input: Input): State { switch (input.kind) { ... } }
-
-function step(state: State, input: Input): State {
-  switch (state.kind) {
-    case 'open':
-      return stepFromOpen(input);
-    case 'closed': {
-      const reason = state.reason;
-      return stepFromClosed(reason, input);
-    }
-  }
-}
-```
-
-This is the shape every state machine in core uses
-(`channelState.ts`, `circuitState.ts`, `streamState.ts`,
-`hsClientState.ts`, `hsHostState.ts`).
-
-### Avoid case-fallthrough; spell out each case
-
-```ts
-// ✗ Thales' subset checker doesn't reliably handle TS fall-through
-case 'A':
-case 'B':
-  return true;
-case 'C':
-  return false;
-
-// ✓ explicit return per case
-case 'A': return true;
-case 'B': return true;
-case 'C': return false;
-```
-
-Verbose but unambiguous.
+For core's purposes a DU plus free functions is almost always the better
+fit. Classes matter mainly if we ever mirror a `tor-ts` class API shape
+directly.
 
 ---
 
-## Recursion shapes
+## Recursion and `@total`
 
-### Structural recursion only for `@total`
+Default emission is `partial def` — accepted without a termination
+proof. `@total` opts into Lean's checker and emits a plain `def`.
 
-`@total` requires Lean's structural-recursion checker to accept the
-function. Lean recognises structural recursion on inductive types:
-recursing on `bs.tail` where `bs` is a `ByteList` cons cell is fine.
+- **Structural recursion over a DU** is the reliable `@total` shape.
+- **A counter argument alongside a structural one** is fine —
+  `f(state, list.tail, n - 1n)` is accepted because `list.tail` is
+  structurally smaller.
+- **Numeric-only recursion** (`f(n - 1n)`) is _not_ `@total`-provable;
+  Lean sees no structural decrease. It is fine as a `partial def`.
+- **No `termination_by` / `decreasing_by` is emitted**, and `@decreasing`
+  is documented inconsistently upstream — treat it as not working until
+  measured. For a bounded numeric loop, prefer the canonical `for`
+  shape, which _is_ `@total`-friendly.
 
-### Counter arguments are OK alongside structural recursion
-
-Lean accepts a recursive call like `f(state, list.tail, n - 1n)` as
-long as the _structural_ arg (`list.tail`) is smaller than the
-discriminant (`list`). The numeric counter alongside is fine.
-`encapsulationPrefix.ts`'s `continuePrefix` uses this pattern.
-
-### Don't recurse on a numeric argument alone
-
-`@decreasing` is parsed but ignored (Issue 9), and the resulting
-`partial def` fails Lean's `Nonempty` check on user inductives (Issue
-10). So `function f(n: bigint): MyType { if (n <= 0) return base;
-return f(n - 1); }` doesn't work. Restructure to recurse on a list,
-or wait for the upstream fix.
-
-This blocks: any encoder that emits N bytes (`encodeUintBE`,
-`bigIntToBytesLE`), `modPow` / `modInverse`, etc.
+`@total` also forbids `@throws` (TH0066), uncaught throws (TH0067), and
+`while`/`do-while` (TH0068).
 
 ---
 
 ## Spec / Lean recipes
 
-### Tactics available
+Lean 4.33, with `batteries` and `Regex` via Thales. **Mathlib is not a
+dependency** — pulling it in would balloon CI.
 
-This Lean project depends on `Thales` and (transitively) `batteries`
-and `Regex`. **Mathlib is not a dependency** — pulling it in would
-balloon CI. So:
+| want                     | have                                                                                                                | don't have             |
+| ------------------------ | ------------------------------------------------------------------------------------------------------------------- | ---------------------- |
+| linear arithmetic        | `omega`                                                                                                             | `linarith`, `polyrith` |
+| polynomial equality      | (manual / `omega`)                                                                                                  | `ring`, `ring_nf`      |
+| split an `if`            | `by_cases h : …` + `if_pos`/`if_neg`                                                                                | `split_ifs`            |
+| finite `Int` range split | `rcases` over an `omega`-derived disjunction                                                                        | `interval_cases`       |
+| the rest                 | `simp`, `simp only`, `rw`, `unfold`, `apply`, `intro`, `cases`, `induction`, `obtain`, `injection`, `rfl`, `decide` |                        |
 
-| Want…                            | Available                                                                                          | Not available          |
-| -------------------------------- | -------------------------------------------------------------------------------------------------- | ---------------------- |
-| Linear arithmetic                | `omega`                                                                                            | `linarith`, `polyrith` |
-| Polynomial equality              | (none — manual)                                                                                    | `ring`, `ring_nf`      |
-| Case-split on `if`               | `by_cases h : …`                                                                                   | `split_ifs`            |
-| Case-split on a finite Int range | `rcases` over `omega`-derived disjunction                                                          | `interval_cases`       |
-| Pattern match on Int             | `match` syntax                                                                                     | `fin_cases`            |
-| Definitional equality            | `rfl`, `decide`                                                                                    |                        |
-| Goal manipulation                | `simp`, `simp only`, `rw`, `unfold`, `apply`, `intro`, `cases`, `induction`, `obtain`, `injection` |                        |
-
-Recipe for a finite Int case-split:
+Finite case split over an `Int` range:
 
 ```lean
 have henum : c = 1 ∨ c = 2 ∨ c = 3 := by omega
 rcases henum with h | h | h <;> subst h <;> decide
 ```
 
-Recipe for if-splitting:
+Splitting an `if`:
 
 ```lean
 by_cases h : 0 ≤ x
-· rw [if_pos h]; ...
-· rw [if_neg h]; ...
+· rw [if_pos h]; …
+· rw [if_neg h]; …
 ```
 
-### `decide` needs concrete values
-
-`decide` reduces only when the goal contains no free variables. With
-free variables, use `rfl` (for definitional equalities) or `simp` with
-explicit unfolds:
+**`decide` needs closed terms.** With a free variable in the goal, use
+`rfl` when the definition reduces regardless:
 
 ```lean
--- ✗ free variable `r`, decide can't reduce
-theorem foo (r : Int) : isClosed (.closed r) = true := by decide
-
--- ✓ rfl works because the body of `isClosed (.closed r)` reduces
---   regardless of r
-theorem foo (r : Int) : isClosed (.closed r) = true := rfl
+theorem isClosed_closed (r : Int) : isClosed (.closed r) = true := rfl
 ```
 
-### Constants are `def`s, not literals
+**Emitted constants are `def`s, not literals.** Name them in the simp
+set when unfolding: `simp [step, stepFromOpen, REASON_PROTOCOL_ERROR]`.
 
-Spec constants emitted by Thales (e.g.
-`CIRCUIT_SENDME_INCREMENT = 100n`) become `def`s in Lean, not literal
-`100`. `decide` reduces through them automatically; explicit `simp`
-or `unfold` requires naming them in the simp set:
-
-```lean
-simp [step, stepFromAwaitingVersions, REASON_UNEXPECTED_CELL]
-```
-
-### Decidable equality
-
-Add `deriving instance DecidableEq for <Type>` near the top of every
-`Spec/*.lean`, once for each emitted type that appears in a
-`decide`-closed equality or in a `cases h : … with` over the type's
-constructors. Thales-emitted types include only `deriving Repr`.
+**Generalize the accumulator** when inducting over a fold:
+`induction xs generalizing acc with …`.
 
 ---
 
-## Adding a new module
+## Adding a module
 
-1. Pick a single conceptual unit (one DU, one state machine, one set
-   of related arithmetic helpers).
-2. Write `src/<name>.ts`. Stick to the type/function shapes above.
-3. Run locally:
-   ```bash
-   cd packages/core
-   bash scripts/verify.sh   # transpiles src/* → Generated/* and lake builds
-   ```
-4. If Thales rejects, the error usually maps to one of the issues in
-   `docs/thales-issues.md` — find the workaround there. If it's new,
-   add it to the doc as a new draft.
-5. Write `Spec/<Name>.lean`. Start with the easy theorems (concrete
-   values, basic unfoldings), then layer up to invariants and
-   round-trips. Use the recipes above when a tactic isn't available.
-6. Run `bash scripts/verify.sh` again — `lake build` fails the
-   verification if any theorem doesn't kernel-check.
-7. Run `npx prettier --write src/<name>.ts` to match repo style.
-8. Update the table in `README.md` so the count stays accurate.
+1. Pick one conceptual unit (a DU + its functions, a state machine, a
+   related arithmetic family).
+2. Write `src/<name>.ts` following the rules above.
+3. `bash scripts/verify.sh` — transpiles and Lean-builds everything.
+4. If Thales rejects, check [`thales-issues.md`](thales-issues.md) for a
+   known workaround. If it's new, **add a draft there** — that file is
+   the record.
+5. Write `Spec/<Name>.lean`: concrete values and unfolding lemmas first,
+   then invariants and round-trips.
+6. `bash scripts/verify.sh` again — `lake build` gates on every theorem.
+7. `npx prettier --write src/<name>.ts`.
+8. Update the module table in `README.md`.
 9. Commit.
 
 ---
 
-## When to skip a module
+## Still out of reach
 
-The verified surface is at a sensible plateau (~20 modules / ~360
-theorems covering wire vocabulary, byte primitives, exit-policy
-evaluation, sequence-number arithmetic, all five protocol-state
-machines, flow control, and prefix decoders). Slices that hit any of
-the following are blocked until upstream Thales fixes land:
+- **Sharing a matched DU across modules** — MIGRATION F3. The single
+  highest-leverage upstream fix for this project; it unblocks the full
+  cell parser.
+- **`async`/`await`** (TH0012) — and always will be. This is what the
+  seam architecture exists for.
+- **Most string methods** (TH0087), `parseInt`, `Number()`.
+- **Crypto primitives** — calling SHA-3 / SHAKE / Curve25519 from
+  verified code needs Lean-side `extern` declarations the Thales runtime
+  does not supply.
+- **`deriving Nonempty`** on emitted inductives — still absent, so a
+  `partial def` returning a user inductive can still fail Lean's
+  nonempty check. Not currently hit, because nothing in core recurses
+  numerically into a DU return.
 
-- **Imports/exports between modules** (Issue 5) — needed to compose
-  parsers, share types across files, and integrate with the
-  non-verified shell. Until then, every verified file is
-  self-contained and types like `ByteList` are duplicated where
-  needed (with a `Mirrored from bytes.ts` comment).
-- **Encoders recursing on a numeric length** (Issues 9 + 10) — blocks
-  `bigIntToBytesLE`, `encodeUintBE`, `modPow`, `modInverse`, KCP and
-  SMUX encoders, etc.
-- **String stdlib** (Issue 4) — `String.split`, `String.indexOf`,
-  `parseInt`, etc. aren't in the prelude. Blocks
-  `parseExitPolicySummary`, microdesc parser, consensus parser, HTTP
-  parser.
-- **Crypto FFI declarations** — calling SHA-3 / SHAKE256 / Curve25519
-  from verified code needs Lean-side `extern` declarations the
-  Thales runtime doesn't supply.
-
-Don't try to work around these one slice at a time — file the
-upstream issue (or extend the existing draft in `thales-issues.md`)
-and move on.
+Don't work around these one module at a time — file upstream and move on.
