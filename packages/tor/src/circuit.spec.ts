@@ -3,7 +3,9 @@
  */
 
 import test from 'ava';
-import { circuitIdLengthForProtocolVersion, CircuitStream } from './circuit.ts';
+import { circuitIdLengthForProtocolVersion, Circuit, CircuitStream } from './circuit.ts';
+import type { ChannelConnection } from './channel.ts';
+import { MessageCells, type MessageCell } from './messaging.ts';
 
 test('circuitIdLengthForProtocolVersion: returns 2 for version undefined', (t) => {
   const length = circuitIdLengthForProtocolVersion(undefined);
@@ -189,4 +191,99 @@ test('CircuitStream: destroy(err) after connection succeeded does not throw', as
   // Original resolution is preserved — the connection was successful.
   await stream.connectionLatch.wait();
   t.true(stream.destroyed);
+});
+
+function circuitLifecycleHarness() {
+  const sent: Array<{ command: number; circuitId?: Buffer; payload?: Buffer }> = [];
+  let unsubscribed = 0;
+  const channel = {
+    destroyed: false,
+    getProtocolVersion: () => 4,
+    subscribeCircuit: () => () => {
+      unsubscribed++;
+    },
+    sendMessage(command: number) {
+      sent.push({ command });
+    },
+    sendMessageWithPayload(circuitId: Buffer, command: number, payload: Buffer) {
+      sent.push({ circuitId, command, payload });
+    },
+    destroy() {
+      this.destroyed = true;
+    },
+  };
+  const circuit = new Circuit({
+    path: [{ onionKey: Buffer.alloc(0), rsaIdDigest: Buffer.alloc(20), linkSpecifiers: [] }],
+    channel: channel as unknown as ChannelConnection,
+  });
+  return {
+    circuit,
+    channel,
+    sent,
+    get unsubscribed() {
+      return unsubscribed;
+    },
+  };
+}
+
+test('Circuit.connect timeout releases its subscription and remote circuit without closing the channel', async (t) => {
+  const h = circuitLifecycleHarness();
+  await t.throwsAsync(h.circuit.connect({ timeoutMs: 10 }), { message: /handshake timeout/ });
+  t.true(h.circuit.isDestroyed);
+  t.false(h.channel.destroyed);
+  t.is(h.unsubscribed, 1);
+  t.deepEqual(
+    h.sent.map((cell) => cell.command),
+    [MessageCells.CREATE_FAST, MessageCells.DESTROY]
+  );
+  t.deepEqual(h.sent[1]!.circuitId, h.circuit.circuitId);
+  t.deepEqual(h.sent[1]!.payload, Buffer.from([3]));
+  h.circuit.destroy({ preserveChannel: true });
+  t.is(h.sent.length, 2, 'idempotent cleanup sends only one DESTROY');
+});
+
+test('Circuit.destroy wakes a pending build while preserving its channel', async (t) => {
+  const h = circuitLifecycleHarness();
+  const building = h.circuit.connect({ timeoutMs: 1000 });
+  h.circuit.destroy({ preserveChannel: true });
+  await t.throwsAsync(building, { message: 'Circuit destroyed' });
+  t.is(h.unsubscribed, 1);
+  t.false(h.channel.destroyed);
+});
+
+test('Circuit.destroy before CREATE does not send a spurious DESTROY', (t) => {
+  const h = circuitLifecycleHarness();
+  h.circuit.destroy({ preserveChannel: true });
+  t.deepEqual(h.sent, []);
+  t.is(h.unsubscribed, 1);
+  t.false(h.channel.destroyed);
+});
+
+test('Remote DESTROY closes the local circuit without echoing DESTROY or closing the shared channel', async (t) => {
+  const h = circuitLifecycleHarness();
+  const building = h.circuit.connect({ timeoutMs: 1000 });
+  h.circuit.receiveMessage({
+    command: MessageCells.DESTROY,
+    message: { reason: 3 },
+  } as MessageCell);
+  await t.throwsAsync(building, { message: /circuit destroyed: REQUESTED/ });
+  t.true(h.circuit.isDestroyed);
+  t.false(h.channel.destroyed);
+  t.is(h.unsubscribed, 1);
+  t.deepEqual(
+    h.sent.map((cell) => cell.command),
+    [MessageCells.CREATE_FAST]
+  );
+});
+
+test('Circuit cleanup finishes if its channel cannot send DESTROY', async (t) => {
+  const h = circuitLifecycleHarness();
+  const building = h.circuit.connect({ timeoutMs: 1000 });
+  h.channel.sendMessageWithPayload = () => {
+    throw new Error('channel closed');
+  };
+  t.notThrows(() => h.circuit.destroy({ preserveChannel: true }));
+  await t.throwsAsync(building, { message: 'Circuit destroyed' });
+  t.is(h.unsubscribed, 1);
+  t.true(h.circuit.isDestroyed);
 });

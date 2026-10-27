@@ -17,7 +17,7 @@ import {
   solveHsPow,
 } from 'tor-crypto';
 import { BytesReader, shuffleInPlace } from './util.ts';
-import { type LinkSpecifier, LinkSpecifierTypes, RELAY_PAYLOAD_LEN } from './messaging.ts';
+import { type LinkSpecifier, LinkSpecifierTypes } from './messaging.ts';
 import { RelayCell } from './relay-cell.ts';
 import { parseEd25519Certificate, CertTypes } from './cert.ts';
 import { Circuit, type CircuitCipherPair, type PeerInfo } from './circuit.ts';
@@ -45,17 +45,14 @@ const S_IV_LEN = 16; // AES block/iv length
 const CLIENT_MAX_POW_EFFORT = 10000;
 
 /**
- * Target length for the INTRODUCE1 encrypted section (CLIENT_PK + ciphertext + MAC) per the spec.
- * The spec recommends 490 octets for v3; the relay cell payload limit is RELAY_PAYLOAD_LEN (498),
- * so we cap the encrypted section at (498 - header length) so the full INTRODUCE1 fits in one cell.
+ * INTRODUCE1's entire body must fit the 490-byte INTRODUCE2 payload limit.
+ * Current relays enforce this even when the service uses the older cell format.
+ * The encrypted section includes the client public key, ciphertext, and MAC;
+ * padding must leave room for the unencrypted header as well.
  */
-const INTRO1_ENCRYPTED_SECTION_RECOMMENDED = 490;
-const INTRO1_HEADER_LEN = 20 + 1 + 2 + 32 + 1; // legacy_key_id + auth_key_type + auth_key_len + AUTH_KEY + N_EXT
-const INTRO1_ENCRYPTED_SECTION_MAX = RELAY_PAYLOAD_LEN - INTRO1_HEADER_LEN; // 498 - 56 = 442
-const INTRO1_TARGET_LEN = Math.min(
-  INTRO1_ENCRYPTED_SECTION_RECOMMENDED,
-  INTRO1_ENCRYPTED_SECTION_MAX
-);
+const INTRO1_PAYLOAD_MAX = 490;
+const INTRO1_HEADER_LEN = 20 + 1 + 2 + 32 + 1;
+const INTRO1_TARGET_LEN = INTRO1_PAYLOAD_MAX - INTRO1_HEADER_LEN;
 
 /**
  * Verbose HS-flow diagnostics (HSDir selection, SRV/period candidates, blinded
@@ -1899,18 +1896,11 @@ export async function buildIntroduce1Payload(
     linkSpecifiersBlock,
   ]);
 
-  // Pad plaintext for INTRODUCE1 (see [FMT_INTRO1]).
-  // Per spec, the encrypted data section SHOULD be 490 bytes to avoid fingerprinting
-  // and for proposal 340 compatibility.
-  //
-  // Structure: header | CLIENT_PK (32) | encrypted_data | MAC (32)
-  // The target is to make the entire payload (header + encrypted section) fit well.
-  //
-  // For proposal 340 compatibility, we use 490 bytes as the target for the encrypted section
-  // (CLIENT_PK + ciphertext + MAC).
+  // Pad the full INTRODUCE1 body to the 490-byte limit used for forwarding
+  // INTRODUCE2. The header, client public key, and MAC all count toward it.
   const encryptedSectionTargetLen = INTRO1_TARGET_LEN;
   const encryptedDataLen = encryptedSectionTargetLen - 32 /* CLIENT_PK */ - 32; /* MAC */
-  if (encryptedDataLen <= plaintext.length) {
+  if (plaintext.length > encryptedDataLen) {
     throw new Error(
       `INTRODUCE1 plaintext too large (need <= ${encryptedDataLen}, got ${plaintext.length})`
     );
@@ -1939,7 +1929,7 @@ export async function buildIntroduce1Payload(
   const M = mac(MAC_KEY, macInput);
 
   const payload = Buffer.concat([header, X, C, M]);
-  // The encrypted section should be exactly INTRO1_TARGET_LEN (490 bytes)
+  // Padding fills the encrypted section while keeping the whole body at 490 bytes.
   const encryptedSectionLen = X.length + C.length + M.length;
   if (encryptedSectionLen !== INTRO1_TARGET_LEN) {
     throw new Error(
@@ -2191,7 +2181,6 @@ export async function connectToHiddenServiceCore(
             );
             if (got) {
               descriptor = got;
-              hsdirCircuit.destroy({ preserveChannel: true });
 
               // Cache the descriptor for future connections
               if (descriptorCache && blindedPublicKey && subcred) {
@@ -2204,10 +2193,7 @@ export async function connectToHiddenServiceCore(
           } catch {
             // Continue to next HSDir
           } finally {
-            // Clean up circuit if we didn't find descriptor
-            if (!descriptor) {
-              hsdirCircuit?.destroy({ preserveChannel: true });
-            }
+            hsdirCircuit?.destroy({ preserveChannel: true });
           }
         }
       }
@@ -2273,240 +2259,241 @@ export async function connectToHiddenServiceCore(
   // (rendezvous point was already selected and looked up in parallel with descriptor fetch)
   log('Building rendezvous circuit...');
   const rendCircuit = await buildCircuit(rendezvousPoint, { avoid: [] });
-
-  const rendezvousCookie = Buffer.from(randomBytesOpt(20));
-  log('Establishing rendezvous point...');
-  await rendCircuit.sendRelayMessage({
-    streamId: 0,
-    relayCommand: RelayCell.ESTABLISH_RENDEZVOUS,
-    data: rendezvousCookie,
-  });
-  await waitForRelayCommand(rendCircuit, RelayCell.RENDEZVOUS_ESTABLISHED, perHandshakeTimeoutMs);
-
-  // Step 6a: Arm the RENDEZVOUS2 listener BEFORE sending INTRODUCE1.
-  //
-  // On fast networks (chutney localhost, LAN, etc.) the HS can receive our
-  // INTRODUCE2, extend a circuit back to the RP, and have RENDEZVOUS1 reach
-  // the RP — which then forwards it to our client as RENDEZVOUS2 — in under
-  // 10 ms. If we attach the listener *after* introduction returns, the cell
-  // has already come and gone by the time we care. That's the bug that made
-  // the chutney HS test look like it was silently failing: the diagnostic
-  // we added showed RENDEZVOUS2 arriving BEFORE "Waiting for rendezvous
-  // completion" was logged.
-  //
-  // The observer helper also runs from here so "0 cells received" in the
-  // error path means the cell truly never arrived, not that we missed it.
-  const rendezvousObserver = rendCircuit.observeRelayTraffic();
-  // Capture RENDEZVOUS2 the instant it arrives (it can beat us on fast
-  // networks), but do NOT start the rendezvous timeout clock here: the
-  // per-attempt proof-of-work solve below can take many seconds, and counting
-  // that against the rendezvous budget would cause spurious timeouts precisely
-  // when PoW is enabled. The timeout is started in step 7, after INTRODUCE1 is
-  // actually sent, so the budget is measured from send time.
-  type RelayEvt = { streamId: number; relayCommand: number; data: Buffer };
-  let rendezvous2Resolve: ((evt: RelayEvt) => void) | undefined;
-  const rendezvous2Latch = new Promise<RelayEvt>((resolve) => {
-    rendezvous2Resolve = resolve;
-  });
-  const onRendezvous2 = (evt: RelayEvt): void => {
-    if (evt.relayCommand !== RelayCell.RENDEZVOUS2) return;
-    rendCircuit.off('relay', onRendezvous2);
-    rendezvous2Resolve?.(evt);
-  };
-  rendCircuit.on('relay', onRendezvous2);
-
-  // Step 6: Try intro points until one succeeds
-  const introErrors: Error[] = [];
-  let successfulIntro:
-    | { intro: IntroPoint; introCircuit: Circuit; state: HsNtorClientState }
-    | undefined;
-
-  for (let attempt = 0; attempt < maxIntroAttempts; attempt++) {
-    if (Date.now() >= overallDeadline) {
-      introErrors.push(
-        new Error(`overall timeout (${overallTimeoutMs}ms) exceeded after ${attempt} attempt(s)`)
-      );
-      break;
-    }
-    const intro = introPoints[attempt % introPoints.length]!;
-
-    let introCircuit: Circuit | undefined;
-    const attemptStartTime = Date.now();
-    try {
-      log(`Building introduction circuit (attempt ${attempt + 1}/${maxIntroAttempts})...`);
-      const introPeer = peerInfoFromIntroPoint(intro);
-      introCircuit = await buildCircuit(introPeer, { avoid: [rendezvousPoint] });
-
-      // Solve proof-of-work for this attempt (fresh nonce each time, so a retry
-      // to another intro point is never rejected as a replay by the service).
-      let proofOfWork: BuildIntroduce1Params['proofOfWork'] | undefined;
-      if (powRequired && descriptor.powParams) {
-        // Clamp the (signed but service-controlled) suggested effort to a
-        // ceiling so a hostile service can't force unbounded client CPU.
-        const effortCap = maxPowEffort ?? CLIENT_MAX_POW_EFFORT;
-        const effort = Math.min(descriptor.powParams.suggestedEffort, effortCap);
-        const powStart = Date.now();
-        log(`Solving proof-of-work (effort=${effort})...`);
-        const solved = await solveHsPow({
-          seed: descriptor.powParams.seed,
-          blindedId: blindedPublicKey,
-          effort,
-          randomBytes: randomBytesOpt,
-          timeoutMs: Math.min(powTimeoutMs, Math.max(1, overallDeadline - Date.now())),
-        });
-        if (solved) {
-          log(`Proof-of-work solved in ${Date.now() - powStart}ms (effort=${solved.effort})`);
-          proofOfWork = {
-            scheme: 1, // v1 (Equi-X)
-            nonce: solved.nonce,
-            effort: solved.effort,
-            seed: solved.seedHead,
-            solution: solved.solution,
-          };
-        } else {
-          log(
-            `Proof-of-work not solved within ${powTimeoutMs}ms; sending introduction without a ` +
-              `PoW token (may be dropped by a service enforcing PoW).`
-          );
-        }
-      }
-
-      log(`Sending introduction (attempt ${attempt + 1}/${maxIntroAttempts})...`);
-      const { payload: introducePayload, state } = await buildIntroduce1Payload({
-        introAuthKeyEd25519: intro.authKeyEd25519,
-        serviceEncKey: intro.serviceEncKey,
-        N_hs_subcred: subcred,
-        rendezvousCookie,
-        rendezvousPoint,
-        ...(proofOfWork && { proofOfWork }),
-      });
-
-      await introCircuit.sendRelayMessage({
-        streamId: 0,
-        relayCommand: RelayCell.INTRODUCE1,
-        data: introducePayload,
-      });
-
-      const ack = await waitForRelayCommand(
-        introCircuit,
-        RelayCell.INTRODUCE_ACK,
-        Math.min(perHandshakeTimeoutMs, Math.max(1, overallDeadline - Date.now()))
-      );
-      if (ack.data.length < 2) throw new Error('INTRODUCE_ACK too short');
-      const status = ack.data.readUInt16BE(0);
-      if (status !== 0) {
-        throw new Error(`INTRODUCE_ACK status=${status}`);
-      }
-
-      // Record successful experience
-      const durationMs = Date.now() - attemptStartTime;
-      iptExperienceTracker?.record(intro, { type: 'success', durationMs });
-
-      successfulIntro = { intro, introCircuit, state };
-      log(`Introduction succeeded on attempt ${attempt + 1}`);
-      break;
-    } catch (err) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      introErrors.push(error);
-      log(`Introduction attempt ${attempt + 1}/${maxIntroAttempts} failed: ${error.message}`);
-
-      // Record failed experience
-      const durationMs = Date.now() - attemptStartTime;
-      const failureOutcome: IptOutcome = { type: 'failure', durationMs };
-      // If we got an ACK with rate-limit status (status=2), apply a backoff
-      if (error.message.includes('status=2')) {
-        failureOutcome.retryAfterMs = Date.now() + 30_000;
-      }
-      iptExperienceTracker?.record(intro, failureOutcome);
-
-      introCircuit?.destroy();
-    }
-  }
-
-  // Wrap everything between observer-attach and rendezvous-completion in a
-  // try/finally so the 'relay' listener is always removed from rendCircuit,
-  // even on early throws (no successful intro, RENDEZVOUS2 timeout, malformed
-  // RENDEZVOUS2 body). The success path falls through to the same detach().
+  let connected = false;
   try {
-    if (!successfulIntro) {
-      rendCircuit.destroy();
+    const rendezvousCookie = Buffer.from(randomBytesOpt(20));
+    log('Establishing rendezvous point...');
+    await rendCircuit.sendRelayMessage({
+      streamId: 0,
+      relayCommand: RelayCell.ESTABLISH_RENDEZVOUS,
+      data: rendezvousCookie,
+    });
+    await waitForRelayCommand(rendCircuit, RelayCell.RENDEZVOUS_ESTABLISHED, perHandshakeTimeoutMs);
 
-      // If we used a cached descriptor and all intros failed, invalidate the cache
-      // The descriptor might be stale (intro points changed)
-      if (usedCachedDescriptor && descriptorCache) {
-        log('All intro points failed with cached descriptor; invalidating cache');
-        descriptorCache.invalidate(publicIdentityKey);
+    // Step 6a: Arm the RENDEZVOUS2 listener BEFORE sending INTRODUCE1.
+    //
+    // On fast networks (chutney localhost, LAN, etc.) the HS can receive our
+    // INTRODUCE2, extend a circuit back to the RP, and have RENDEZVOUS1 reach
+    // the RP — which then forwards it to our client as RENDEZVOUS2 — in under
+    // 10 ms. If we attach the listener *after* introduction returns, the cell
+    // has already come and gone by the time we care. That's the bug that made
+    // the chutney HS test look like it was silently failing: the diagnostic
+    // we added showed RENDEZVOUS2 arriving BEFORE "Waiting for rendezvous
+    // completion" was logged.
+    //
+    // The observer helper also runs from here so "0 cells received" in the
+    // error path means the cell truly never arrived, not that we missed it.
+    const rendezvousObserver = rendCircuit.observeRelayTraffic();
+    // Capture RENDEZVOUS2 the instant it arrives (it can beat us on fast
+    // networks), but do NOT start the rendezvous timeout clock here: the
+    // per-attempt proof-of-work solve below can take many seconds, and counting
+    // that against the rendezvous budget would cause spurious timeouts precisely
+    // when PoW is enabled. The timeout is started in step 7, after INTRODUCE1 is
+    // actually sent, so the budget is measured from send time.
+    type RelayEvt = { streamId: number; relayCommand: number; data: Buffer };
+    let rendezvous2Resolve: ((evt: RelayEvt) => void) | undefined;
+    const rendezvous2Latch = new Promise<RelayEvt>((resolve) => {
+      rendezvous2Resolve = resolve;
+    });
+    const onRendezvous2 = (evt: RelayEvt): void => {
+      if (evt.relayCommand !== RelayCell.RENDEZVOUS2) return;
+      rendCircuit.off('relay', onRendezvous2);
+      rendezvous2Resolve?.(evt);
+    };
+    rendCircuit.on('relay', onRendezvous2);
+
+    // Step 6: Try intro points until one succeeds
+    const introErrors: Error[] = [];
+    let successfulIntro:
+      | { intro: IntroPoint; introCircuit: Circuit; state: HsNtorClientState }
+      | undefined;
+
+    for (let attempt = 0; attempt < maxIntroAttempts; attempt++) {
+      if (Date.now() >= overallDeadline) {
+        introErrors.push(
+          new Error(`overall timeout (${overallTimeoutMs}ms) exceeded after ${attempt} attempt(s)`)
+        );
+        break;
+      }
+      const intro = introPoints[attempt % introPoints.length]!;
+
+      let introCircuit: Circuit | undefined;
+      const attemptStartTime = Date.now();
+      try {
+        log(`Building introduction circuit (attempt ${attempt + 1}/${maxIntroAttempts})...`);
+        const introPeer = peerInfoFromIntroPoint(intro);
+        introCircuit = await buildCircuit(introPeer, { avoid: [rendezvousPoint] });
+
+        // Solve proof-of-work for this attempt (fresh nonce each time, so a retry
+        // to another intro point is never rejected as a replay by the service).
+        let proofOfWork: BuildIntroduce1Params['proofOfWork'] | undefined;
+        if (powRequired && descriptor.powParams) {
+          // Clamp the (signed but service-controlled) suggested effort to a
+          // ceiling so a hostile service can't force unbounded client CPU.
+          const effortCap = maxPowEffort ?? CLIENT_MAX_POW_EFFORT;
+          const effort = Math.min(descriptor.powParams.suggestedEffort, effortCap);
+          const powStart = Date.now();
+          log(`Solving proof-of-work (effort=${effort})...`);
+          const solved = await solveHsPow({
+            seed: descriptor.powParams.seed,
+            blindedId: blindedPublicKey,
+            effort,
+            randomBytes: randomBytesOpt,
+            timeoutMs: Math.min(powTimeoutMs, Math.max(1, overallDeadline - Date.now())),
+          });
+          if (solved) {
+            log(`Proof-of-work solved in ${Date.now() - powStart}ms (effort=${solved.effort})`);
+            proofOfWork = {
+              scheme: 1, // v1 (Equi-X)
+              nonce: solved.nonce,
+              effort: solved.effort,
+              seed: solved.seedHead,
+              solution: solved.solution,
+            };
+          } else {
+            log(
+              `Proof-of-work not solved within ${powTimeoutMs}ms; sending introduction without a ` +
+                `PoW token (may be dropped by a service enforcing PoW).`
+            );
+          }
+        }
+
+        log(`Sending introduction (attempt ${attempt + 1}/${maxIntroAttempts})...`);
+        const { payload: introducePayload, state } = await buildIntroduce1Payload({
+          introAuthKeyEd25519: intro.authKeyEd25519,
+          serviceEncKey: intro.serviceEncKey,
+          N_hs_subcred: subcred,
+          rendezvousCookie,
+          rendezvousPoint,
+          ...(proofOfWork && { proofOfWork }),
+        });
+
+        await introCircuit.sendRelayMessage({
+          streamId: 0,
+          relayCommand: RelayCell.INTRODUCE1,
+          data: introducePayload,
+        });
+
+        const ack = await waitForRelayCommand(
+          introCircuit,
+          RelayCell.INTRODUCE_ACK,
+          Math.min(perHandshakeTimeoutMs, Math.max(1, overallDeadline - Date.now()))
+        );
+        if (ack.data.length < 2) throw new Error('INTRODUCE_ACK too short');
+        const status = ack.data.readUInt16BE(0);
+        if (status !== 0) {
+          throw new Error(`INTRODUCE_ACK status=${status}`);
+        }
+
+        // Record successful experience
+        const durationMs = Date.now() - attemptStartTime;
+        iptExperienceTracker?.record(intro, { type: 'success', durationMs });
+
+        successfulIntro = { intro, introCircuit, state };
+        log(`Introduction succeeded on attempt ${attempt + 1}`);
+        break;
+      } catch (err) {
+        const error = err instanceof Error ? err : new Error(String(err));
+        introErrors.push(error);
+        log(`Introduction attempt ${attempt + 1}/${maxIntroAttempts} failed: ${error.message}`);
+
+        // Record failed experience
+        const durationMs = Date.now() - attemptStartTime;
+        const failureOutcome: IptOutcome = { type: 'failure', durationMs };
+        iptExperienceTracker?.record(intro, failureOutcome);
+
+        introCircuit?.destroy({ preserveChannel: true });
+      }
+    }
+
+    // Wrap everything between observer-attach and rendezvous-completion in a
+    // try/finally so the 'relay' listener is always removed from rendCircuit,
+    // even on early throws (no successful intro, RENDEZVOUS2 timeout, malformed
+    // RENDEZVOUS2 body). The success path falls through to the same detach().
+    try {
+      if (!successfulIntro) {
+        // If we used a cached descriptor and all intros failed, invalidate the cache
+        // The descriptor might be stale (intro points changed)
+        if (usedCachedDescriptor && descriptorCache) {
+          log('All intro points failed with cached descriptor; invalidating cache');
+          descriptorCache.invalidate(publicIdentityKey);
+        }
+
+        const errorSummary = introErrors.map((e) => e.message).join('; ');
+        throw new Error(
+          `All ${introErrors.length} introduction attempt(s) failed: ${errorSummary}`
+        );
       }
 
-      const errorSummary = introErrors.map((e) => e.message).join('; ');
-      throw new Error(`All ${introErrors.length} introduction attempt(s) failed: ${errorSummary}`);
-    }
+      const { introCircuit, state } = successfulIntro;
 
-    const { introCircuit, state } = successfulIntro;
+      // Give the intro point a moment to fully relay the message before closing.
+      // The intro point needs to forward INTRODUCE2 to the service over its circuit.
+      await new Promise((resolve) => setTimeout(resolve, 100));
+      introCircuit.destroy({ preserveChannel: true });
 
-    // Give the intro point a moment to fully relay the message before closing.
-    // The intro point needs to forward INTRODUCE2 to the service over its circuit.
-    await new Promise((resolve) => setTimeout(resolve, 100));
-    introCircuit.destroy({ preserveChannel: true });
-
-    // Step 7: Await RENDEZVOUS2 (listener was armed before introduction in 6a).
-    // Use a dedicated rendezvous timeout (default 60s) rather than the overall timeout.
-    // If the hidden service received our introduction, it should respond within this window.
-    // The dedicated rendezvous budget still applies, but never past the
-    // overall deadline — a successful introduction must not extend the total
-    // connection time beyond what the caller asked for.
-    const rendezvousWaitMs = Math.min(
-      rendezvousTimeoutMs,
-      Math.max(1, overallDeadline - Date.now())
-    );
-    log(`Waiting for rendezvous completion (timeout: ${rendezvousWaitMs}ms)...`);
-    let r2: RelayEvt;
-    // Start the rendezvous timeout HERE (after INTRODUCE1 was sent), so time
-    // spent solving proof-of-work is not charged against the rendezvous budget.
-    // The listener was already armed (step 6a) so an ultra-fast reply that
-    // arrived during solving is captured in rendezvous2Latch and returns at once.
-    let rendezvousTimer: ReturnType<typeof setTimeout> | undefined;
-    try {
-      r2 = await Promise.race([
-        rendezvous2Latch,
-        new Promise<never>((_resolve, reject) => {
-          rendezvousTimer = setTimeout(
-            () => reject(new Error(`Timed out waiting for relayCommand=${RelayCell.RENDEZVOUS2}`)),
-            rendezvousWaitMs
-          );
-        }),
-      ]);
-    } catch (err) {
-      const observed = rendezvousObserver.snapshot();
-      rendCircuit.destroy();
-      const msg = err instanceof Error ? err.message : String(err);
-      throw new Error(
-        `Rendezvous failed: timed out waiting for hidden service response ` +
-          `(${rendezvousWaitMs}ms). The service may be offline, overloaded, ` +
-          `or unable to decrypt the introduction. ` +
-          `Cells received on rendezvous circuit during the wait: ` +
-          `${observed.totalCells} (${observed.commandSummary || 'none'}). ` +
-          `Original error: ${msg}`
+      // Step 7: Await RENDEZVOUS2 (listener was armed before introduction in 6a).
+      // Use a dedicated rendezvous timeout (default 60s) rather than the overall timeout.
+      // If the hidden service received our introduction, it should respond within this window.
+      // The dedicated rendezvous budget still applies, but never past the
+      // overall deadline — a successful introduction must not extend the total
+      // connection time beyond what the caller asked for.
+      const rendezvousWaitMs = Math.min(
+        rendezvousTimeoutMs,
+        Math.max(1, overallDeadline - Date.now())
       );
+      log(`Waiting for rendezvous completion (timeout: ${rendezvousWaitMs}ms)...`);
+      let r2: RelayEvt;
+      // Start the rendezvous timeout HERE (after INTRODUCE1 was sent), so time
+      // spent solving proof-of-work is not charged against the rendezvous budget.
+      // The listener was already armed (step 6a) so an ultra-fast reply that
+      // arrived during solving is captured in rendezvous2Latch and returns at once.
+      let rendezvousTimer: ReturnType<typeof setTimeout> | undefined;
+      try {
+        r2 = await Promise.race([
+          rendezvous2Latch,
+          new Promise<never>((_resolve, reject) => {
+            rendezvousTimer = setTimeout(
+              () =>
+                reject(new Error(`Timed out waiting for relayCommand=${RelayCell.RENDEZVOUS2}`)),
+              rendezvousWaitMs
+            );
+          }),
+        ]);
+      } catch (err) {
+        const observed = rendezvousObserver.snapshot();
+        const msg = err instanceof Error ? err.message : String(err);
+        throw new Error(
+          `Rendezvous failed: timed out waiting for hidden service response ` +
+            `(${rendezvousWaitMs}ms). The service may be offline, overloaded, ` +
+            `or unable to decrypt the introduction. ` +
+            `Cells received on rendezvous circuit during the wait: ` +
+            `${observed.totalCells} (${observed.commandSummary || 'none'}). ` +
+            `Original error: ${msg}`
+        );
+      } finally {
+        if (rendezvousTimer) clearTimeout(rendezvousTimer);
+      }
+      if (r2.data.length < 64) {
+        throw new Error('RENDEZVOUS2 too short');
+      }
+
+      const Y = r2.data.subarray(0, 32);
+      const auth = r2.data.subarray(32, 64);
+      const { NTOR_KEY_SEED } = hsNtorComplete({ state, Y, auth });
+      const cipherPair = makeHsRendezvousCipherPairFromKeySeed(NTOR_KEY_SEED);
+      rendCircuit.addVirtualHop(cipherPair);
+
+      log('Connected to hidden service!');
+
+      connected = true;
+      return { circuit: rendCircuit, descriptor };
     } finally {
-      if (rendezvousTimer) clearTimeout(rendezvousTimer);
+      rendCircuit.off('relay', onRendezvous2);
+      rendezvousObserver.detach();
     }
-    if (r2.data.length < 64) {
-      rendCircuit.destroy();
-      throw new Error('RENDEZVOUS2 too short');
-    }
-
-    const Y = r2.data.subarray(0, 32);
-    const auth = r2.data.subarray(32, 64);
-    const { NTOR_KEY_SEED } = hsNtorComplete({ state, Y, auth });
-    const cipherPair = makeHsRendezvousCipherPairFromKeySeed(NTOR_KEY_SEED);
-    rendCircuit.addVirtualHop(cipherPair);
-
-    log('Connected to hidden service!');
-
-    return { circuit: rendCircuit, descriptor };
   } finally {
-    rendCircuit.off('relay', onRendezvous2);
-    rendezvousObserver.detach();
+    // A failed setup owns this circuit, but never the shared guard/bridge channel.
+    if (!connected) rendCircuit.destroy({ preserveChannel: true });
   }
 }
