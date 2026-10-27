@@ -11,6 +11,23 @@ implementation interesting — and what makes it the second known client-side
 implementation of the Snowflake stack anywhere (the canonical Go client is
 the first; Arti shells out to it via PT v2.1).
 
+## Tests
+
+`yarn workspace browser test` runs the unit tests in Chromium, including HTTP
+completion, write failures, timeouts, and stream-listener cleanup.
+
+The `chutney_snowflake` CI job runs
+[`ci-chutney-snowflake.sh`](../snowflake/scripts/ci-chutney-snowflake.sh). It starts
+a local C Tor onion service and Snowflake bridge, then invokes
+`yarn workspace browser test:chutney` with the fixture environment. The browser
+test checks two complete onion responses on one client and refreshes the
+consensus between them. The bridge is excluded from the consensus, matching
+the mainnet entry topology. This fixture uses pinned C Tor, Chutney, and
+Snowflake versions; its launcher runs on Linux in CI.
+
+For the full Tamanegi UI and service worker, follow the
+[mainnet smoke test](../../examples/tamanegi-browser/README.md#mainnet-onion-smoke-test).
+
 ## Protocol stack
 
 ```
