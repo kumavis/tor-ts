@@ -49,7 +49,7 @@ export CHUTNEY_DNS_CONF="${CHUTNEY_DNS_CONF:-/dev/null}"
 
 cleanup() {
   cd "${CHUTNEY_DIR}" || exit 0
-  timeout 2m ./chutney stop "${CHUTNEY_NETWORK}" || true
+  timeout 2m ./chutney stop || true
   # If chutney can't stop cleanly, forcibly kill remaining tor instances.
   if [ -n "${CHUTNEY_DATA_DIR:-}" ] && [ -d "${CHUTNEY_DATA_DIR}" ]; then
     pkill -f "${CHUTNEY_DATA_DIR}/nodes" || true
@@ -72,12 +72,8 @@ export TOR_TS_HS_TARGET_PORT=4747
 export TOR_TS_HS_VIRTPORT=5858
 
 cat > "networks/${CHUTNEY_NETWORK}" <<EOF
-# Note: we pin chutney at a gitlab commit (fb0bff1, on the
-# 'fix-determinism' branch) that uses an inline Python torrc generator at
-# lib/chutney/tor/torrc.py — NOT the torrc_templates/*.tmpl files you see
-# on chutney's github mirror. That means Node() picks a template from the
-# authority/relay/exit/hs/client flags automatically; passing torrc="..."
-# here is not supported by this version and breaks configure.
+# The pinned Chutney uses its inline Python torrc generator. Node flags
+# select the authority/relay/exit/HS configuration; extra options go below.
 Authority = Node(tag="a", authority=1, relay=1)
 
 # Extra non-exit relays to give the HS enough options for intro/rend circuits

@@ -151,6 +151,8 @@ jobs:
           name: chutney-logs
           path: |
             /tmp/tor-ts-chutney-data/nodes*/**/*.log
+            /tmp/tor-ts-chutney-data/nodes*/**/tor.stdout
+            /tmp/tor-ts-chutney-data/nodes*/**/tor.stderr
             /tmp/tor-ts-chutney-data/nodes*/**/torrc
             /tmp/tor-ts-chutney-data/nodes*/**/cached-microdesc-consensus
           if-no-files-found: ignore
@@ -191,8 +193,8 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v5
         with:
-          go-version: '1.22.x'
-          cache: true
+          go-version: '1.26.10'
+          cache: false
 
       - name: Install JS deps
         run: yarn install --frozen-lockfile
@@ -216,6 +218,9 @@ jobs:
           echo "CHUTNEY_TOR_GENCERT=$GITHUB_WORKSPACE/.ci-tor/bin/tor-gencert" >> "$GITHUB_ENV"
           .ci-tor/bin/tor --version
 
+      - name: Install Chromium for browser onion test
+        run: npx playwright install --with-deps chromium
+
       - name: Run Chutney+Snowflake integration test
         run: bash packages/snowflake/scripts/ci-chutney-snowflake.sh
 
@@ -226,6 +231,8 @@ jobs:
           name: chutney_snowflake-logs
           path: |
             /tmp/tor-ts-chutney-data/nodes*/**/*.log
+            /tmp/tor-ts-chutney-data/nodes*/**/tor.stdout
+            /tmp/tor-ts-chutney-data/nodes*/**/tor.stderr
             /tmp/tor-ts-chutney-data/nodes*/**/torrc
             /tmp/tor-ts-chutney-data/nodes*/**/cached-microdesc-consensus
           if-no-files-found: ignore

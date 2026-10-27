@@ -27,6 +27,7 @@
   "scripts": {
     "build": "vite build",
     "test": "vitest run --config vitest.config.ts",
+    "test:chutney": "vitest run --config vitest.chutney.config.ts",
     "test:live": "vitest run --config vitest.live.config.ts",
     "test:watch": "vitest --config vitest.config.ts",
     "typecheck": "tsc -p tsconfig.json --noEmit"

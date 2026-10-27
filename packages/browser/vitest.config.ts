@@ -49,7 +49,7 @@ export default defineConfig({
   test: {
     name: 'browser-unit',
     include: ['src/**/*.test.ts'],
-    exclude: ['src/**/*.live.test.ts'],
+    exclude: ['src/**/*.live.test.ts', 'src/**/*.chutney.test.ts'],
     browser: {
       enabled: true,
       provider: 'playwright',

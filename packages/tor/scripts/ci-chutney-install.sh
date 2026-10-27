@@ -16,7 +16,7 @@ fi
 
 # https://gitlab.torproject.org/tpo/core/chutney
 CHUTNEY_REPO_URL="https://gitlab.torproject.org/tpo/core/chutney.git"
-CHUTNEY_COMMIT="fb0bff1ffad593314a2692aa0f1d65db6f0251c9"
+CHUTNEY_COMMIT="0e202ad78eefca5f972d09ab0e2de8c1e36417c4"
 
 export CHUTNEY_DIR="${CHUTNEY_DIR:-/tmp/chutney}"
 rm -rf "${CHUTNEY_DIR}"
