@@ -36,52 +36,18 @@ fi
 mkdir -p "${ROOT_DIR}/.bin"
 GOBIN="${ROOT_DIR}/.bin" go install gitlab.torproject.org/tpo/anti-censorship/pluggable-transports/snowflake/v2/server@latest
 
-CHUTNEY_REPO_URL="https://gitlab.torproject.org/tpo/core/chutney.git"
-CHUTNEY_COMMIT="fb0bff1ffad593314a2692aa0f1d65db6f0251c9"
-
-CHUTNEY_DIR="${CHUTNEY_DIR:-/tmp/chutney}"
-rm -rf "${CHUTNEY_DIR}"
-git clone "${CHUTNEY_REPO_URL}" "${CHUTNEY_DIR}"
-git -C "${CHUTNEY_DIR}" checkout "${CHUTNEY_COMMIT}"
-
-python3 - <<'PY'
-from pathlib import Path
-
-torrc_py = Path("/tmp/chutney/lib/chutney/tor/torrc.py")
-txt = torrc_py.read_text()
-
-needle = """\
-            # Each IPv4 tor instance is configured with Address 127.0.0.1 by default
-            ExitPolicy accept 127.0.0.0/8:*
-
-            # If you only want tor to connect to localhost, disable these lines:
-            # This may cause network failures in some circumstances
-            ExitPolicyRejectPrivate 0
-            ExitPolicy accept private:*
-"""
-
-replacement = """\
-            # Each IPv4 tor instance is configured with Address 127.0.0.1 by default
-            # Allow connecting to localhost and local interfaces in CI-only networks.
-            ExitPolicyRejectLocalInterfaces 0
-            ExitPolicyRejectPrivate 0
-            ExitPolicy accept 127.0.0.0/8:*
-
-            # If you only want tor to connect to localhost, disable these lines:
-            # This may cause network failures in some circumstances
-            ExitPolicy accept private:*
-"""
-
-if needle not in txt:
-    raise SystemExit("Unexpected chutney torrc template; cannot apply CI patch safely.")
-
-txt = txt.replace(needle, replacement)
-torrc_py.write_text(txt)
-print("patched", torrc_py)
-PY
-
-python3 -m pip install --user --upgrade pip
-python3 -m pip install --user -e "${CHUTNEY_DIR}"
+export CHUTNEY_DIR="${CHUTNEY_DIR:-/tmp/chutney}"
+if [ "${CHUTNEY_SKIP_INSTALL:-0}" != "1" ]; then
+  bash "${ROOT_DIR}/packages/tor/scripts/ci-chutney-install.sh"
+fi
+if [ ! -d "${CHUTNEY_DIR}" ]; then
+  echo "Chutney directory missing: ${CHUTNEY_DIR}"
+  exit 1
+fi
+if [ -x "${CHUTNEY_DIR}/.venv/bin/python" ]; then
+  export PYTHON="${CHUTNEY_DIR}/.venv/bin/python"
+fi
+tor --version
 
 export CHUTNEY_DATA_DIR="${CHUTNEY_DATA_DIR:-$(mktemp -d)}"
 export CHUTNEY_LISTEN_ADDRESS="${CHUTNEY_LISTEN_ADDRESS:-127.0.0.1}"

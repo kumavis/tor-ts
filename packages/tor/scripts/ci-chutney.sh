@@ -28,65 +28,19 @@ if ! command -v timeout >/dev/null; then
   exit 1
 fi
 
-# https://gitlab.torproject.org/tpo/core/chutney
-CHUTNEY_REPO_URL="https://gitlab.torproject.org/tpo/core/chutney.git"
-CHUTNEY_COMMIT="fb0bff1ffad593314a2692aa0f1d65db6f0251c9"
-
-CHUTNEY_DIR="${CHUTNEY_DIR:-/tmp/chutney}"
-CHUTNEY_SKIP_INSTALL="${CHUTNEY_SKIP_INSTALL:-0}"
-
-if [ "${CHUTNEY_SKIP_INSTALL}" = "1" ]; then
-  if [ ! -d "${CHUTNEY_DIR}" ]; then
-    echo "CHUTNEY_SKIP_INSTALL=1 but CHUTNEY_DIR missing: ${CHUTNEY_DIR}"
-    exit 1
-  fi
-else
-  rm -rf "${CHUTNEY_DIR}"
-  git clone "${CHUTNEY_REPO_URL}" "${CHUTNEY_DIR}"
-  git -C "${CHUTNEY_DIR}" checkout "${CHUTNEY_COMMIT}"
-
-  # Patch chutney's torrc template to make localhost exits work reliably in CI.
-  # (We keep the repo pinned above; this is an in-place CI-only patch.)
-  python3 - <<'PY'
-from pathlib import Path
-
-torrc_py = Path("/tmp/chutney/lib/chutney/tor/torrc.py")
-txt = torrc_py.read_text()
-
-needle = """\
-            # Each IPv4 tor instance is configured with Address 127.0.0.1 by default
-            ExitPolicy accept 127.0.0.0/8:*
-
-            # If you only want tor to connect to localhost, disable these lines:
-            # This may cause network failures in some circumstances
-            ExitPolicyRejectPrivate 0
-            ExitPolicy accept private:*
-"""
-
-replacement = """\
-            # Each IPv4 tor instance is configured with Address 127.0.0.1 by default
-            # Allow connecting to localhost and local interfaces in CI-only networks.
-            ExitPolicyRejectLocalInterfaces 0
-            ExitPolicyRejectPrivate 0
-            ExitPolicy accept 127.0.0.0/8:*
-
-            # If you only want tor to connect to localhost, disable these lines:
-            # This may cause network failures in some circumstances
-            ExitPolicy accept private:*
-"""
-
-if needle not in txt:
-    raise SystemExit("Unexpected chutney torrc template; cannot apply CI patch safely.")
-
-txt = txt.replace(needle, replacement)
-torrc_py.write_text(txt)
-print("patched", torrc_py)
-PY
-
-  # Install chutney deps (declared in pyproject.toml) into user site-packages
-  python3 -m pip install --user --upgrade pip
-  python3 -m pip install --user -e "${CHUTNEY_DIR}"
+export CHUTNEY_DIR="${CHUTNEY_DIR:-/tmp/chutney}"
+if [ "${CHUTNEY_SKIP_INSTALL:-0}" != "1" ]; then
+  bash "${ROOT_DIR}/scripts/ci-chutney-install.sh"
 fi
+if [ ! -d "${CHUTNEY_DIR}" ]; then
+  echo "Chutney directory missing: ${CHUTNEY_DIR}"
+  exit 1
+fi
+# The install helper isolates Python dependencies from the runner's system Python.
+if [ -x "${CHUTNEY_DIR}/.venv/bin/python" ]; then
+  export PYTHON="${CHUTNEY_DIR}/.venv/bin/python"
+fi
+tor --version
 
 export CHUTNEY_DATA_DIR="${CHUTNEY_DATA_DIR:-$(mktemp -d)}"
 export CHUTNEY_LISTEN_ADDRESS="${CHUTNEY_LISTEN_ADDRESS:-127.0.0.1}"
@@ -127,7 +81,8 @@ cat > "networks/${CHUTNEY_NETWORK}" <<EOF
 Authority = Node(tag="a", authority=1, relay=1)
 
 # Extra non-exit relays to give the HS enough options for intro/rend circuits
-# (min-path=3 plus intro + rend + the HS itself).
+# Twelve HSDirs exceed the default eight publication targets, so the
+# placement test can require 404 from non-responsible directories.
 Relay = Node(tag="m", relay=1)
 
 # Allow exiting to localhost for CI-only integration tests. The CI-chutney
@@ -144,7 +99,7 @@ Client = Node(tag="c", client=1)
 # This uses Chutney's managed HS directory and proper timing.
 HiddenService = Node(tag="h", hs=1, launch_phase=2)
 
-NODES = Authority.getN(4) + Relay.getN(2) + ExitRelay.getN(1) + Client.getN(1) + HiddenService.getN(1)
+NODES = Authority.getN(4) + Relay.getN(7) + ExitRelay.getN(1) + Client.getN(1) + HiddenService.getN(1)
 ConfigureNodes(NODES)
 EOF
 
@@ -161,7 +116,7 @@ echo "Running Chutney test-network.sh to bootstrap and verify (exit + HS)..."
 echo "This includes proper HS timing waits to avoid descriptor lookup flakiness."
 # --allow-failures 2 lets chutney retry the whole bootstrap+verify cycle up
 #   to 3 times if the initial attempt flakes (e.g., first consensus doesn't
-#   land in time on this 9-node network). This is chutney's native retry
+#   land in time on this 14-node network). This is chutney's native retry
 #   knob and uses the same log path as a first-try success.
 # --rounds 2 runs two verify passes in the same bootstrap, so an HSdir flake
 #   on the first pass gets re-exercised before we hand off to our client.
@@ -223,7 +178,7 @@ cd "${ROOT_DIR}"
 # on the rendezvous point in microDescNodeInfoToPeerInfo (fixed in the
 # same PR, with spec-vector and unit tests in hidden-service-test-vector
 # .spec.ts + directory.spec.ts).
-TOR_TS_CHUTNEY_TESTS="${TOR_TS_CHUTNEY_TESTS:-exit,hidden-service,hidden-service-host,socks}"
+TOR_TS_CHUTNEY_TESTS="${TOR_TS_CHUTNEY_TESTS:-exit,hidden-service,hsdir-placement,hidden-service-host,socks}"
 IFS=',' read -ra TESTS <<< "${TOR_TS_CHUTNEY_TESTS}"
 for t in "${TESTS[@]}"; do
   case "${t}" in
@@ -236,7 +191,11 @@ for t in "${TESTS[@]}"; do
       echo ""
       echo "=== running chutney integration test: hidden-service ==="
       timeout 10m node --experimental-transform-types "${ROOT_DIR}/scripts/chutney-hidden-service-ci.ts"
-      echo "=== chutney integration test: hidden-service finished at $(date -Is) ==="
+      echo "=== chutney integration test: hidden-service finished at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
+      ;;
+    hsdir-placement)
+      echo "=== running chutney integration test: hsdir-placement ==="
+      timeout 3m node --experimental-transform-types "${ROOT_DIR}/scripts/chutney-hsdir-placement-ci.ts"
       ;;
     hidden-service-host)
       # Hosts a v3 HS via publishHiddenService() and connects to it with our
@@ -247,13 +206,13 @@ for t in "${TESTS[@]}"; do
       echo ""
       echo "=== running chutney integration test: hidden-service-host ==="
       timeout 12m node --experimental-transform-types "${ROOT_DIR}/scripts/chutney-hidden-service-host-ci.ts"
-      echo "=== chutney integration test: hidden-service-host finished at $(date -Is) ==="
+      echo "=== chutney integration test: hidden-service-host finished at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
       ;;
     socks)
       echo ""
       echo "=== running chutney integration test: socks ==="
       timeout 2m node --experimental-transform-types "${ROOT_DIR}/scripts/chutney-socks-ci.ts"
-      echo "=== chutney integration test: socks finished at $(date -Is) ==="
+      echo "=== chutney integration test: socks finished at $(date -u +%Y-%m-%dT%H:%M:%SZ) ==="
       ;;
     *)
       echo "Unknown TOR_TS_CHUTNEY_TESTS entry: ${t}"

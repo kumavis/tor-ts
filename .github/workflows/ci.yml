@@ -53,10 +53,42 @@ jobs:
       - name: Test
         run: yarn test
 
-  chutney:
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
+  build_tor:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
     needs: test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Tor build dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y autoconf automake build-essential libevent-dev libssl-dev zlib1g-dev liblzma-dev libzstd-dev
+
+      - name: Cache pinned Tor binaries
+        uses: actions/cache@v4
+        with:
+          path: .ci-tor/install
+          key: tor-ubuntu-24.04-${{ runner.arch }}-${{ hashFiles('packages/tor/scripts/ci-build-tor.sh') }}
+
+      - name: Build pinned C Tor
+        run: bash packages/tor/scripts/ci-build-tor.sh
+
+      - name: Share Tor binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: chutney-tor
+          path: .ci-tor/tor-bin.tar.gz
+          retention-days: 7
+
+  chutney:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    needs: [test, build_tor]
+
+    env:
+      CHUTNEY_DATA_DIR: /tmp/tor-ts-chutney-data
 
     steps:
       - name: Checkout
@@ -85,10 +117,24 @@ jobs:
       - name: Install JS deps
         run: yarn install --frozen-lockfile
 
-      - name: Install Tor + Python tooling
+      - name: Install Tor runtime and Python tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y tor tor-geoipdb python3 python3-pip git
+          sudo apt-get install -y libevent-2.1-7t64 libssl3t64 zlib1g liblzma5 libzstd1 python3 python3-venv git
+
+      - name: Download pinned Tor binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: chutney-tor
+          path: .ci-tor
+
+      - name: Select pinned Tor for Chutney
+        run: |
+          tar -xzf .ci-tor/tor-bin.tar.gz -C .ci-tor
+          echo "$GITHUB_WORKSPACE/.ci-tor/bin" >> "$GITHUB_PATH"
+          echo "CHUTNEY_TOR=$GITHUB_WORKSPACE/.ci-tor/bin/tor" >> "$GITHUB_ENV"
+          echo "CHUTNEY_TOR_GENCERT=$GITHUB_WORKSPACE/.ci-tor/bin/tor-gencert" >> "$GITHUB_ENV"
+          .ci-tor/bin/tor --version
 
       - name: Install Chutney (clone + pip deps)
         run: bash packages/tor/scripts/ci-chutney-install.sh
@@ -98,10 +144,25 @@ jobs:
           CHUTNEY_SKIP_INSTALL: '1'
         run: bash packages/tor/scripts/ci-chutney.sh
 
+      - name: Upload Chutney diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chutney-logs
+          path: |
+            /tmp/tor-ts-chutney-data/nodes*/**/*.log
+            /tmp/tor-ts-chutney-data/nodes*/**/torrc
+            /tmp/tor-ts-chutney-data/nodes*/**/cached-microdesc-consensus
+          if-no-files-found: ignore
+          retention-days: 7
+
   chutney_snowflake:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     timeout-minutes: 25
-    needs: test
+    needs: [test, build_tor]
+
+    env:
+      CHUTNEY_DATA_DIR: /tmp/tor-ts-chutney-data
 
     steps:
       - name: Checkout
@@ -136,13 +197,39 @@ jobs:
       - name: Install JS deps
         run: yarn install --frozen-lockfile
 
-      - name: Install Tor + Python tooling
+      - name: Install Tor runtime and Python tooling
         run: |
           sudo apt-get update
-          sudo apt-get install -y tor tor-geoipdb python3 python3-pip git
+          sudo apt-get install -y libevent-2.1-7t64 libssl3t64 zlib1g liblzma5 libzstd1 python3 python3-venv git
+
+      - name: Download pinned Tor binaries
+        uses: actions/download-artifact@v4
+        with:
+          name: chutney-tor
+          path: .ci-tor
+
+      - name: Select pinned Tor for Chutney
+        run: |
+          tar -xzf .ci-tor/tor-bin.tar.gz -C .ci-tor
+          echo "$GITHUB_WORKSPACE/.ci-tor/bin" >> "$GITHUB_PATH"
+          echo "CHUTNEY_TOR=$GITHUB_WORKSPACE/.ci-tor/bin/tor" >> "$GITHUB_ENV"
+          echo "CHUTNEY_TOR_GENCERT=$GITHUB_WORKSPACE/.ci-tor/bin/tor-gencert" >> "$GITHUB_ENV"
+          .ci-tor/bin/tor --version
 
       - name: Run Chutney+Snowflake integration test
         run: bash packages/snowflake/scripts/ci-chutney-snowflake.sh
+
+      - name: Upload Chutney diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: chutney_snowflake-logs
+          path: |
+            /tmp/tor-ts-chutney-data/nodes*/**/*.log
+            /tmp/tor-ts-chutney-data/nodes*/**/torrc
+            /tmp/tor-ts-chutney-data/nodes*/**/cached-microdesc-consensus
+          if-no-files-found: ignore
+          retention-days: 7
 
   snowflake_live:
     runs-on: ubuntu-latest

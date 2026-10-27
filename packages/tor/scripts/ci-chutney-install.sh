@@ -18,7 +18,7 @@ fi
 CHUTNEY_REPO_URL="https://gitlab.torproject.org/tpo/core/chutney.git"
 CHUTNEY_COMMIT="fb0bff1ffad593314a2692aa0f1d65db6f0251c9"
 
-CHUTNEY_DIR="${CHUTNEY_DIR:-/tmp/chutney}"
+export CHUTNEY_DIR="${CHUTNEY_DIR:-/tmp/chutney}"
 rm -rf "${CHUTNEY_DIR}"
 git clone "${CHUTNEY_REPO_URL}" "${CHUTNEY_DIR}"
 git -C "${CHUTNEY_DIR}" checkout "${CHUTNEY_COMMIT}"
@@ -27,8 +27,9 @@ git -C "${CHUTNEY_DIR}" checkout "${CHUTNEY_COMMIT}"
 # (We keep the repo pinned above; this is an in-place CI-only patch.)
 python3 - <<'PY'
 from pathlib import Path
+import os
 
-torrc_py = Path("/tmp/chutney/lib/chutney/tor/torrc.py")
+torrc_py = Path(os.environ["CHUTNEY_DIR"]) / "lib/chutney/tor/torrc.py"
 txt = torrc_py.read_text()
 
 needle = """\
@@ -61,8 +62,8 @@ torrc_py.write_text(txt)
 print("patched", torrc_py)
 PY
 
-# Install chutney deps (declared in pyproject.toml) into user site-packages
-python3 -m pip install --user --upgrade pip
-python3 -m pip install --user -e "${CHUTNEY_DIR}"
+# Keep installs independent of externally managed system Python packages.
+python3 -m venv "${CHUTNEY_DIR}/.venv"
+"${CHUTNEY_DIR}/.venv/bin/python" -m pip install -e "${CHUTNEY_DIR}"
 
 echo "Chutney installed in ${CHUTNEY_DIR}"

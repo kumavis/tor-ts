@@ -8,6 +8,7 @@ node_modules/
 dist/
 *.tsbuildinfo
 .bin/
+.ci-tor/
 profiles/
 
 # Test artifacts
