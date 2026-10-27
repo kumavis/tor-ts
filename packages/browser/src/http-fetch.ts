@@ -121,6 +121,7 @@ async function wrapWithTLS(stream: CircuitStream, host: string): Promise<Transpo
           }
           if (!ended) {
             ended = true;
+            detach();
             if (endListeners.length > 0) {
               for (const listener of endListeners) {
                 listener();
@@ -142,7 +143,7 @@ async function wrapWithTLS(stream: CircuitStream, host: string): Promise<Transpo
     let processingQueue: Promise<void> = Promise.resolve();
 
     // Forward data from the Tor stream to the TLS client
-    stream.on('data', (chunk: Buffer) => {
+    const onStreamData = (chunk: Buffer) => {
       if (!ended) {
         // Chain processing to ensure order and completion
         processingQueue = processingQueue.then(async () => {
@@ -161,14 +162,15 @@ async function wrapWithTLS(stream: CircuitStream, host: string): Promise<Transpo
           }
         });
       }
-    });
+    };
 
-    stream.on('end', () => {
+    const onStreamEnd = () => {
       if (!ended) {
         // Wait for any pending TLS processing to complete before firing 'end'
         processingQueue.then(() => {
           if (!ended) {
             ended = true;
+            detach();
             // If handshake not complete, this is an error
             if (!handshakeComplete) {
               safeReject(new Error('Connection closed before TLS handshake completed'));
@@ -183,9 +185,9 @@ async function wrapWithTLS(stream: CircuitStream, host: string): Promise<Transpo
           }
         });
       }
-    });
+    };
 
-    stream.on('error', (err: Error) => {
+    const onStreamError = (err: Error) => {
       if (!handshakeComplete) {
         safeReject(err);
       } else {
@@ -193,17 +195,27 @@ async function wrapWithTLS(stream: CircuitStream, host: string): Promise<Transpo
           listener(err);
         }
       }
-    });
+    };
+    stream.on('data', onStreamData);
+    stream.on('end', onStreamEnd);
+    stream.on('error', onStreamError);
+    const detach = () => {
+      stream.off('data', onStreamData);
+      stream.off('end', onStreamEnd);
+      stream.off('error', onStreamError);
+    };
 
     // Create the transport interface
     const transport: Transport = {
       write(data: Buffer) {
         if (!ended) {
-          tls.write(data).catch((err) => {
-            for (const listener of errorListeners) {
-              listener(err);
-            }
-          });
+          Promise.resolve()
+            .then(() => tls.write(data))
+            .catch((err) => {
+              for (const listener of errorListeners) {
+                listener(err);
+              }
+            });
         }
       },
       on: ((event: string, listener: (...args: unknown[]) => void) => {
@@ -230,10 +242,12 @@ async function wrapWithTLS(stream: CircuitStream, host: string): Promise<Transpo
         endListeners.length = 0;
         errorListeners.length = 0;
         pendingDataQueue.length = 0;
-        stream.removeAllListeners();
+        // The TLS forwarding and CircuitStream lifecycle handlers are separate
+        // owners; response completion must not remove them.
       },
       destroy(err?: Error) {
         ended = true;
+        detach();
         tls.end().catch(() => {});
         stream.destroy(err);
       },
@@ -252,17 +266,22 @@ async function wrapWithTLS(stream: CircuitStream, host: string): Promise<Transpo
  * Create a simple transport wrapper around a raw CircuitStream (for HTTP).
  */
 function wrapRawStream(stream: CircuitStream): Transport {
+  const listeners: Array<[string, (...args: unknown[]) => void]> = [];
   return {
     write(data: Buffer) {
-      stream.write(data).catch((err) => {
-        stream.emit('error', err);
-      });
+      Promise.resolve()
+        .then(() => stream.write(data))
+        .catch((err) => {
+          stream.destroy(err);
+        });
     },
     on: ((event: string, listener: (...args: unknown[]) => void) => {
+      listeners.push([event, listener]);
       stream.on(event, listener);
     }) as Transport['on'],
     removeAllListeners() {
-      stream.removeAllListeners();
+      // Preserve CircuitStream's own lifecycle/error listeners.
+      for (const [event, listener] of listeners.splice(0)) stream.off(event, listener);
     },
     destroy(err?: Error) {
       stream.destroy(err);
@@ -291,7 +310,7 @@ export async function fetchViaTorCircuit(
   url: string,
   options?: FetchOptions
 ): Promise<TorFetchResponse> {
-  const opts = options as FetchViaTorOptions;
+  const opts = (options ?? {}) as FetchViaTorOptions;
   const { followRedirects = true, maxRedirects = 10 } = opts;
 
   return fetchViaTorInternal(circuit, url, opts, followRedirects ? maxRedirects : 0);
@@ -344,12 +363,11 @@ async function fetchViaTorInternal(
   }
   request += '\r\n';
 
-  // Send request
-  transport.write(Buffer.from(request, 'utf-8'));
-
-  // Read response with timeout
+  // Install response handlers before writing: a transport may reply immediately.
   const timeout = options.timeout || 30000;
-  const response = await readHttpResponse(transport, timeout);
+  const responsePromise = readHttpResponse(transport, timeout);
+  transport.write(Buffer.from(request, 'utf-8'));
+  const response = await responsePromise;
 
   // Handle redirects (3xx status codes)
   if (response.status >= 300 && response.status < 400) {
@@ -407,7 +425,8 @@ async function readHttpResponse(transport: Transport, timeout: number): Promise<
     let bodyStart = 0;
 
     const timeoutId = setTimeout(() => {
-      transport.destroy(new Error('Response timeout'));
+      cleanup();
+      transport.destroy();
       reject(new Error('Response timeout'));
     }, timeout);
 
