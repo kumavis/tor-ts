@@ -76,6 +76,27 @@ yarn dev
 
 The development server starts at `http://localhost:3000`.
 
+## Mainnet onion smoke test
+
+Test the production build, including its service worker, from the repository root:
+
+```bash
+yarn workspace tamanegi-browser build
+yarn workspace tamanegi-browser preview --host 127.0.0.1 --port 4317 --strictPort
+```
+
+Open `http://127.0.0.1:4317/` and enter
+`http://2gzyxa5ihm7nsggfxnu52rck2vv4rvmdlkiu3zzui5du4xyclen53wid.onion/`
+in Tamanegi's address field. Confirm that the connection log reaches
+`Connected to hidden service!`, reports a received response, and displays the
+Tor Project page. Then press **Go** again without reloading Tamanegi to check
+that a completed request leaves the shared connection usable.
+
+The first run downloads consensus and relay information; later requests can use
+the browser's cached directory data. Record those separately when comparing
+timings. Live mainnet availability is independent of the deterministic Chutney
+tests in CI.
+
 ## Security notes
 
 - This is a proof-of-concept / educational tool
