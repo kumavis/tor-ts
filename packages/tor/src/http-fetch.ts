@@ -48,7 +48,7 @@ export async function fetchViaTorCircuit(
   url: string,
   options?: FetchOptions
 ): Promise<FetchResponse> {
-  const opts = options as NodeFetchOptions;
+  const opts = (options ?? {}) as NodeFetchOptions;
   const { followRedirects = true, maxRedirects = 10 } = opts;
   return fetchInternal(circuit, url, options ?? {}, followRedirects ? maxRedirects : 0);
 }
@@ -99,12 +99,11 @@ async function fetchInternal(
   }
   request += '\r\n';
 
-  // Send request
-  transport.write(Buffer.from(request, 'utf-8'));
-
-  // Read response with timeout
+  // Install response handlers before writing: a transport may reply immediately.
   const timeout = options.timeout || 30000;
-  const response = await readHttpResponse(transport, timeout);
+  const responsePromise = readHttpResponse(transport, timeout);
+  transport.write(Buffer.from(request, 'utf-8'));
+  const response = await responsePromise;
 
   // Handle redirects (3xx status codes)
   if (response.status >= 300 && response.status < 400) {
@@ -144,13 +143,14 @@ async function wrapWithTLS(stream: CircuitStream, hostname: string): Promise<Tra
   });
 
   // Forward data from circuit stream to duplex
-  stream.on('data', (data: Buffer) => {
+  const onData = (data: Buffer) => {
     duplex.push(data);
-  });
-
-  stream.on('end', () => {
+  };
+  const onEnd = () => {
     duplex.push(null);
-  });
+  };
+  stream.on('data', onData);
+  stream.on('end', onEnd);
 
   // Create TLS connection over the duplex stream
   const tlsSocket = tls.connect({
@@ -159,19 +159,57 @@ async function wrapWithTLS(stream: CircuitStream, hostname: string): Promise<Tra
     rejectUnauthorized: true,
   });
 
+  // These handlers belong to the TLS adapter, not the HTTP response reader.
+  // Keep an error handler until the socket closes, including after HTTP framing
+  // has completed and the caller tears down its circuit.
+  const onStreamError = (err: Error) => {
+    tlsSocket.destroy(err);
+  };
+  const onTlsError = (err: Error) => {
+    stream.destroy(err);
+  };
+  const detach = () => {
+    stream.off('data', onData);
+    stream.off('end', onEnd);
+    stream.off('error', onStreamError);
+  };
+  stream.on('error', onStreamError);
+  tlsSocket.on('error', onTlsError);
+  tlsSocket.once('close', detach);
+
   // Wait for TLS handshake
   await new Promise<void>((resolve, reject) => {
-    tlsSocket.once('secureConnect', resolve);
-    tlsSocket.once('error', reject);
+    const onSecure = () => {
+      tlsSocket.off('error', onHandshakeError);
+      resolve();
+    };
+    const onHandshakeError = (err: Error) => {
+      tlsSocket.off('secureConnect', onSecure);
+      reject(err);
+    };
+    tlsSocket.once('secureConnect', onSecure);
+    tlsSocket.once('error', onHandshakeError);
   });
 
+  const listeners: Array<[string, (...args: unknown[]) => void]> = [];
   return {
-    write: (data: Buffer) => tlsSocket.write(data),
+    write: (data: Buffer) => {
+      try {
+        tlsSocket.write(data);
+      } catch (err) {
+        tlsSocket.destroy(err as Error);
+      }
+    },
     on: (event: string, listener: (...args: unknown[]) => void) => {
+      listeners.push([event, listener]);
       tlsSocket.on(event, listener);
     },
-    removeAllListeners: () => tlsSocket.removeAllListeners(),
+    removeAllListeners: () => {
+      for (const [event, listener] of listeners.splice(0)) tlsSocket.off(event, listener);
+    },
     destroy: (err?: Error) => {
+      detach();
+      stream.destroy(err);
       if (err) tlsSocket.destroy(err);
       else tlsSocket.destroy();
     },
@@ -182,15 +220,23 @@ async function wrapWithTLS(stream: CircuitStream, hostname: string): Promise<Tra
  * Wrap a raw circuit stream as a transport.
  */
 function wrapRawStream(stream: CircuitStream): Transport {
+  const listeners: Array<[string, (...args: unknown[]) => void]> = [];
   return {
     write: (data: Buffer) => {
-      stream.write(data);
+      // Convert synchronous and asynchronous write failures into transport errors.
+      Promise.resolve()
+        .then(() => stream.write(data))
+        .catch((err: Error) => stream.destroy(err));
     },
     on: (event: string, listener: (...args: unknown[]) => void) => {
+      listeners.push([event, listener]);
       stream.on(event, listener);
     },
-    removeAllListeners: () => stream.removeAllListeners(),
-    destroy: () => stream.destroy(),
+    removeAllListeners: () => {
+      // CircuitStream owns other handlers (including its error handler).
+      for (const [event, listener] of listeners.splice(0)) stream.off(event, listener);
+    },
+    destroy: (err?: Error) => stream.destroy(err),
   };
 }
 
@@ -207,7 +253,8 @@ async function readHttpResponse(transport: Transport, timeoutMs: number): Promis
     let headersEndIndex = -1;
 
     const timeout = setTimeout(() => {
-      transport.removeAllListeners();
+      cleanup();
+      transport.destroy();
       reject(new Error(`HTTP response timeout after ${timeoutMs}ms`));
     }, timeoutMs);
 
