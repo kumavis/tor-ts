@@ -573,6 +573,8 @@ export class Circuit extends EventEmitter {
   dirtyAt: number | undefined;
   /** Whether this circuit has been destroyed */
   isDestroyed = false;
+  /** Whether the peer may have allocated state for this circuit. */
+  private firstHopCreateSent = false;
 
   constructor({ path, channel }: { path: Array<PeerInfo>; channel: ChannelConnection }) {
     super();
@@ -640,14 +642,21 @@ export class Circuit extends EventEmitter {
     const timeoutMs = options?.timeoutMs ?? DEFAULT_CIRCUIT_BUILD_TIMEOUT_MS;
     const deadline = Date.now() + timeoutMs;
 
-    for (const hop of this.hops) {
-      const remainingMs = deadline - Date.now();
-      if (remainingMs <= 0) {
-        throw new Error(
-          `Circuit build timeout: exceeded ${timeoutMs}ms after ${this.hops.indexOf(hop)} hops`
-        );
+    try {
+      for (const hop of this.hops) {
+        const remainingMs = deadline - Date.now();
+        if (remainingMs <= 0) {
+          throw new Error(
+            `Circuit build timeout: exceeded ${timeoutMs}ms after ${this.hops.indexOf(hop)} hops`
+          );
+        }
+        await this.performHandshakeForHopWithTimeout(hop, remainingMs);
       }
-      await this.performHandshakeForHopWithTimeout(hop, remainingMs);
+    } catch (err) {
+      // A builder cannot hand a failed circuit back to its caller for cleanup.
+      // Release it here without interrupting other circuits on the same channel.
+      this.destroy({ preserveChannel: true });
+      throw err;
     }
   }
 
@@ -685,6 +694,7 @@ export class Circuit extends EventEmitter {
     const clientHandshake = hop.createClientHandshake();
     if (hop === this.firstHop) {
       // this is our first hop - either CREATE2 (ntor) or CREATE_FAST
+      this.firstHopCreateSent = true;
       if (clientHandshake.kind === 'fast') {
         this.channel.sendMessage(MessageCellType.CREATE_FAST, {
           circuitId: this.circuitId,
@@ -779,11 +789,9 @@ export class Circuit extends EventEmitter {
         this.streams.forEach((stream) => {
           stream.destroy(err);
         });
-        // Stop listening for any additional cells on this circuit.
-        if (this.unsubscribeFromChannel) {
-          this.unsubscribeFromChannel();
-          this.unsubscribeFromChannel = undefined;
-        }
+        // The peer already freed its circuit; do not echo another DESTROY.
+        this.firstHopCreateSent = false;
+        this.destroy({ preserveChannel: true });
         break;
       }
       default:
@@ -1313,11 +1321,30 @@ export class Circuit extends EventEmitter {
       resolve(); // They'll check isDestroyed flag
     }
 
+    if (options?.preserveChannel && this.firstHopCreateSent) {
+      try {
+        // REQUESTED (3): release only this circuit's relay-side state.
+        this.channel.sendMessageWithPayload(
+          this.circuitId,
+          MessageCellType.DESTROY,
+          Buffer.from([3])
+        );
+      } catch {
+        // A closed channel cannot carry DESTROY; local cleanup must still finish.
+      }
+    }
+    this.firstHopCreateSent = false;
     if (this.unsubscribeFromChannel) {
       this.unsubscribeFromChannel();
+      this.unsubscribeFromChannel = undefined;
     }
     if (!options?.preserveChannel) {
       this.channel.destroy();
+    }
+    for (const hop of this.hops) {
+      if (hop.handshakeLatch.isPending()) {
+        hop.handshakeLatch.reject(new Error('Circuit destroyed'));
+      }
     }
 
     // Destroy all streams
