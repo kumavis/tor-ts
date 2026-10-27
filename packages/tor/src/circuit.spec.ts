@@ -5,7 +5,8 @@
 import test from 'ava';
 import { circuitIdLengthForProtocolVersion, Circuit, CircuitStream } from './circuit.ts';
 import type { ChannelConnection } from './channel.ts';
-import { MessageCells, type MessageCell } from './messaging.ts';
+import { MessageCells, serializeRelayCellPayload, type MessageCell } from './messaging.ts';
+import { RelayCell } from './relay-cell.ts';
 
 test('circuitIdLengthForProtocolVersion: returns 2 for version undefined', (t) => {
   const length = circuitIdLengthForProtocolVersion(undefined);
@@ -286,4 +287,49 @@ test('Circuit cleanup finishes if its channel cannot send DESTROY', async (t) =>
   await t.throwsAsync(building, { message: 'Circuit destroyed' });
   t.is(h.unsubscribed, 1);
   t.true(h.circuit.isDestroyed);
+});
+
+test('A relay reply still decrypting when the circuit closes is discarded', async (t) => {
+  const h = circuitLifecycleHarness();
+  const hop = h.circuit.hops[0]!;
+  hop.isConnected = true;
+  hop.handshakeLatch.resolve();
+  let release!: (payload: Buffer<ArrayBuffer>) => void;
+  let witnessed = false;
+  hop.decryptBackward = () =>
+    new Promise<Buffer<ArrayBuffer>>((resolve) => {
+      release = resolve;
+    });
+  hop.witnessBackwardPayload = () => {
+    witnessed = true;
+  };
+  const payload = serializeRelayCellPayload({
+    streamId: 0,
+    relayCommand: RelayCell.EXTENDED2,
+    data: Buffer.concat([Buffer.from([0, 64]), Buffer.alloc(64)]),
+  });
+  const receiving = h.circuit.receiveRelayMessage({ payload });
+  h.circuit.destroy({ preserveChannel: true });
+  release(Buffer.from(payload));
+  await t.notThrowsAsync(receiving);
+  t.false(witnessed, 'the abandoned reply never reaches protocol dispatch');
+  t.is(h.unsubscribed, 1);
+});
+
+test('An asynchronous CREATED2 failure rejects the build and cleans up its circuit', async (t) => {
+  const h = circuitLifecycleHarness();
+  const failure = new Error('handshake processing failed');
+  h.circuit.firstHop.receiveCreated2Handshake = async () => {
+    throw failure;
+  };
+  const building = h.circuit.connect({ timeoutMs: 1000 });
+  const rejected = t.throwsAsync(building, { is: failure });
+  h.circuit.receiveMessage({
+    command: MessageCells.CREATED2,
+    message: { handshake: { data: Buffer.alloc(64) } },
+  } as MessageCell);
+  await rejected;
+  t.true(h.circuit.isDestroyed);
+  t.false(h.channel.destroyed);
+  t.is(h.unsubscribed, 1);
 });

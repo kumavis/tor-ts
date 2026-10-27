@@ -766,7 +766,7 @@ export class Circuit extends EventEmitter {
       case MessageCellType.CREATED2: {
         const created2Message = message.message as CellCreated2;
         const serverHandshake = parseCreate2ServerHandshakeForNtor(created2Message.handshake);
-        this.firstHop.receiveCreated2Handshake(serverHandshake);
+        void this.receiveCreated2ForHop(this.firstHop, serverHandshake);
         break;
       }
       case MessageCellType.DESTROY: {
@@ -799,13 +799,29 @@ export class Circuit extends EventEmitter {
     }
   }
 
+  private async receiveCreated2ForHop(hop: Hop, handshake: NtorServerHandshake): Promise<void> {
+    if (this.isDestroyed) return;
+    try {
+      await hop.receiveCreated2Handshake(handshake);
+    } catch (err) {
+      if (this.isDestroyed) return;
+      const error = err instanceof Error ? err : new Error(String(err));
+      if (hop.handshakeLatch.isPending()) hop.handshakeLatch.reject(error);
+      this.destroy({ preserveChannel: true });
+    }
+  }
+
   async receiveRelayMessage(relayMessage: CellRelayUnparsed) {
+    if (this.isDestroyed) return;
     // decrypt and identify target hop
     let currentPayload = relayMessage.payload;
     let targetHop: Hop | undefined;
     for (const hop of this.hops) {
       if (!hop.isConnected) continue;
       currentPayload = Buffer.from(await hop.decryptBackward(currentPayload));
+      // Timeout/cleanup can run while WebCrypto is decrypting this cell.
+      // Never dispatch its reply into latches that cleanup already rejected.
+      if (this.isDestroyed) return;
       const looksRecognized = checkRelayCellRecognized(currentPayload);
       if (looksRecognized) {
         targetHop = hop;
@@ -839,7 +855,7 @@ export class Circuit extends EventEmitter {
         if (!nextHop) {
           throw new Error('Received EXTENDED2 but no next hop exists');
         }
-        nextHop.receiveCreated2Handshake(handshake);
+        await this.receiveCreated2ForHop(nextHop, handshake);
         return;
       }
       case RelayCell.CONNECTED: {
